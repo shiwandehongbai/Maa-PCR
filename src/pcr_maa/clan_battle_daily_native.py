@@ -21,7 +21,7 @@ PAGE_FIELDS = {
 PATTERNS = {
     'remaining_count': r'^[0-3]$',
     'carry_count': r'^[0-3]$',
-    'cp': r'^[0-9]{1,3}\s*/\s*900$',
+    'cp': r'^(?:[0-9]{1,3}\s*/\s*900|已达今天的上限)$',
     'health': r'^[0-9][0-9,，]*\s*/\s*[1-9][0-9,，]*$',
     'phase': r'^第[1-9]阶段$',
     'period': r'^[0-1]?[0-9]/[0-3]?[0-9]\s*[0-2][0-9]:[0-5][0-9]\s*[~～〜至—－-]\s*[0-1]?[0-9]/[0-3]?[0-9]\s*[0-2][0-9]:[0-5][0-9]$',
@@ -224,7 +224,7 @@ class ClanBattleDailyPage(CustomRecognition):
                     raise RuntimeError('clan_battle_daily_health_invalid')
                 values.update(health=current, health_max=maximum, alive=current > 0)
             elif field == 'cp':
-                values['cp'] = int(text.split('/')[0].strip())
+                values['cp'] = 900 if text == '已达今天的上限' else int(text.split('/')[0].strip())
                 if not 0 <= values['cp'] <= 900:
                     raise RuntimeError('clan_battle_daily_cp_invalid')
                 values['cp_semantics'] = 'daily_earned'
