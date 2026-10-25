@@ -189,6 +189,11 @@ class MaaOpening:
         try:
             clicked=batch.transaction('opening_granted_close',fields,close)
             batch.checkpoint();entry='LabyOpeningGrantPostObserved'
+            if page=='opening_empty':
+                from .scene import MaaSceneRuntime,OBSERVATION_TIMEOUT_SECONDS
+                MaaSceneRuntime(self.tasker,self.stamp,timings=self.timings,stopped=batch.stopped).wait_for(
+                    batch,{'free_role_reward'},source={'map','joined'},timeout=OBSERVATION_TIMEOUT_SECONDS,
+                    reason='opening_readback_unknown')
             hit,_=self._choice(batch,entry,['LabyDateChangedObserved','LabyDisconnect6002Observed',next_node])
             receipt=self._run(hit);batch.checkpoint()
             closed=batch.observation(self.stamp(source='maa',operation_id=clicked['operation_id'],**fields,page=page,native=receipt,input_native=clicked['input_native']),**fields)

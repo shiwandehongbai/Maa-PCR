@@ -5,6 +5,7 @@ Title identity, the empty-to-joined invitation and a fresh area-1 map. A logical
 START comes from that new-run sequence, never from invented pixel evidence.
 """
 from copy import deepcopy
+import time
 from .. import native
 from .batch import BatchStopped
 from .game_session import MaaGameSession, game_session_pipeline, _root, _box
@@ -12,6 +13,7 @@ from .opening import MaaOpening
 from .session import resume_home_pipeline
 from .interruptions import date_changed_pipeline
 from .snapshots import OpeningSnapshot
+from .scene import OBSERVATION_TIMEOUT_SECONDS
 
 
 def game_port_pipeline():
@@ -24,11 +26,11 @@ def game_port_pipeline():
     for count in (1,2,3):nodes.update(joined_portrait_pipeline(count))
     joined=[f'LabyPortraitJoined{count}Observed' for count in (1,2,3)]
     nodes['LabyGamePortOpeningObserved']=dict(recognition='Or',
-        any_of=['LabyDateChangedObserved','LabyDepartureRewardObserved']+joined+['LabyOpeningEmptyObserved'],
-        action='DoNothing',next=[],timeout=5000,rate_limit=250,pre_delay=0,post_delay=0)
+        any_of=['LabyDateChangedObserved','LabyDepartureRewardObserved']+joined+['LabyOpeningEmptyObserved','LabyMapObserved'],
+        action='DoNothing',next=[],timeout=OBSERVATION_TIMEOUT_SECONDS*1000,rate_limit=250,pre_delay=0,post_delay=0)
     nodes['LabyGamePortRosterObserved']=dict(recognition='Or',
-        any_of=['LabyDateChangedObserved']+joined+['LabyOpeningEmptyObserved'],
-        action='DoNothing',next=[],timeout=5000,rate_limit=250,pre_delay=0,post_delay=0)
+        any_of=['LabyDateChangedObserved']+joined+['LabyOpeningEmptyObserved','LabyMapObserved'],
+        action='DoNothing',next=[],timeout=OBSERVATION_TIMEOUT_SECONDS*1000,rate_limit=250,pre_delay=0,post_delay=0)
     return nodes
 
 
@@ -46,17 +48,35 @@ class MaaGamePort:
         if getattr(self.tasker,'stopping',False):raise BatchStopped('stopped')
 
     def _wait(self,batch,node,names):
-        self._checkpoint(batch)
-        with batch.timings.measure('page_wait'):receipt=native.run(self.tasker,node)
-        self._checkpoint(batch);raw=_root(receipt,node).get('recognition')
-        if (type(raw) is not list or not 1<=len(raw)<=len(names)
-                or any(type(row) is not dict or row.get('algorithm')!='And' for row in raw)
-                or [row.get('name') for row in raw]!=names[:len(raw)]
-                or any(row.get('box') is not None for row in raw[:-1])
-                or not _box(raw[-1].get('box'))):
-            raise BatchStopped('game_port_navigation_unknown')
-        if raw[-1]['name']=='LabyDateChangedObserved':raise BatchStopped('date_changed')
-        return raw[-1]['name'],receipt
+        from .autoplay import _poll_pause
+        reason='game_session_readback_unknown'
+        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+OBSERVATION_TIMEOUT_SECONDS)
+        token=native.RUN_DEADLINE.set(deadline)
+        try:
+            while True:
+                self._checkpoint(batch)
+                if time.monotonic()>=deadline:raise BatchStopped(reason)
+                with batch.timings.measure('page_wait'):receipt=native.run(self.tasker,node)
+                self._checkpoint(batch)
+                if time.monotonic()>=deadline:raise BatchStopped(reason)
+                raw=_root(receipt,node).get('recognition')
+                if (type(raw) is not list or not 1<=len(raw)<=len(names)
+                        or any(type(row) is not dict or row.get('algorithm')!='And' for row in raw)
+                        or [row.get('name') for row in raw]!=names[:len(raw)]
+                        or any(row.get('box') is not None for row in raw[:-1])
+                        or not _box(raw[-1].get('box'))):
+                    raise BatchStopped('game_port_navigation_unknown')
+                hit=raw[-1]['name']
+                if hit=='LabyDateChangedObserved':raise BatchStopped('date_changed')
+                if hit!='LabyMapObserved':return hit,receipt
+                # A fresh opening can show MAP before its selection popup; MAP proves no invitation.
+                _poll_pause(self.tasker,batch,'LabyGamePortTransitionPollSpacing',reason)
+        except RuntimeError as error:
+            if error.args not in (('Native task exceeded 90 seconds or inspection deadline',),
+                    ('Inspection deadline exceeded before task input',),
+                    ('Context deadline exceeded after synchronous return; outcome unknown',)):raise
+            self._checkpoint(batch);raise BatchStopped(reason) from error
+        finally:native.RUN_DEADLINE.reset(token)
 
     def _input(self,batch,node):
         self._checkpoint(batch)
@@ -77,8 +97,8 @@ class MaaGamePort:
             raise BatchStopped('game_port_pipeline_unavailable')
         fields=dict(enter_id=snapshot.enter_id,source='maa')
         joined_names=[f'LabyPortraitJoined{count}Observed' for count in (1,2,3)]
-        opening_names=['LabyDateChangedObserved','LabyDepartureRewardObserved']+joined_names+['LabyOpeningEmptyObserved']
-        roster_names=['LabyDateChangedObserved']+joined_names+['LabyOpeningEmptyObserved']
+        opening_names=pipeline['LabyGamePortOpeningObserved']['any_of']
+        roster_names=pipeline['LabyGamePortRosterObserved']['any_of']
         def depart(oid):
             clicked=self._input(batch,'LabyClientResumeHomeDepartOnce')
             return self.stamp(operation_id=oid,**fields,native=clicked,input_native=clicked,input_action_verified=True)
