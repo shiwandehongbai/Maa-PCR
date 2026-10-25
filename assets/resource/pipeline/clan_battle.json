@@ -1,7 +1,7 @@
 {
   "CBClosedTitleReadOnly": {
     "recognition": "OCR",
-    "expected": "^(?:行会战|公会战)$",
+    "expected": "^(?:团队战|行会战|公会战)$",
     "roi": [0, 0, 1280, 720],
     "threshold": 0.9,
     "action": "DoNothing",
@@ -12,7 +12,7 @@
   },
   "CBClosedNoticeReadOnly": {
     "recognition": "OCR",
-    "expected": "^(?:行会战|公会战)(?:尚未开放|未开放|尚未开始|未开始)[。！!]?$",
+    "expected": "^(?:团队战|行会战|公会战)(?:尚未开放|未开放|尚未开始|未开始)[。！!]?$",
     "roi": [0, 0, 1280, 720],
     "threshold": 0.9,
     "action": "DoNothing",

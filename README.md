@@ -4,7 +4,9 @@ Windows x64 的 PCR 国服日常与黎明界自动化。提供独立的“日常
 
 ## 当前状态
 
-当前源码为 **v0.1.19 / R66**，移除日常任务列表中误带入正式更新的“所选攻略单关试打”模块。旧配置中的试打选择会在启动授权前被拒绝，攻略资料和历史账本保留。继承 R65 的黎明界确认与观察超时修复。公会战仍支持作业整理和计划配置，真实模拟待校准，正式出刀和补偿执行尚未开放。公开状态以 [GitHub Releases](https://github.com/shiwandehongbai/Maa-PCR/releases) 和本版 `delivery/acceptance.json` 为准。[发布范围](docs/RELEASE_STATUS.md)说明修复和验证边界。
+本分支为 **R67 / v0.1.20-clan-candidate 本地候选**。公会战已通过全自有纯 AUTO 模拟：存活第三 Boss 和已败第五 Boss 均完成编队、开场校验、伤害记账和返回。出战星级使用已确认账号资料的 `battle_rarity`。秒数轴实测未达时限，借人、正式战和补偿缺少对应实机验收，均保持关闭。范围和检查结果见[公会战分项验收](docs/CLAN_ACCEPTANCE.md)。候选只供独立目录运行，未公开发布。
+
+正式基线为 **v0.1.19 / R66**，保留移除旧单关试打入口、原配置和账本，以及 R65 的黎明界超时修复。正式发行状态以 [GitHub Releases](https://github.com/shiwandehongbai/Maa-PCR/releases) 为准；[历史发布范围](docs/RELEASE_STATUS.md)和 `delivery/acceptance.json` 不代替本候选的分项验收。
 
 黎明界兼容已有导航记录，按操作语义核对局号和服务器状态，保留未知结果且不重发。日志导出只生成用户选定的一个 ZIP，导出期间禁止重复触发。连接与首帧准备最多等待 30 秒；停止或超时后，界面结束等待，旧原生调用和资源仍未回收时继续禁止重连、切换配置和更新。真实 ADB 卡死尚未实测，界面取消不代表原生调用已经终止。
 

@@ -5,7 +5,7 @@ import hashlib
 import json
 import pytest
 from pcr_maa.clan_battle import (execute_simulation, execute_switches, load_snapshot,
-    plan_hash, select_support, support_requirement, validate_plan)
+    account_battle_stars, plan_hash, select_support, support_requirement, validate_plan)
 from pcr_maa.preset_execution import Journal
 
 
@@ -158,6 +158,38 @@ def test_partial_snapshot_is_enough_when_all_five_are_explicitly_owned(plan):
     assert validate_plan(plan) and support_requirement(plan, load_snapshot(plan)) is None
 
 
+def test_account_stars_use_selected_battle_rarity_not_unlocked_rarity(plan):
+    plan.update(support_mode='none', stars=[3, 5, 5, 5, 5])
+    snapshot_update(plan, lambda s: s['units'][0].update(rarity=5, battle_rarity=3))
+    assert account_battle_stars(plan) == dict(zip(plan['unit_ids'], plan['stars']))
+
+
+def test_account_stars_share_the_confirmed_snapshot_validity(plan):
+    plan['support_mode'] = 'none'
+    snapshot_update(plan, lambda s: s.update(observed_at=(datetime.now(timezone.utc)-timedelta(hours=23)).isoformat()))
+    assert account_battle_stars(plan) == dict(zip(plan['unit_ids'], plan['stars']))
+
+
+@pytest.mark.parametrize('change,error', [
+    (lambda s: s.update(observed_at=(datetime.now(timezone.utc)-timedelta(hours=25)).isoformat()), 'snapshot_expired'),
+    (lambda s: s['units'][0].update(battle_rarity=4), 'account_stars_mismatch'),
+    (lambda s: s['units'][0].update(battle_rarity=None), 'account_stars_unknown'),
+    (lambda s: s['units'][0].update(battle_rarity=True), 'account_stars_unknown'),
+    (lambda s: s.update(unknown_fields=['units.100101.battle_rarity']), 'account_stars_unknown'),
+    (lambda s: s['units'].pop(), 'account_stars_unknown'),
+])
+def test_account_stars_reject_missing_changed_or_stale_values(plan, change, error):
+    plan['support_mode'] = 'none'
+    snapshot_update(plan, change)
+    with pytest.raises((RuntimeError, ValueError), match=error):
+        account_battle_stars(plan)
+
+
+def test_account_stars_cannot_authorize_a_borrowed_unit(plan):
+    with pytest.raises(RuntimeError, match='account_stars_support_uncalibrated'):
+        account_battle_stars(plan)
+
+
 def test_partial_snapshot_does_not_infer_missing_unit(plan):
     snapshot_update(plan, lambda s: (s.update(ownership_complete=False), s['units'].pop()))
     with pytest.raises(RuntimeError, match='ownership_unknown'):
@@ -237,6 +269,19 @@ def test_identity_or_formation_conflict_never_starts(plan, tmp_path, wrong):
     journal = Journal(tmp_path/'ledger')
     result = execute_simulation(port, journal, plan)
     assert result['outcome'] == 'stopped' and port.starts == 0 and journal.events() == []
+
+
+def test_simulation_selected_difficulty_does_not_invent_a_round(plan):
+    from pcr_maa.clan_battle import _target
+    observed = reading(plan, round=None, round_source='selected_difficulty',
+        selected_difficulty=dict(phase='B', boss=plan['boss'], simulation=True))
+    assert _target(observed, plan)
+    for patch in (dict(round_source=None), dict(simulation=False), dict(phase='D'),
+                  dict(round=plan['round_min'] - 1), dict(round=True), dict(selected_difficulty=None),
+                  dict(selected_difficulty=dict(phase='B', boss=True, simulation=True)),
+                  dict(selected_difficulty=dict(phase='C', boss=plan['boss'], simulation=True)),
+                  dict(selected_difficulty=dict(phase='B', boss=plan['boss'], simulation=False))):
+        assert not _target(dict(observed, **patch), plan)
 
 
 def test_closed_and_stop_have_zero_battle_inputs(plan, tmp_path):
@@ -345,10 +390,10 @@ def test_not_sent_evidence_only_closes_unsent_start(plan, tmp_path, phase, battl
 
 class Controls:
     timing_capability = dict(validated=True, max_observation_interval_ms=10,
-        max_action_latency_ms=50, source='synthetic bounded clock')
+        max_action_latency_ms=50, battle_speed=1, min_game_second_ms=1000, source='synthetic bounded clock')
 
     def __init__(self, plan, ticks=(), *, no_change=False):
-        self.state = dict(unit_ids=list(reversed(plan['unit_ids'])), auto=plan['auto'], sets=[True]*5)
+        self.state = dict(unit_ids=list(reversed(plan['unit_ids'])), auto=plan['auto'], sets=[True]*5, battle_speed=1)
         self.ticks, self.actions, self.no_change = iter(ticks), [], no_change
         self.requested_seconds = []
 
@@ -555,7 +600,7 @@ def test_whole_switch_group_must_fit_before_the_second_ends(plan, latency, accep
     port = Controls(plan)
     # Two changes: six clock/read intervals plus two complete input+readbacks.
     port.timing_capability = dict(validated=True, max_observation_interval_ms=100,
-        max_action_latency_ms=latency, source='synthetic bounded clock')
+        max_action_latency_ms=latency, battle_speed=1, min_game_second_ms=1000, source='synthetic bounded clock')
     if accepted:
         require_timing(port, plan)
     else:
@@ -570,7 +615,7 @@ def test_six_changes_do_not_pass_individually_valid_latency_limits(plan):
         set_by_unit={str(uid):False for uid in plan['unit_ids']})]
     port = Controls(plan)
     port.timing_capability = dict(validated=True, max_observation_interval_ms=250,
-        max_action_latency_ms=500, source='synthetic per-action limits only')
+        max_action_latency_ms=500, battle_speed=1, min_game_second_ms=1000, source='synthetic per-action limits only')
     with pytest.raises(RuntimeError, match='window_unproven'):
         require_timing(port, plan)
 
@@ -581,4 +626,87 @@ def test_unknown_hud_never_toggles(plan, patch):
     port.state.update(patch)
     with pytest.raises(RuntimeError, match='controls_unknown'):
         execute_switches(port, plan)
+    assert not port.actions
+
+
+@pytest.mark.parametrize('speed', [None, True, 0, 2, 3])
+def test_axis_rejects_unverified_speed_before_any_toggle(plan, speed):
+    plan['switches'] = [dict(remaining_seconds=85, auto=False, set_by_unit={})]
+    port = Controls(plan, [85] * 4)
+    port.state['battle_speed'] = speed
+    with pytest.raises(RuntimeError, match='speed_not_verified'):
+        execute_switches(port, plan)
+    assert not port.actions
+
+
+def test_axis_stops_if_speed_changes_while_waiting_for_target_second(plan):
+    plan['switches'] = [dict(remaining_seconds=85, auto=False, set_by_unit={})]
+    port = Controls(plan, [89])
+    read_tick = port.read_tick
+    def accelerated():
+        tick = read_tick()
+        tick['state']['battle_speed'] = 2
+        return tick
+    port.read_tick = accelerated
+    with pytest.raises(RuntimeError, match='speed_not_verified'):
+        execute_switches(port, plan)
+    assert not port.actions
+
+
+def test_axis_stops_after_toggle_if_readback_speed_changes(plan):
+    plan['switches'] = [dict(remaining_seconds=85, auto=False, set_by_unit={'100101': False})]
+    port = Controls(plan, [85] * 8)
+    toggle_auto = port.toggle_auto
+    def accelerated(*args, **kwargs):
+        observed = toggle_auto(*args, **kwargs)
+        observed['battle_speed'] = 2
+        return observed
+    port.toggle_auto = accelerated
+    with pytest.raises(RuntimeError, match='speed_not_verified'):
+        execute_switches(port, plan)
+    assert port.actions == [('auto', True, False)]
+
+
+def test_timing_budget_uses_shortest_measured_game_second(plan):
+    from pcr_maa.clan_battle import require_timing
+    plan['switches'] = [dict(remaining_seconds=85, auto=False, set_by_unit={})]
+    port = Controls(plan)
+    port.timing_capability = dict(port.timing_capability, max_observation_interval_ms=100,
+        max_action_latency_ms=400, min_game_second_ms=800)
+    with pytest.raises(RuntimeError, match='window_unproven'):
+        require_timing(port, plan)
+
+
+@pytest.mark.parametrize('patch', [dict(auto=False), dict(sets=[False]*5),
+    dict(remaining_seconds=89), dict(remaining_seconds=True), dict(same_frame=False)])
+def test_v2_opening_requires_settings_before_clock_progress(plan, patch):
+    port = Controls(plan)
+    port.calibration = {'version': 2}
+    port.state.update(remaining_seconds=90, same_frame=True)
+    port.state.update(patch)
+    with pytest.raises(RuntimeError, match='opening_not_verified'):
+        execute_switches(port, plan)
+    assert not port.actions
+
+
+def test_v2_matching_first_frame_needs_no_opening_inputs(plan):
+    port = Controls(plan)
+    port.calibration = {'version': 2}
+    port.state.update(remaining_seconds=90, same_frame=True)
+    result = execute_switches(port, plan)
+    assert result['settings_verified'] and result['opening_evidence']['remaining_seconds'] == 90
+    assert not port.actions
+
+
+@pytest.mark.parametrize('start_seconds', [30, 0, 91, True])
+def test_v2_carryover_opening_uses_observed_start_seconds(plan, start_seconds):
+    port = Controls(plan)
+    port.calibration = {'version': 2}
+    port.start_seconds = start_seconds
+    port.state.update(remaining_seconds=start_seconds, same_frame=True)
+    if start_seconds == 30:
+        assert execute_switches(port, plan)['opening_evidence']['remaining_seconds'] == 30
+    else:
+        with pytest.raises(RuntimeError, match='opening_not_verified'):
+            execute_switches(port, plan)
     assert not port.actions

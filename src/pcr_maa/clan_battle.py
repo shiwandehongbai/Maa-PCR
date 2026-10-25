@@ -75,6 +75,24 @@ def load_snapshot(plan):
     return snapshot
 
 
+def account_battle_stars(plan):
+    snapshot = load_snapshot(plan)
+    if plan['support_mode'] != 'none':
+        raise RuntimeError('clan_battle_account_stars_support_uncalibrated')
+    units = {row['unit_id']: row for row in snapshot['units']}
+    stars = {}
+    for uid, wanted in zip(plan['unit_ids'], plan['stars']):
+        path = f'units.{uid}.battle_rarity'
+        value = units.get(uid, {}).get('battle_rarity')
+        if (not _integer(value, 1, 6)
+                or any(path == key or path.startswith(key + '.') for key in snapshot['unknown_fields'])):
+            raise RuntimeError('clan_battle_account_stars_unknown')
+        if value != wanted:
+            raise RuntimeError('clan_battle_account_stars_mismatch')
+        stars[uid] = value
+    return stars
+
+
 def validate_plan(plan):
     if type(plan) is not dict or set(plan) != PLAN_KEYS:
         raise ValueError('clan_battle_plan_invalid')
@@ -168,11 +186,17 @@ def select_support(plan, snapshot, candidates):
 
 def _target(reading, plan):
     phase = reading.get('phase')
+    difficulty = reading.get('selected_difficulty')
+    selected_difficulty = (reading.get('round') is None
+        and reading.get('round_source') == 'selected_difficulty' and reading.get('simulation') is True
+        and type(difficulty) is dict and set(difficulty) == {'phase', 'boss', 'simulation'}
+        and difficulty['phase'] == phase and type(difficulty['boss']) is int
+        and difficulty['boss'] == reading.get('boss') and difficulty['simulation'] is True)
     return (reading.get('account_id') == plan['account_id']
         and reading.get('server') == plan['server'] and reading.get('period') == plan['period']
         and phase in (('B', 'C', 'BC') if plan['phase'] == 'BC' else (plan['phase'],))
-        and type(reading.get('round')) is int and reading['round'] >= plan['round_min']
-        and (plan['round_max'] is None or reading['round'] <= plan['round_max'])
+        and (selected_difficulty or type(reading.get('round')) is int and reading['round'] >= plan['round_min']
+            and (plan['round_max'] is None or reading['round'] <= plan['round_max']))
         and type(reading.get('boss')) is int and reading['boss'] == plan['boss']
         and reading.get('simulation') is True)
 
@@ -194,6 +218,8 @@ def _controls(state, plan):
             or any(type(uid) is not int for uid in state['unit_ids'])
             or len(set(state['unit_ids'])) != 5 or set(state['unit_ids']) != set(plan['unit_ids'])):
         raise RuntimeError('clan_battle_controls_unknown')
+    if plan['switches'] and (type(state.get('battle_speed')) is not int or state['battle_speed'] != 1):
+        raise RuntimeError('clan_battle_speed_not_verified')
     return state
 
 
@@ -235,6 +261,8 @@ def require_timing(port, plan):
         if (type(capability) is not dict or capability.get('validated') is not True
                 or not _integer(capability.get('max_observation_interval_ms'), 1, 250)
                 or not _integer(capability.get('max_action_latency_ms'), 1, 500)
+                or type(capability.get('battle_speed')) is not int or capability['battle_speed'] != 1
+                or not _integer(capability.get('min_game_second_ms'), 1, 10000)
                 or type(capability.get('source')) is not str or not capability['source']):
             raise RuntimeError('clan_battle_timing_not_calibrated')
         auto, sets = plan['auto'], dict(plan['set_by_unit'])
@@ -244,7 +272,7 @@ def require_timing(port, plan):
             # Budget includes each toggle's full readback and the clock reads surrounding it.
             window = ((2 + 2 * changes) * capability['max_observation_interval_ms']
                 + changes * capability['max_action_latency_ms'])
-            if window >= 1000:
+            if window >= min(1000, capability['min_game_second_ms']):
                 raise RuntimeError('clan_battle_timing_window_unproven')
             auto = next_auto
             sets.update(switch['set_by_unit'])
@@ -255,6 +283,14 @@ def execute_switches(port, plan, initial=None):
     require_timing(port, plan)
     desired, auto, actions, switch_evidence = dict(plan['set_by_unit']), plan['auto'], [], []
     state = _controls(port.read_battle_settings(initial), plan)
+    calibration = getattr(port, 'calibration', None)
+    if type(calibration) is dict and calibration.get('version') == 2:
+        start_seconds = getattr(port, 'start_seconds', 90)
+        if (not _integer(start_seconds, 1, 90) or state.get('same_frame') is not True
+                or type(state.get('remaining_seconds')) is not int
+                or state['remaining_seconds'] != start_seconds or state['auto'] != auto
+                or {str(uid): value for uid, value in zip(state['unit_ids'], state['sets'])} != desired):
+            raise RuntimeError('clan_battle_opening_not_verified')
 
     def check_window(second):
         if second is not None:
@@ -262,6 +298,7 @@ def execute_switches(port, plan, initial=None):
             if (type(tick) is not dict or type(tick.get('remaining_seconds')) is not int
                     or tick['remaining_seconds'] != second):
                 raise RuntimeError('clan_battle_switch_window_missed')
+            _controls(tick.get('state'), plan)
 
     def apply(state, target_auto, target_sets, second=None):
         state = _controls(state, plan)
@@ -301,7 +338,7 @@ def execute_switches(port, plan, initial=None):
 
     state = apply(state, auto, desired)
     opening = deepcopy(state)
-    previous = 90
+    previous = getattr(port, 'start_seconds', 90)
     deadline = time.monotonic() + 120
     for switch in plan['switches']:
         while True:
@@ -311,6 +348,7 @@ def execute_switches(port, plan, initial=None):
             tick = port.read_tick()
             if type(tick) is not dict or tick.get('result'):
                 raise RuntimeError('clan_battle_switch_not_reached')
+            observed = _controls(tick.get('state'), plan)
             remaining = tick.get('remaining_seconds')
             if not _integer(remaining, 0, previous):
                 raise RuntimeError('clan_battle_clock_unknown')
@@ -318,7 +356,7 @@ def execute_switches(port, plan, initial=None):
             if remaining < switch['remaining_seconds']:
                 raise RuntimeError('clan_battle_switch_missed')
             if remaining == switch['remaining_seconds']:
-                before = _controls(tick['state'] if 'state' in tick else port.read_battle_settings(), plan)
+                before = observed
                 if (before['auto'] != auto
                         or {str(uid): value for uid, value in zip(before['unit_ids'], before['sets'])} != desired):
                     raise RuntimeError('clan_battle_controls_changed')

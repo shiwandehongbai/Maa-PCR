@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
@@ -299,26 +300,58 @@ internal static class AlphaOwnerAsyncChecks
             attempts.Add(new JObject{["scenario"]="removed_guide_trial_rejected_by_original_start_owner",["plans"]=rejectedTrials,["controller_allocations"]=0,["rejected_before_confirmation"]=true});
             Set(processor, typeof(MaaProcessor), "<InstanceId>k__BackingField", PcrClanGuide.ProfileId);
             config.Remove("guide_trial");
-            var clanPlans = JArray.Parse(File.ReadAllText(Path.Combine(args[1], "clan-guide", "managed-plan-cases.json")));
+            var clanConfig = Path.Combine(fixture, "clan-start-config");
+            var clanDocuments = PrepareClanStartFixture(args, clanConfig);
+            Set(null, typeof(AppPaths), "_configDirectory", clanConfig);
+            Set(null, typeof(AppPaths), "_initialized", true);
+            var clanState = Path.Combine(clanConfig, "agent-guide-review.json");
+            JObject SaveClan(PcrClanGuideDocument document)
+            {
+                PcrClanGuide.Save(document, clanState, PcrClanGuide.Stamp(clanState), clanConfig, fixture, DateTimeOffset.Now, true);
+                return PcrClanGuide.CreatePlan(clanState, clanConfig, fixture, DateTimeOffset.Now);
+            }
+            var firstClanPlan = SaveClan(clanDocuments[0]);
             string? visibleClanHash = null;
             Set(vm, typeof(TaskQueueViewModel), "<PcrClanGuideConfirmation>k__BackingField", new Func<string?>(() => visibleClanHash));
             var clanSelections = 0;
             PcrAlphaOwner.SelectConfiguration = () => { clanSelections++; return Task.FromResult<string?>(path); };
+            void RejectedByCalibration(string code)
+            {
+                var before = clanSelections; var rejected = false;
+                request = PcrAlphaOwner.RequestStartAsync(vm);
+                Until(() => request.IsCompleted, "clan_calibration_rejection");
+                try { request.GetAwaiter().GetResult(); }
+                catch (InvalidOperationException ex) when (ex.Message.Contains(code)) { rejected = true; }
+                Require(rejected && clanSelections == before && vm.Idle && pending.GetValue(null) == null && current.GetValue(null) == null,
+                    "clan_calibration_stops_before_selection_or_owner_" + code);
+                Require(allocations == 0 && (PcrAlphaOwner.ControllerCreations, PcrAlphaOwner.AgentCreations, PcrAlphaOwner.Grants) == initial,
+                    "clan_calibration_rejection_never_allocates_" + code);
+            }
+            RejectedByCalibration("clan_battle_calibration_capability_missing:simulation");
+            CopyClanCalibration(args[0], fixture, (string)firstClanPlan["content_version"]!);
+            attempts.Add(new JObject { ["scenario"] = "clan_missing_calibration_before_owner", ["controller_allocations"] = 0 });
             request = PcrAlphaOwner.RequestStartAsync(vm);
             Until(() => request.IsCompleted, "clan_unsaved_editor_refused"); request.GetAwaiter().GetResult();
             Require(clanSelections == 0 && vm.Idle && pending.GetValue(null) == null && current.GetValue(null) == null,
                 "clan_unsaved_editor_refused_before_config_or_authority");
-            config["clan_battle_simulation"] = clanPlans[0].DeepClone(); File.WriteAllText(path, config.ToString());
+            config["clan_battle_simulation"] = firstClanPlan.DeepClone(); File.WriteAllText(path, config.ToString());
             visibleClanHash = new string('0', 64);
             request = PcrAlphaOwner.RequestStartAsync(vm);
             Until(() => request.IsCompleted, "clan_other_saved_plan_refused"); request.GetAwaiter().GetResult();
             Require(clanSelections == 1 && vm.Idle && pending.GetValue(null) == null && current.GetValue(null) == null,
                 "clan_editor_confirmation_must_match_saved_plan");
-            var clanForwarded = 0;
-            foreach (var plan in clanPlans)
+            var clanForwarded = 0; var clanUncalibrated = 0;
+            foreach (var document in clanDocuments)
             {
+                var plan = SaveClan(document);
                 config["clan_battle_simulation"] = plan.DeepClone(); File.WriteAllText(path, config.ToString());
                 visibleClanHash = (string?)plan["confirmed_for"];
+                if ((string?)plan["support_mode"] != "none" || plan["switches"] is JArray { Count: > 0 })
+                {
+                    RejectedByCalibration((string?)plan["support_mode"] != "none"
+                        ? "clan_battle_support_mode_uncalibrated" : "clan_battle_calibration_capability_missing:timed");
+                    clanUncalibrated++; continue;
+                }
                 var reached = false;
                 PcrAlphaOwner.Confirm = prompt => {
                     Require(JToken.DeepEquals(prompt["configuration"]?["clan_battle_simulation"], plan), "clan_owner_preserves_reviewed_simulation_plan");
@@ -335,10 +368,12 @@ internal static class AlphaOwnerAsyncChecks
                     "clan_owner_never_allocates_device");
                 clanForwarded++;
             }
+            Require(clanForwarded == 2 && clanUncalibrated == 3, "clan_only_calibrated_none_plans_reach_owner");
             attempts.Add(new JObject { ["scenario"] = "clan_saved_plans_through_original_start_owner", ["plans"] = clanForwarded,
-                ["controller_allocations"] = 0, ["cancelled_before_grant"] = true });
-            config["clan_battle_simulation"] = clanPlans[0].DeepClone(); File.WriteAllText(path, config.ToString());
-            visibleClanHash = (string?)clanPlans[0]["confirmed_for"];
+                ["uncalibrated_plans_rejected"] = clanUncalibrated, ["controller_allocations"] = 0, ["cancelled_before_grant"] = true });
+            firstClanPlan = SaveClan(clanDocuments[0]);
+            config["clan_battle_simulation"] = firstClanPlan.DeepClone(); File.WriteAllText(path, config.ToString());
+            visibleClanHash = (string?)firstClanPlan["confirmed_for"];
             held = new(TaskCreationOptions.RunContinuationsAsynchronously);
             var clanReadEntered = false; var clanReadToken = default(CancellationToken);
             PcrAlphaOwner.Confirm = _ => Task.FromResult<PcrStartConsent?>(new("", "", [], false));
@@ -388,6 +423,62 @@ internal static class AlphaOwnerAsyncChecks
             foreach (var undo in restore.AsEnumerable().Reverse()) undo();
             source.Dispose();
         }
+    }
+
+    private static PcrClanGuideDocument[] PrepareClanStartFixture(string[] args, string config)
+    {
+        Directory.CreateDirectory(config);
+        var original = Path.Combine(args[1], "clan-guide");
+        var catalog = new PcrGuideStore(Path.Combine(original, "config", "guide-review.json")).Load().Input.Catalog!;
+        catalog.ContentVersion = "202610141448"; catalog.Source = "synthetic offline Owner fixture; not a player account";
+        var store = new PcrGuideStore(Path.Combine(config, "guide-review.json")); store.Load();
+        store.Save(new() { Input = new() { Catalog = catalog, Title = "合成会战 Owner 离线夹具" } });
+        var plans = JArray.Parse(File.ReadAllText(Path.Combine(original, "managed-plan-cases.json")));
+        var snapshot = PcrClanGuide.ReadJson((string)plans[0]["snapshot"]!["path"]!);
+        snapshot["account_id"] = "999000001"; snapshot["content_version"] = catalog.ContentVersion;
+        snapshot["observed_at"] = DateTimeOffset.Now.ToString("O");
+        new PcrGuideAccountStore(config).Save(Encoding.UTF8.GetBytes(snapshot.ToString()), catalog, "999000001", DateTimeOffset.Now, null);
+        var snapshotPath = PcrClanGuide.SnapshotPaths(config).Single();
+        var bundlePath = Path.Combine(original, "bundle.json");
+        File.WriteAllText(Path.Combine(config, "offline-fixture.json"), new JObject { ["synthetic"] = true,
+            ["account_id"] = "999000001", ["content_version"] = catalog.ContentVersion, ["game_input"] = false,
+            ["scope"] = "owner preflight and cancellation only; generated five-unit snapshot" }.ToString());
+        return plans.OfType<JObject>().Select(plan => new PcrClanGuideDocument {
+            BundlePath = bundlePath, BundleSha256 = PcrClanGuide.Stamp(bundlePath)!,
+            SelectedJobId = (string)plan["source"]!["job_id"]!, SnapshotPath = snapshotPath, SnapshotSha256 = PcrClanGuide.Stamp(snapshotPath)!,
+            Job = new JObject(plan.Properties().Where(p => p.Name is not ("version" or "server" or "account_id" or "content_version" or "snapshot" or "confirmed_for"))
+                .Select(p => new JProperty(p.Name, p.Value.DeepClone()))) }).ToArray();
+    }
+
+    private static void CopyClanCalibration(string source, string destination, string version)
+    {
+        var available = PcrClanCalibration.Read(source, version);
+        if (!available.Supports("simulation") || !available.OwnUnitsOnly || available.Supports("timed") || available.Supports("formal") || available.Supports("carryover"))
+            throw new InvalidDataException("Offline Owner fixture expects the bundled none-only simulation calibration.");
+        void Copy(string relative)
+        {
+            var target = Path.GetFullPath(Path.Combine(destination, relative));
+            if (!target.StartsWith(Path.GetFullPath(destination) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Calibration fixture path escaped.");
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(Path.Combine(source, relative), target, false);
+        }
+        Copy(PcrClanCalibration.IndexPath);
+        var index = PcrClanGuide.ReadJson(Path.Combine(source, PcrClanCalibration.IndexPath));
+        var entry = ((JArray)index["entries"]!).OfType<JObject>().Single(row => (string?)row["content_version"] == version);
+        var profilePath = (string)entry["profile_path"]!; Copy(profilePath);
+        var profile = PcrClanGuide.ReadJson(Path.Combine(source, profilePath));
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var value in profile.Descendants().OfType<JObject>())
+        {
+            if (value["path"]?.Type == JTokenType.String && value["sha256"]?.Type == JTokenType.String)
+                files.Add((string)value["path"]!);
+            if ((string?)value["recognition"] == "TemplateMatch")
+                foreach (var template in value["template"] is JArray array ? array.Values<string>() : new[] { (string?)value["template"] })
+                    files.Add("assets/resource/image/" + template);
+        }
+        foreach (var file in files) Copy(file);
+        if (!PcrClanCalibration.Read(destination, version).Supports("simulation")) throw new InvalidDataException("Copied calibration fixture failed verification.");
     }
 
     private static string Logs(MaaProcessor processor) => string.Join("\n", processor.LogItemViewModels.Select(log => log.Content));

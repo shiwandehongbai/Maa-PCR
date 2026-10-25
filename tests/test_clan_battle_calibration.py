@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from test_clan_battle_native import calibration, plan
+from test_clan_battle_native import calibration, calibration_v2, plan
+from test_clan_battle_daily_native import executable, profile
 from pcr_maa import clan_battle_calibration as module, native
 
 
@@ -39,12 +40,18 @@ def bundle(calibration, plan, tmp_path, monkeypatch):
     return root, profile, entry, index, save
 
 
-def test_shipped_registry_is_empty_and_pinned(plan):
+def test_shipped_registry_is_pinned_and_each_profile_is_valid(plan):
     path = native.ROOT / module.INDEX_PATH
     assert hashlib.sha256(path.read_bytes()).hexdigest() == module.INDEX_SHA256
-    assert json.loads(path.read_text(encoding='utf-8')) == {'version': 1, 'entries': []}
-    with pytest.raises(RuntimeError, match='calibration_missing'):
-        module.load_calibration(plan)
+    index = json.loads(path.read_text(encoding='utf-8'))
+    if not index['entries']:
+        with pytest.raises(RuntimeError, match='calibration_missing'):
+            module.load_calibration(plan)
+    for entry in index['entries']:
+        for capability in entry.get('capabilities', ['simulation']):
+            if capability != 'timed':
+                selected = dict(plan, server=entry['server'], content_version=entry['content_version'])
+                assert module.load_calibration(selected, capability=capability)['calibration_id'] == entry['calibration_id']
 
 
 def test_loads_only_reviewed_bundled_profile_and_resolves_samples(bundle, plan):
@@ -139,3 +146,325 @@ def test_auto_profile_does_not_load_timing_file_even_if_listed(bundle, plan):
     profile['timing_measurements'] = dict(path='//server/untrusted.json', sha256='0'*64)
     save()
     assert 'timing_measurements' not in module.load_calibration(plan, root=root)
+
+
+@pytest.fixture
+def v2_bundle(bundle, monkeypatch):
+    root, profile, entry, index, save = bundle
+    index['version'] = profile['version'] = 2
+    entry['capabilities'] = ['simulation']
+    # This fixture isolates loader authority from the independently tested page schema.
+    monkeypatch.setattr('pcr_maa.clan_battle_native.calibration_pipeline', lambda *_: {})
+    save()
+    return bundle
+
+
+@pytest.mark.parametrize('capability', ['simulation', 'formal', 'carryover'])
+def test_v2_battle_capabilities_are_granted_independently(v2_bundle, plan, capability, monkeypatch):
+    root, profile, entry, _, save = v2_bundle
+    monkeypatch.setattr('pcr_maa.clan_battle_daily_native.require_daily_execution', lambda *_: {})
+    entry['capabilities'] = ['formal', 'carryover'] if capability == 'carryover' else [capability]
+    save()
+    assert module.load_calibration(plan, root=root, capability=capability)['version'] == 2
+    missing = 'formal' if capability == 'simulation' else 'simulation'
+    with pytest.raises(RuntimeError, match='capability_missing:' + missing):
+        module.load_calibration(plan, root=root, capability=missing)
+
+
+@pytest.mark.parametrize('capabilities', [['carryover'], ['simulation', 'simulation'], ['unknown'],
+    [True], ['simulation', {}], 'simulation', None])
+def test_v2_capabilities_must_be_known_unique_and_complete(v2_bundle, plan, capabilities):
+    root, _, entry, _, save = v2_bundle
+    entry['capabilities'] = capabilities
+    save()
+    with pytest.raises(ValueError, match='capabilities_invalid'):
+        module.load_calibration(plan, root=root)
+
+
+@pytest.mark.parametrize('capability', ['timed', '', None, 'auto'])
+def test_additional_timing_capability_cannot_replace_battle_mode(v2_bundle, plan, capability):
+    root, *_ = v2_bundle
+    with pytest.raises(ValueError, match='capability_invalid'):
+        module.load_calibration(plan, root=root, capability=capability)
+
+
+def test_v2_empty_capabilities_grant_no_execution(v2_bundle, plan):
+    root, _, entry, _, save = v2_bundle
+    entry['capabilities'] = []
+    save()
+    with pytest.raises(RuntimeError, match='capability_missing:simulation'):
+        module.load_calibration(plan, root=root)
+
+
+def test_v2_axis_requires_timed_in_addition_to_simulation(v2_bundle, plan):
+    root, *_ = v2_bundle
+    plan['switches'] = [dict(remaining_seconds=85, auto=False, set_by_unit={})]
+    with pytest.raises(RuntimeError, match='capability_missing:timed'):
+        module.load_calibration(plan, root=root)
+
+
+def test_v2_opening_auto_off_without_axis_does_not_claim_timing(v2_bundle, plan):
+    root, *_ = v2_bundle
+    plan['auto'] = False
+    assert 'timing_measurements' not in module.load_calibration(plan, root=root)
+
+
+@pytest.mark.parametrize('capabilities', [['simulation', 'timed'], ['formal'], ['formal', 'carryover']])
+def test_v2_index_cannot_promote_legacy_profile(bundle, plan, capabilities):
+    root, _, entry, index, save = bundle
+    index['version'] = 2
+    entry['capabilities'] = capabilities
+    save()
+    capability = 'simulation' if 'simulation' in capabilities else 'formal'
+    with pytest.raises(ValueError, match='legacy_capability_invalid'):
+        module.load_calibration(plan, root=root, capability=capability)
+
+
+@pytest.fixture
+def timed_bundle(v2_bundle):
+    root, profile, entry, _, save = v2_bundle
+    entry['capabilities'] = ['simulation', 'timed']
+    path = root / 'assets/resource/clan-battle-calibrations/timing.json'
+    measured = dict(kind='owner_native_clan_timing', calibration_id=profile['calibration_id'],
+        battle_hud=profile['battle_hud'], observation_scope='full_read_tick',
+        action_scope='toggle_dispatch_and_full_team_readback', battle_speed=1,
+        game_second_ms=[1000] * 20, observation_intervals_ms=[10] * 20, action_latencies_ms=[50] * 20)
+    def save_measurement():
+        path.write_text(json.dumps(measured), encoding='utf-8')
+        profile['timing_measurements'] = dict(path=path.relative_to(root).as_posix(),
+            sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        save()
+    save_measurement()
+    return v2_bundle, path, measured, save_measurement
+
+
+def test_timing_is_loaded_only_from_bound_install_file(timed_bundle, plan):
+    (root, profile, *_), path, _, _ = timed_bundle
+    plan['switches'] = [dict(remaining_seconds=85, auto=False, set_by_unit={})]
+    loaded = module.load_calibration(plan, root=root)
+    assert loaded['timing_measurements']['path'] == str(path)
+    assert not Path(profile['timing_measurements']['path']).is_absolute()
+
+
+@pytest.mark.parametrize('field,value', [('battle_speed', 2), ('battle_speed', True),
+    ('game_second_ms', [1000] * 19), ('observation_intervals_ms', [10] * 19),
+    ('action_latencies_ms', [50] * 19), ('calibration_id', 'another-profile'),
+    ('observation_scope', 'saved_frame_only')])
+def test_incomplete_or_different_timing_measurements_are_not_qualification(timed_bundle, plan, field, value):
+    (root, *_), _, measured, save = timed_bundle
+    measured[field] = value
+    save()
+    with pytest.raises(ValueError, match='timing_not_calibrated'):
+        module.load_calibration(plan, root=root)
+
+
+@pytest.mark.parametrize('path', ['../outside.json', '//server/timing.json',
+    'C:/timing.json', 'assets/timing.json:stream'])
+def test_timing_binding_cannot_escape_install(timed_bundle, plan, path):
+    (root, profile, _, _, save), *_ = timed_bundle
+    profile['timing_measurements']['path'] = path
+    save()
+    with pytest.raises(ValueError, match='path_invalid'):
+        module.load_calibration(plan, root=root)
+
+
+def test_changed_timing_bytes_are_rejected(timed_bundle, plan):
+    (root, *_), path, _, _ = timed_bundle
+    path.write_bytes(path.read_bytes() + b' ')
+    with pytest.raises(ValueError, match='file_changed'):
+        module.load_calibration(plan, root=root)
+
+
+def test_duplicate_timing_json_field_is_rejected_even_when_digest_matches(timed_bundle, plan):
+    (root, profile, _, _, save), path, _, _ = timed_bundle
+    path.write_text('{"battle_speed": 1, "battle_speed": 2}', encoding='utf-8')
+    profile['timing_measurements']['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    save()
+    with pytest.raises(ValueError, match='duplicate_field'):
+        module.load_calibration(plan, root=root)
+
+
+@pytest.fixture
+def template_bundle(bundle):
+    root, profile, _, _, save = bundle
+    sample = root / profile['samples'][0]['path']
+    names = ['calibration/synthetic-one.png', 'calibration/synthetic-two.png']
+    for name in names:
+        target = root / 'assets/resource/image' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(sample.read_bytes())
+    spec = dict(recognition='TemplateMatch', roi=[1, 1, 2, 2], template=names,
+        sha256=[profile['samples'][0]['sha256']] * 2)
+    profile['pages']['target']['labels'][0] = spec
+    save()
+    return bundle, spec
+
+
+@pytest.mark.parametrize('array', [False, True])
+def test_template_variants_keep_each_digest_bound(template_bundle, plan, array):
+    (root, _, _, _, save), spec = template_bundle
+    if not array:
+        spec.update(template=spec['template'][0], sha256=spec['sha256'][0])
+        save()
+    loaded = module.load_calibration(plan, root=root)
+    assert loaded['pages']['target']['labels'][0] == spec
+
+
+@pytest.mark.parametrize('names,digests', [([], []), (['a'] * 17, ['0' * 64] * 17),
+    (['a', 'b'], ['0' * 64]), (['a'], '0' * 64), ([1], ['0' * 64]),
+    (['a'], [None])])
+def test_template_variant_shape_is_strict(template_bundle, plan, names, digests):
+    (root, _, _, _, save), spec = template_bundle
+    spec.update(template=names, sha256=digests)
+    save()
+    with pytest.raises(ValueError):
+        module.load_calibration(plan, root=root)
+
+
+@pytest.mark.parametrize('failure', ['path', 'digest', 'bytes'])
+def test_every_template_variant_is_checked(template_bundle, plan, failure):
+    (root, _, _, _, save), spec = template_bundle
+    if failure == 'path':
+        spec['template'][1] = '../../../../../outside.png'
+    elif failure == 'digest':
+        spec['sha256'][1] = '0' * 64
+    else:
+        path = root / 'assets/resource/image' / spec['template'][1]
+        path.write_bytes(path.read_bytes() + b'changed')
+    save()
+    with pytest.raises(ValueError, match='path_invalid' if failure == 'path' else 'file_changed'):
+        module.load_calibration(plan, root=root)
+
+
+@pytest.fixture
+def daily_bundle(v2_bundle, profile):
+    root, bundled, _, _, save = v2_bundle
+    for field in ('daily', 'boss_targets', 'phase_labels'):
+        bundled[field] = deepcopy(profile[field])
+    for sample in bundled['daily']['samples']:
+        sample.update(path=bundled['samples'][0]['path'], sha256=bundled['samples'][0]['sha256'])
+    save()
+    return v2_bundle
+
+
+@pytest.fixture
+def daily_execution_bundle(daily_bundle, executable):
+    root, bundled, _, _, save = daily_bundle
+    bundled['daily'] = deepcopy(executable['daily'])
+    for section in (bundled['daily'], bundled['daily']['execution']):
+        for sample in section['samples']:
+            sample.update(path=bundled['samples'][0]['path'], sha256=bundled['samples'][0]['sha256'])
+    save()
+    return daily_bundle
+
+
+def test_optional_readonly_daily_pages_are_compiled_and_samples_resolved(daily_bundle, plan):
+    root, profile, *_ = daily_bundle
+    loaded = module.load_calibration(plan, root=root)
+    assert all(Path(row['path']).is_absolute() and Path(row['path']).is_relative_to(root)
+        for row in loaded['daily']['samples'])
+    assert all(not Path(row['path']).is_absolute() for row in profile['daily']['samples'])
+
+
+@pytest.mark.parametrize('capability', ['formal', 'carryover'])
+def test_formal_capability_requires_daily_execution_evidence(daily_bundle, plan, capability):
+    root, profile, entry, _, save = daily_bundle
+    entry['capabilities'] = ['formal', 'carryover']
+    save()
+    with pytest.raises(ValueError, match='daily_execution_calibration_missing'):
+        module.load_calibration(plan, root=root, capability=capability)
+    profile.pop('daily')
+    save()
+    with pytest.raises(ValueError, match='daily_calibration_invalid'):
+        module.load_calibration(plan, root=root, capability=capability)
+
+
+@pytest.mark.parametrize('capability', ['formal', 'carryover'])
+def test_formal_loader_resolves_all_execution_samples(daily_execution_bundle, plan, capability):
+    root, profile, entry, _, save = daily_execution_bundle
+    entry['capabilities'] = ['formal', 'carryover']
+    save()
+    loaded = module.load_calibration(plan, root=root, capability=capability)
+    for source, section in ((profile['daily'], loaded['daily']),
+            (profile['daily']['execution'], loaded['daily']['execution'])):
+        assert all(Path(row['path']).is_absolute() and Path(row['path']).is_relative_to(root)
+            for row in section['samples'])
+        assert all(not Path(row['path']).is_absolute() for row in source['samples'])
+
+
+@pytest.mark.parametrize('section', ['daily', 'execution'])
+@pytest.mark.parametrize('failure', ['path', 'digest', 'sample_shape'])
+def test_nested_daily_samples_keep_install_boundaries(daily_execution_bundle, plan, section, failure):
+    root, profile, _, _, save = daily_execution_bundle
+    samples = profile['daily']['samples'] if section == 'daily' else profile['daily']['execution']['samples']
+    if failure == 'path':
+        samples[0]['path'] = '//server/private.png'
+    elif failure == 'digest':
+        samples[0]['sha256'] = '0' * 64
+    else:
+        samples[0]['verified'] = True
+    save()
+    with pytest.raises(ValueError, match={'path': 'path_invalid', 'digest': 'file_changed',
+            'sample_shape': 'sample_invalid'}[failure]):
+        module.load_calibration(plan, root=root)
+
+
+@pytest.mark.parametrize('failure', ['roi', 'pattern', 'execution'])
+def test_daily_configuration_is_checked_even_for_simulation(daily_execution_bundle, plan, failure):
+    root, profile, _, _, save = daily_execution_bundle
+    if failure == 'roi':
+        profile['daily']['pages']['lobby']['fields']['cp'] = [0, 0, 5000, 50]
+    elif failure == 'pattern':
+        profile['daily']['pages']['lobby']['labels'][0]['expected'] = 'unanchored'
+    else:
+        profile['daily']['execution'].pop('actions')
+    save()
+    with pytest.raises(ValueError, match={'roi': 'roi_invalid', 'pattern': 'label_invalid',
+            'execution': 'daily_execution_calibration_missing'}[failure]):
+        module.load_calibration(plan, root=root)
+
+
+@pytest.fixture
+def page_bundle_v2(bundle, calibration_v2):
+    root, profile, entry, index, save = bundle
+    sample_path = profile['samples'][0]['path']
+    profile.clear()
+    profile.update(deepcopy(calibration_v2), evidence_kind='device_saved_frame')
+    for sample in profile['samples']:
+        sample['path'] = sample_path
+    index['version'] = 2
+    entry['capabilities'] = ['simulation']
+    save()
+    return bundle
+
+
+def test_explicit_own_only_profile_can_omit_support_layout(page_bundle_v2, plan):
+    root, profile, _, _, save = page_bundle_v2
+    profile['support_modes'] = ['none']
+    profile.pop('support')
+    for action in ('open_support', 'support_back', 'support_top', 'support_next'):
+        profile['actions'].pop(action)
+    save()
+    assert 'support' not in module.load_calibration(plan, root=root)
+    with pytest.raises(RuntimeError, match='support_mode_uncalibrated'):
+        module.load_calibration(dict(plan, support_mode='specified'), root=root)
+
+
+@pytest.mark.parametrize('scope', [None, [], ['none', 'specified'], 'none', [False]])
+def test_omitting_support_requires_exact_own_only_scope(page_bundle_v2, plan, scope):
+    root, profile, _, _, save = page_bundle_v2
+    profile.pop('support')
+    if scope is not None:
+        profile['support_modes'] = scope
+    save()
+    with pytest.raises(ValueError, match='not_reviewed_device_profile'):
+        module.load_calibration(plan, root=root)
+
+
+@pytest.mark.parametrize('scope', [[], ['none', 'specified'], 'none', [False]])
+def test_unsupported_scope_is_rejected_with_support_layout_present(page_bundle_v2, plan, scope):
+    root, profile, _, _, save = page_bundle_v2
+    profile['support_modes'] = scope
+    save()
+    with pytest.raises(ValueError, match='support_scope_invalid'):
+        module.load_calibration(plan, root=root)

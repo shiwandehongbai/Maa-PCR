@@ -1575,7 +1575,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         get
         {
             if (IsLabyrinthProfile) return "本次目标：" + string.Join("，", LabyrinthSettings.Goals.Where(g=>g.Enabled).Select(g=>$"{g.Name}：{(g.TargetMode == g.TargetModes[1] ? "尝试" : "通关")} {g.Clears} 次"));
-            if (IsAgentProfile) { try { return PcrSettings.ClanExecutionMode == PcrClanDailyExecution.FormalDaily ? "本次：正式三目标预设 · 待开放校准，禁止执行" : "本次：所选公会战作业 · 单次模拟"; } catch { return "会战执行模式无法读取，请重新打开核对"; } }
+            if (IsAgentProfile) { try { return PcrSettings.ClanExecutionMode == PcrClanDailyExecution.FormalDaily ? "本次：正式三目标预设 · 开始前核对校准与现场状态" : "本次：所选公会战作业 · 单次模拟"; } catch { return "会战执行模式无法读取，请重新打开核对"; } }
             var options = TaskItemViewModels.FirstOrDefault(item => item.InterfaceItem?.Entry == "PCRAlphaEntry")?.InterfaceItem?.Option;
             var modules = options?.FirstOrDefault(item => item.Name == "AlphaModules")?.SelectedCases;
             var final = options?.FirstOrDefault(item => item.Name == "AlphaRewardsFinal")?.Index == 1;

@@ -1,4 +1,4 @@
-"""Bound daily-batch business checks; the production native adapter stays closed.
+"""Bound daily-batch checks shared by Owner native execution and offline replay.
 
 The injected port is an internal test seam, never a player-configurable input path.
 """
@@ -17,13 +17,14 @@ from .preset_execution import Journal
 OPERATION = 'clan_battle_daily'
 MATERIAL_KEYS = simulation.PLAN_KEYS - {'version', 'server', 'account_id', 'content_version', 'snapshot', 'confirmed_for'}
 BINDING_KEYS = {'server', 'account_id', 'period', 'game_day', 'batch_id', 'daily_plan_hash', 'slot_confirmations'}
-OBSERVATION_KEYS = BINDING_KEYS | {'observed_at', 'remaining_count', 'used_unit', 'carry_stock_indices', 'bosses', 'reset_verified', 'reset_evidence'}
+OBSERVATION_KEYS = BINDING_KEYS | {'observed_at', 'remaining_count', 'cp', 'cp_semantics', 'cp_evidence', 'used_unit', 'carry_stock_indices', 'bosses', 'reset_verified', 'reset_evidence'}
 BOSS_KEYS = {'boss', 'round', 'phase', 'available', 'instance_id', 'appeared_at', 'evidence'}
 ACTION_KEYS = {'kind', 'slot', 'stock_index', 'boss', 'round', 'phase', 'instance_id', 'start_seconds'}
 READY_KEYS = BINDING_KEYS | ACTION_KEYS | {'slot_confirmed_for', 'verified', 'unit_ids', 'stars', 'support_unit', 'support_owner_viewer_id', 'evidence'}
 GRANT_KEYS = BINDING_KEYS | {'slot_confirmed_for', 'source_slot', 'source_intent_id', 'stock_index', 'time', 'using_unit', 'support_unit', 'support_owner_viewer_id', 'source_instance_id', 'issued_at', 'evidence'}
 RESULT_KEYS = {'ready', 'result_verified', 'consumption_verified', 'damage', 'settings_verified', 'settings_evidence', 'result_evidence', 'grant', 'after', 'return_verified'}
 INTENT_KEYS = BINDING_KEYS | {'state', 'operation', 'intent_id', 'action', 'slot_confirmed_for', 'ready', 'observed_at', 'before'}
+CP_PER_CHALLENGE = 300
 
 
 def _hash(value):
@@ -156,6 +157,9 @@ def _observation(row, binding, now):
         raise ValueError('daily_fresh_observation_required')
     if not _integer(row['remaining_count'], 0, 3) or type(row['reset_verified']) is not bool or type(row['reset_evidence']) is not dict:
         raise ValueError('daily_observation_invalid')
+    if (not _integer(row['cp'], 0, 900) or row['cp_semantics'] != 'daily_earned'
+            or not _evidence(row['cp_evidence'])):
+        raise ValueError('daily_cp_observation_unknown')
     _units(row['used_unit'], team=False)
     stocks = row['carry_stock_indices']
     if (type(stocks) is not list or len(stocks) > 16 or len(set(stocks)) != len(stocks)
@@ -167,10 +171,12 @@ def _observation(row, binding, now):
     for boss in row['bosses']:
         _object(boss, BOSS_KEYS, 'daily_boss_observation_invalid')
         if (not _integer(boss['boss'], 1, 5) or boss['boss'] in seen
-                or not _integer(boss['round'], 1, 100_000) or boss['phase'] not in ('B', 'C', 'D', 'E')
-                or type(boss['available']) is not bool or type(boss['instance_id']) is not str
-                or not 0 < len(boss['instance_id']) <= 200 or not _evidence(boss['evidence'])
-                or _timestamp(boss['appeared_at']) > observed):
+                or type(boss['available']) is not bool or not _evidence(boss['evidence'])
+                or boss['round'] is not None and not _integer(boss['round'], 1, 100_000)
+                or boss['phase'] is not None and boss['phase'] not in ('B', 'C', 'D', 'E')
+                or boss['instance_id'] is not None and (type(boss['instance_id']) is not str or not 0 < len(boss['instance_id']) <= 200)
+                or boss['appeared_at'] is not None and _timestamp(boss['appeared_at']) > observed
+                or boss['available'] and any(boss[key] is None for key in ('round', 'phase', 'instance_id'))):
             raise ValueError('daily_boss_observation_invalid')
         seen.add(boss['boss'])
     return row
@@ -233,6 +239,11 @@ def _result(value, intent, request, binding, *, now=None):
     _observation(value['after'], binding, after if now is None else now)
     if after < _timestamp(intent['observed_at']):
         raise ValueError('daily_result_observation_clock_rollback')
+    regular = intent['action']['kind'] == 'regular'
+    earned = value['after']['cp'] // CP_PER_CHALLENGE - intent['before']['cp'] // CP_PER_CHALLENGE
+    if (value['after']['cp'] < intent['before']['cp']
+            or intent['before']['remaining_count'] + earned - value['after']['remaining_count'] != int(regular)):
+        raise ValueError('daily_consumption_readback_mismatch')
     grant = value['grant']
     if grant is not None:
         _object(grant, GRANT_KEYS, 'daily_carryover_invalid')
@@ -249,6 +260,19 @@ def _result(value, intent, request, binding, *, now=None):
                 or not _timestamp(intent['observed_at']) <= _timestamp(grant['issued_at']) <= _timestamp(value['after']['observed_at'])):
             raise ValueError('daily_carryover_source_mismatch')
     return value
+
+
+def _not_sent(row, intent):
+    extra = {'at', 'input_execution', 'consumption_sent', 'settlement_verified',
+             'business_result_verified', 'native_evidence'}
+    receipt = row.get('native_evidence')
+    return (set(row) == INTENT_KEYS | extra and row.get('state') == 'settled'
+        and all(row.get(key) == value for key, value in intent.items() if key != 'state')
+        and row.get('input_execution') == 'not_sent' and row.get('consumption_sent') is False
+        and row.get('settlement_verified') is False and row.get('business_result_verified') is False
+        and type(receipt) is dict and receipt.get('input_execution') == 'not_sent'
+        and receipt.get('clan_battle_phase') == intent['action']['kind'] + '_start'
+        and receipt.get('daily_intent_id') == intent['intent_id'])
 
 
 def _history(events, request, binding):
@@ -279,6 +303,9 @@ def _history(events, request, binding):
         if index * 2 + 1 >= len(events):
             return regular, grants, consumed, True
         settled = events[index * 2 + 1]
+        if _not_sent(settled, intent):
+            previous_after = before
+            continue
         if (any(settled.get(key) != value for key, value in intent.items() if key != 'state')
                 or settled.get('state') != 'settled' or set(settled) != set(intent) | {'result'}):
             raise ValueError('daily_ledger_binding_mismatch')
@@ -311,7 +338,7 @@ def _check_counts(observation, regular, grants, consumed):
     for row in regular.values():
         ready = row['intent']['ready']
         owned.update(set(ready['unit_ids']) - {ready['support_unit']})
-    if observation['remaining_count'] != 3 - len(regular):
+    if observation['remaining_count'] != observation['cp'] // CP_PER_CHALLENGE - len(regular):
         raise ValueError('daily_remaining_count_history_mismatch')
     if set(observation['used_unit']) != owned:
         raise ValueError('daily_used_units_history_mismatch')
@@ -330,7 +357,8 @@ def choose_action(request, binding, observation, regular, grants, consumed):
         job = request['slot_plans'][str(slot)]
         target = _target(job, observation['bosses'])
         reason = None
-        if (target is None or target['instance_id'] == grant['source_instance_id']
+        if (target is None or target['round'] <= regular[slot]['intent']['action']['round']
+                or target['instance_id'] == grant['source_instance_id'] or target['appeared_at'] is None
                 or _timestamp(target['appeared_at']) <= _timestamp(grant['issued_at'])):
             reason = 'same_boss_new_appearance_not_observed'
         elif job['switches'] and grant['time'] != 90:
@@ -349,6 +377,9 @@ def choose_action(request, binding, observation, regular, grants, consumed):
         if target is None:
             held_regular.append(dict(slot=slot, boss=job['boss'], reason='regular_target_not_available_for_job'))
             continue
+        if observation['remaining_count'] == 0:
+            held_regular.append(dict(slot=slot, boss=job['boss'], reason='regular_challenges_not_earned'))
+            continue
         support = simulation.support_requirement(job, simulation.load_snapshot(job))
         if (set(job['unit_ids']) - {support}) & set(observation['used_unit']):
             raise ValueError('daily_self_unit_already_used')
@@ -357,11 +388,13 @@ def choose_action(request, binding, observation, regular, grants, consumed):
         return dict(status='ready', action=action, held_carryovers=held, held_regular=held_regular)
     pending = set(grants) - consumed
     status = ('remind_carryover' if pending else 'complete') if len(regular) == 3 else 'no_available_target'
+    if any(row['reason'] == 'regular_challenges_not_earned' for row in held_regular):
+        status = 'insufficient_cp'
     return dict(status=status, held_carryovers=held, held_regular=held_regular)
 
 
 def execute_batch(port, journal, request, *, now=None, explicit_start=False):
-    """Exercise the real Journal with an internal port; no production caller injects it."""
+    """Execute a reviewed batch through the Owner port and the durable Journal."""
     from .supported_daily import _atomic_json
     now = now or datetime.now(timezone.utc)
     request = validate_daily_request(request)
@@ -387,7 +420,8 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
             if pending:
                 raise ValueError('daily_previous_result_unknown')
             report.update(regular_settled=len(regular), carryover_settled=len(consumed))
-            last_observed = _timestamp(events[-1]['result']['after']['observed_at']) if events else None
+            last_observed = (_timestamp(events[-1]['result']['after']['observed_at'] if 'result' in events[-1]
+                else events[-1]['observed_at']) if events else None)
             # Three main attacks and at most one grant per main attack, never an endless wait.
             for _ in range(7):
                 port.checkpoint()
@@ -404,6 +438,7 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                     raise ValueError('daily_actual_reset_readback_required')
                 chosen = choose_action(request, binding, observation, regular, grants, consumed)
                 report['remaining_count'] = observation['remaining_count']
+                report['cp'] = observation['cp']
                 report['held_carryovers'] = chosen['held_carryovers']
                 report['held_regular'] = chosen['held_regular']
                 if chosen['status'] != 'ready':
@@ -425,8 +460,17 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                 if (_timestamp(fresh['observed_at']) < stamp
                         or choose_action(request, binding, fresh, regular, grants, consumed).get('action') != action):
                     raise ValueError('daily_target_changed_before_input')
+                # Inventory/CP observation can leave formation. Enter it again and
+                # compare the actual target, members and support owner before reserving input.
+                final_ready = _ready(port.prepare(deepcopy(action), deepcopy(job), deepcopy(binding)),
+                    action, request, binding)
+                if any(final_ready[key] != ready[key] for key in READY_KEYS - {'evidence'}):
+                    raise ValueError('daily_team_changed_before_input')
+                ready = final_ready
                 port.checkpoint()
                 validate_daily_request(request)
+                final_now = fresh_now if not callable(getattr(port, 'now', None)) else _now(port.now())
+                _observation(fresh, binding, final_now)
                 if not frozen_path.exists():
                     _atomic_json(frozen_path, dict(binding=binding, request=request))
                     if _json(frozen_path.read_bytes()) != dict(binding=binding, request=request):
@@ -436,8 +480,19 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                     slot_confirmed_for=job['confirmed_for'], ready=deepcopy(ready),
                     observed_at=fresh['observed_at'], before=deepcopy(fresh))
                 day_journal.append(intent)
+                previously_sent = report['consumption_sent']
                 report['consumption_sent'] = True
-                value = port.execute(deepcopy(intent), deepcopy(job))
+                try:
+                    value = port.execute(deepcopy(intent), deepcopy(job))
+                except Exception as exc:
+                    from .native import NativeInputNotSent
+                    if (isinstance(exc, NativeInputNotSent) and getattr(port, 'battle_start', None) == 'not_sent'
+                            and exc.receipt.get('clan_battle_phase') == action['kind'] + '_start'
+                            and exc.receipt.get('daily_intent_id') == intent['intent_id']
+                            and exc.receipt.get('input_execution') == 'not_sent'):
+                        day_journal.append_not_sent(intent, exc.receipt)
+                        report['consumption_sent'] = previously_sent
+                    raise
                 result_now = fresh_now if not callable(getattr(port, 'now', None)) else _now(port.now())
                 result = _result(value, intent, request, binding, now=result_now)
                 proposed = events + [intent, dict(intent, state='settled', result=deepcopy(result))]
@@ -447,7 +502,7 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                 report['attempts'].append(dict(slot=action['slot'], kind=action['kind'],
                     intent_id=intent['intent_id'], stock_index=action['stock_index'], damage=result['damage']))
                 report.update(regular_settled=len(regular), carryover_settled=len(consumed),
-                    remaining_count=result['after']['remaining_count'])
+                    remaining_count=result['after']['remaining_count'], cp=result['after']['cp'])
                 last_observed = _timestamp(result['after']['observed_at'])
                 if result['return_verified'] is not True:
                     raise ValueError('daily_return_unverified')
@@ -458,17 +513,32 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
 
 
 def run_owned(tasker, config, directory):
-    """Fail closed until real formal/stock pages and a qualified adapter exist."""
+    """Check the same bundled capability as the GUI before native daily work."""
     from .supported_daily import _atomic_json
+    from .clan_battle_calibration import load_calibration
+    from .native import ROOT
     request = validate_daily_request(config.get(OPERATION))
-    result = dict(outcome='stopped', operation=OPERATION,
-        error='clan_battle_daily_calibration_missing:production_daily_adapter_unavailable',
-        daily_plan_hash=request['confirmed_for'], consumption_sent=False, intents_created=0,
-        daily_execution_available=False, held_regular=[], held_carryovers=[],
-        regular_settled=0, carryover_settled=0)
-    report = dict(outcome='stopped', daily_complete=False, supported_chain_complete=False,
+    try:
+        calibrations = {}
+        for job in request['slot_plans'].values():
+            calibration = load_calibration(job, capability='formal')
+            from .clan_battle_daily_native import NativeClanDailyAdapter, require_daily_execution
+            require_daily_execution(calibration, job)
+            calibrations[job['confirmed_for']] = calibration
+        port = NativeClanDailyAdapter(tasker, directory, request=request, calibrations=calibrations)
+        result = execute_batch(port, Journal(ROOT / '.runtime/clan-battle-daily-work/ledger'),
+            request, explicit_start=True)
+        result['daily_execution_available'] = True
+    except (ValueError, RuntimeError, OSError) as exc:
+        error = str(exc) or type(exc).__name__
+        result = dict(outcome='stopped', operation=OPERATION, error=error,
+            daily_plan_hash=request['confirmed_for'], consumption_sent=False, intents_created=0,
+            daily_execution_available=False, held_regular=[], held_carryovers=[],
+            regular_settled=0, carryover_settled=0)
+    complete = result['outcome'] in ('complete', 'remind_carryover') and not result.get('error')
+    report = dict(outcome='complete' if complete else 'stopped', daily_complete=False, supported_chain_complete=complete,
         selected_modules=[OPERATION], rewards_final=False,
-        steps=[dict(name=OPERATION, status='stopped', result=result)])
+        steps=[dict(name=OPERATION, status='complete' if complete else 'stopped', result=result)])
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     _atomic_json(directory / 'report.json', report)

@@ -30,8 +30,16 @@ public sealed class PcrClanGuideView : UserControl
     private readonly string statePath;
     private readonly string configDirectory;
     private readonly PcrClanDailyPlanView dailyPlan;
-    private readonly ComboBox executionMode = new() { ItemsSource = new[] { new Choice(PcrClanDailyExecution.Simulation, "单次模拟"), new Choice(PcrClanDailyExecution.FormalDaily, "正式三刀（待开放校准）") }, MinWidth = 260 };
+    // Instance-local readback seams retain the normal file operations by default.
+    internal Func<string, string?> ReadSavedModeStamp { get; set; } = PcrClanGuide.Stamp;
+    internal Func<string, (PcrClanGuideDocument Document, string? Stamp)> ReadSavedGuide { get; set; } = path =>
+    {
+        var value = PcrClanGuide.Read(path, out var stamp);
+        return (value, stamp);
+    };
+    private readonly ComboBox executionMode = new() { ItemsSource = new[] { new Choice(PcrClanDailyExecution.Simulation, "单次模拟"), new Choice(PcrClanDailyExecution.FormalDaily, "正式三刀") }, MinWidth = 260 };
     private readonly TextBlock executionSummary = Note("");
+    private readonly TextBlock calibrationSummary = Note("");
     private readonly StackPanel formalControls = new() { Spacing = 6, IsVisible = false };
     private readonly TextBlock selectionSummary = Note("尚未选定作业。");
     private readonly Expander sourceDetails = new() { Header = "作业原图与来源", IsExpanded = false };
@@ -96,11 +104,12 @@ public sealed class PcrClanGuideView : UserControl
         Avalonia.Automation.AutomationProperties.SetName(executionMode, "会战执行模式");
         guide.Children.Add(Buttons(Note("执行模式"), executionMode));
         guide.Children.Add(executionSummary);
+        guide.Children.Add(calibrationSummary);
         guide.Children.Add(selectionSummary);
         guide.Children.Add(Buttons(accounts, Button("选用最新账号资料", UseLatestAccount), Button("账号资料与刷新", () => AccountRefreshRequested?.Invoke(this, EventArgs.Empty))));
         guide.Children.Add(accountNote);
-        formalControls.Children.Add(Note("正式三刀尚未开放校准，目前只可保存和预览，不会正式出刀或消费补偿。"));
-        formalControls.Children.Add(Buttons(Button("预览正式三目标（不执行）", PreviewDaily), Button("核对并保存正式三目标（不启用）", ConfirmDaily)));
+        formalControls.Children.Add(Note("先核对三个目标。保存不会开始战斗；开始任务时另行核对随包校准、实际次数与补偿状态。"));
+        formalControls.Children.Add(Buttons(Button("预览正式三目标（不执行）", PreviewDaily), Button("核对并保存正式三目标", ConfirmDaily)));
         guide.Children.Add(formalControls);
         guide.Children.Add(new TextBlock { Text = "选作业", FontSize = 16, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
         guide.Children.Add(video);
@@ -143,7 +152,7 @@ public sealed class PcrClanGuideView : UserControl
         guide.Children.Add(new Expander { Header = "作业名称与参考伤害", Content = reference });
         dailyPlan = new PcrClanDailyPlanView(this.repository, PcrClanDailyPlan.PathFor(this.configDirectory), this.configDirectory,
             this.statePath, Capture, () => HasCurrentConfirmation, LoadReviewed);
-        guide.Children.Add(new Expander { Header = "一天三刀目标（仅离线预设）", Content = dailyPlan });
+        guide.Children.Add(new Expander { Header = "一天三刀目标", Content = dailyPlan });
         Content = new ScrollViewer { Content = guide, Margin = new Thickness(16), HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
         page.SelectionChanged += (_, _) => { if (!displaying) Guard(PopulatePackages); };
         package.SelectionChanged += (_, _) => { if (!displaying) Guard(PopulateTeams); };
@@ -157,7 +166,7 @@ public sealed class PcrClanGuideView : UserControl
                 Invalidate(); DescribeAccount();
             });
         };
-        auto.SelectionChanged += (_, _) => Invalidate(); support.SelectionChanged += (_, _) => { supportRole.IsVisible = (support.SelectedItem as Choice)?.Value == "specified"; Invalidate(); };
+        auto.SelectionChanged += (_, _) => Invalidate(); support.SelectionChanged += (_, _) => { supportRole.IsVisible = (support.SelectedItem as Choice)?.Value == "specified"; Invalidate(); if (!displaying) UpdateCalibrationSummary(); };
         Watch(supportRole); Watch(switches); Watch(video);
         executionMode.SelectionChanged += (_, _) => { if (!displaying && executionMode.SelectedItem is Choice selected) GuardExecution(() => ChangeExecutionMode(selected.Value)); };
         foreach (var (control, name) in new (Control, string)[] { (video, "公会战视频链接"), (page, "视频分 P"), (package, "视频套餐"), (teams, "视频队伍"), (accounts, "共用账号缓存"), (auto, "开场 AUTO"), (support, "支援方式"), (supportRole, "指定支援角色"), (switches, "剩余秒数 SET AUTO 切换轴") })
@@ -435,6 +444,21 @@ public sealed class PcrClanGuideView : UserControl
             accountNote.Text = $"账号 {value["account_id"]} · 采集于 {value["observed_at"]} · {((bool?)value["ownership_complete"] == true ? "完整持有名单" : "部分持有资料")}。资料有效期 24 小时。";
         }
         catch (Exception ex) { accountNote.Text = "账号资料不可用：" + ex.Message + "；请在“账号资料与刷新”核对后，点击“选用最新账号资料”。"; }
+        UpdateCalibrationSummary();
+    }
+    private void UpdateCalibrationSummary()
+    {
+        string? version = null;
+        try
+        {
+            if (PcrClanGuide.Stamp(document.SnapshotPath) == document.SnapshotSha256)
+                version = (string?)PcrClanGuide.ReadJson(document.SnapshotPath)["content_version"];
+        }
+        catch (Exception) { /* Invalid account data is explained by the account panel. */ }
+        var calibration = PcrClanCalibration.Read(repository, version);
+        calibrationSummary.Text = "当前账号的随包校准：" + calibration.Summary;
+        if (calibration.OwnUnitsOnly && (support.SelectedItem as Choice)?.Value is "qsjs" or "specified")
+            calibrationSummary.Text += " 当前队伍选择了支援，开始任务前会停止，请先改用已核对的全自有队伍。";
     }
     private void Persist(bool confirm)
     {
@@ -448,8 +472,8 @@ public sealed class PcrClanGuideView : UserControl
             catch (Exception ex) { status.Text = "本队已确认保存；公共攻略库未保存：" + ex.Message; return; }
         }
         status.Text = !confirm ? "草稿已保存，尚未确认执行。"
-            : executionLoaded && execution.Mode == PcrClanDailyExecution.Simulation ? "已核对并保存。模拟战待校准开放，当前不会开始战斗。"
-            : "本队已核对并保存。模拟、正式三刀及补偿执行均待校准开放。";
+            : executionLoaded && execution.Mode == PcrClanDailyExecution.Simulation ? "已核对并保存。点击开始任务执行一场模拟；缺少对应校准时会停止。"
+            : "本队已核对并保存。正式三刀还需单独核对并保存完整三目标。";
     }
     public void ConfirmAndSave() => Persist(true);
     public void SaveDraft() => Persist(false);
@@ -461,7 +485,7 @@ public sealed class PcrClanGuideView : UserControl
         {
             if (!executionLoaded) throw new InvalidOperationException("会战模式未成功读取，禁止覆盖。请重新打开。");
             var value = new PcrClanDailyExecutionDocument { Mode = mode };
-            executionHash = PcrClanDailyExecution.Save(value, PcrClanDailyExecution.PathFor(configDirectory), executionHash); execution = value;
+            executionHash = PcrClanDailyExecution.Save(value, PcrClanDailyExecution.PathFor(configDirectory), executionHash, ReadSavedModeStamp); execution = value;
         }
         catch
         {
@@ -477,14 +501,17 @@ public sealed class PcrClanGuideView : UserControl
         finally { displaying = before; }
         formalControls.IsVisible = executionLoaded && execution.Mode == PcrClanDailyExecution.FormalDaily;
         executionSummary.Text = !executionLoaded ? "会战模式保存未完成，执行确认已取消；编辑内容保留，请重新打开后核对实际保存的模式。"
-            : execution.Mode == PcrClanDailyExecution.Simulation ? "当前为单次模拟。选作业 → 核对阵容 → 保存；模拟战待校准开放。"
-            : "正式三刀仅离线配置，尚未校准，禁止执行。请预览完整三目标后单独核对保存。";
+            : execution.Mode == PcrClanDailyExecution.Simulation ? "当前为单次模拟。选作业 → 核对阵容与操作 → 保存 → 开始任务。已击败的 BOSS 仍可选择模拟战。"
+            : "当前为正式三刀。请预览完整三目标后单独核对保存；只有对应校准可用时才能开始。";
+        UpdateCalibrationSummary();
     }
     public void PreviewDaily()
     {
         var request = PcrClanDailyExecution.BuildPlan(PcrClanDailyPlan.PathFor(configDirectory), statePath, configDirectory, repository, DateTimeOffset.Now);
         executionSummary.Text = string.Join(Environment.NewLine, ((JObject)request["slot_plans"]!).Properties().Select(p => $"第 {p.Name} 刀：{p.Value["period"]} · {p.Value["phase"]} · BOSS {p.Value["boss"]} · {p.Value["package"]} / {p.Value["team_label"]} · 作业 {p.Value["source"]?["job_id"]}"))
-            + Environment.NewLine + "实际次数、日界与补偿未知；尚未开放校准，不执行。";
+            + Environment.NewLine + "实际次数、日界与补偿未知；开始时从游戏核对。本次只预览，不执行。";
+        try { PcrClanDailyExecution.RequireCapabilities(request, repository); executionSummary.Text += Environment.NewLine + "三个目标均有正式校准；实际出刀仍需通过现场核对。"; }
+        catch (InvalidOperationException ex) { executionSummary.Text += Environment.NewLine + ex.Message; }
     }
     public void ConfirmDaily()
     {
@@ -492,9 +519,17 @@ public sealed class PcrClanGuideView : UserControl
         if (!HasCurrentConfirmation) throw new InvalidOperationException("当前编辑尚未核对保存，请先保存或放弃编辑后重开。");
         var request = PcrClanDailyExecution.BuildPlan(PcrClanDailyPlan.PathFor(configDirectory), statePath, configDirectory, repository, DateTimeOffset.Now);
         var value = new PcrClanDailyExecutionDocument { Mode = execution.Mode, ConfirmedFor = (string?)request["confirmed_for"] };
-        executionHash = PcrClanDailyExecution.Save(value, PcrClanDailyExecution.PathFor(configDirectory), executionHash); execution = value;
-        _ = PcrClanDailyExecution.CreatePlan(configDirectory, repository, DateTimeOffset.Now); PreviewDaily();
-        status.Text = "正式三目标已单独核对保存；尚未开放校准，开始任务不会正式出刀。";
+        try
+        {
+            executionHash = PcrClanDailyExecution.Save(value, PcrClanDailyExecution.PathFor(configDirectory), executionHash, ReadSavedModeStamp); execution = value;
+            _ = PcrClanDailyExecution.CreatePlan(configDirectory, repository, DateTimeOffset.Now); PreviewDaily();
+        }
+        catch
+        {
+            executionLoaded = false; SetExecutionDisplay(); ExecutionModeChanged?.Invoke(this, EventArgs.Empty);
+            throw;
+        }
+        status.Text = "正式三目标已单独核对保存。保存不会出刀；开始任务仍需通过校准与现场核对。";
     }
     public void LoadDailySlot(int slot) => dailyPlan.LoadSlot(slot);
     private void LoadReviewed(PcrClanGuideDocument value, string? expectedHash)
@@ -507,7 +542,7 @@ public sealed class PcrClanGuideView : UserControl
         loaded = false;
         try
         {
-            var saved = PcrClanGuide.Read(statePath, out var readHash);
+            var (saved, readHash) = ReadSavedGuide(statePath);
             var plan = PcrClanGuide.CreatePlan(statePath, configDirectory, repository, DateTimeOffset.Now);
             if (readHash != savedHash || saved.SelectedJobId != value.SelectedJobId || saved.ConfirmedFor != (string?)plan["confirmed_for"])
                 throw new IOException("当前模拟队写后核对失败，请重新打开。");

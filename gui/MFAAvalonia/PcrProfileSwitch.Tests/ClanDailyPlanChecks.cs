@@ -153,7 +153,7 @@ internal static class ClanDailyPlanChecks
         {
             var realConfig = Path.Combine(root, "real-source-config"); var realGuide = new PcrClanGuideView(sourceRoot, Path.Combine(realConfig, "agent-guide-review.json"), realConfig);
             realGuide.LoadBundle(realPath); Require(!realGuide.HasCurrentConfirmation, "real_source_load_not_confirmation");
-            var expander = realGuide.GetLogicalDescendants().OfType<Expander>().Single(e => (string?)e.Header == "一天三刀目标（仅离线预设）"); expander.IsExpanded = true;
+            var expander = realGuide.GetLogicalDescendants().OfType<Expander>().Single(e => (string?)e.Header == "一天三刀目标"); expander.IsExpanded = true;
             var realDaily = (PcrClanDailyPlanView)expander.Content!; Throws(() => realDaily.AssignCurrent(1), "real_source_unreviewed_not_preset");
             Render(realGuide, Path.Combine(root, "real-source-guide.png"), 1120, 900); Render(realDaily, Path.Combine(root, "real-source-daily-plan.png"), 1120, 760);
             Require(realDaily.StatusText.Contains("0/3") && !File.Exists(PcrClanDailyPlan.PathFor(realConfig)), "real_render_no_private_state_write"); realRendered = true;

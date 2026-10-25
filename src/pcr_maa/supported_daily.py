@@ -830,14 +830,23 @@ def summary(report, *, player=False):
     if report.get('selected_modules') == ['clan_battle_daily']:
         result = report['steps'][0].get('result', {})
         reason = str(result.get('error') or '')
-        if reason.startswith('clan_battle_daily_calibration_missing') or reason == 'production_daily_adapter_unavailable':
-            return '正式三刀：会战页面与消费读回尚未校准，当前不可执行。未发出正式或补偿开战，实际剩余次数与尾刀库存仍未知。'
+        if (reason.startswith(('clan_battle_daily_calibration_missing', 'clan_battle_daily_execution_', 'clan_battle_calibration_'))
+                or reason == 'production_daily_adapter_unavailable'):
+            missing = ('缺少正式战验收' if reason.endswith(':formal') else
+                '缺少补偿战验收' if reason.endswith(':carryover') else
+                '缺少秒数轴完整链验收' if reason.endswith(':timed') else '会战页面与消费读回尚未校准')
+            if result.get('consumption_sent') is True or result.get('regular_settled', 0) or result.get('carryover_settled', 0):
+                return (f"正式三刀：{missing}，本轮已停止。已核实 {result.get('regular_settled', 0)} 次主刀、"
+                    f"{result.get('carryover_settled', 0)} 次补偿；记录和未使用补偿已保留。")
+            return f'正式三刀：{missing}，当前不可执行。未发出正式或补偿开战，实际剩余次数与尾刀库存仍未知。'
         finished = result.get('regular_settled') == 3 and result.get('remaining_count') == 0
         if result.get('outcome') == 'remind_carryover' and finished and result.get('held_carryovers'):
             return f"正式三刀：3 次主刀均已结算，普通剩余次数为 0。仍有 {len(result['held_carryovers'])} 份尾刀未出，已保留；目标可用后可再次 Start 核对接续。"
         if result.get('outcome') == 'no_available_target':
             slots = '、'.join(str(row['slot']) for row in result.get('held_regular', []) if type(row) is dict and type(row.get('slot')) is int)
             return '正式三刀：本轮没有可执行目标，已结束。' + (f'第 {slots} 刀目标已保留。' if slots else '') + '不会自动更换 BOSS、队伍或重发。'
+        if result.get('outcome') == 'insufficient_cp':
+            return '正式三刀：实际 CP 不足，本轮已停止，未执行目标已保留。补足 CP 后可再次 Start 核对接续。'
         if result.get('outcome') == 'complete' and finished:
             return '正式三刀：本批已核实完成，记录已保存。'
         return '正式三刀：已停止。未核实的次数、结果或补偿不能视为完成；请保留记录，不要删账或重发。' + ('\n原因：' + reason if reason else '')
@@ -855,6 +864,8 @@ def summary(report, *, player=False):
         reason = str(error) if error else ''
         reasons = {
             'clan_battle_calibration_missing': '会战页面尚未完成真实校准，当前不可执行。',
+            'clan_battle_account_stars_unknown': '账号资料缺少当前出战星级，请重新同步。',
+            'clan_battle_account_stars_mismatch': '账号当前出战星级与作业不符，请在游戏调整后重新同步。',
             'clan_battle_timing_not_calibrated': '尚未核定秒数读取和操作耗时，此切换轴不可执行。',
             'clan_battle_timing_window_unproven': '同一秒内的全部操作和读回无法确认完成，此切换轴不可执行。',
             'clan_battle_previous_result_unknown': '上次模拟结果仍未决，已阻止再次开战。',

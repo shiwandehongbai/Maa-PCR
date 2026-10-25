@@ -50,13 +50,17 @@ class ClanBattleCharacters(GuideTrialCharacters):
     def formation(self, context, image):
         identity = self.page.read(context, image, 'formation')
         layout = self.calibration['formation']
+        account_stars = None
+        if layout.get('star_source') == 'account_snapshot':
+            from .clan_battle import account_battle_stars
+            account_stars = account_battle_stars(self.plan)
         members, stars, support, boxes = [], [], [], []
         occupied_count = 0
         for index, roi in enumerate(layout['slots']):
             hits = [row for uid in self.team if (row := self.match(image, uid, roi))]
             empty = self.page.hit(context, image, f'CBEmpty{index}')
             is_support = self.page.hit(context, image, f'CBSupport{index}')
-            is_owned = self.page.hit(context, image, f'CBOwned{index}')
+            is_owned = (not empty and not is_support) if self.calibration.get('version') == 2 else self.page.hit(context, image, f'CBOwned{index}')
             occupied = is_support != is_owned
             if len(hits) > 1 or hits and empty or is_support and is_owned or empty == occupied:
                 raise RuntimeError('clan_battle_formation_ambiguous')
@@ -66,8 +70,11 @@ class ClanBattleCharacters(GuideTrialCharacters):
             boxes.append(hits[0]['box'] if hits else roi if occupied else None)
             if occupied:
                 occupied_count += 1
-                values = [star for star in range(1, 7) if self.page.hit(context, image, f'CBStar{index}_{star}')]
-                stars.append(values[0] if len(values) == 1 else None)
+                if account_stars is not None and hits and not is_support:
+                    stars.append(account_stars[hits[0]['unit_id']])
+                else:
+                    values = [star for star in range(1, 7) if self.page.hit(context, image, f'CBStar{index}_{star}')]
+                    stars.append(values[0] if len(values) == 1 else None)
                 support.append(hits[0]['unit_id'] if hits and is_support else None)
             else:
                 stars.append(None)
@@ -76,7 +83,8 @@ class ClanBattleCharacters(GuideTrialCharacters):
         if len(set(chosen)) != len(chosen) or sum(uid is not None for uid in support) > 1:
             raise RuntimeError('clan_battle_formation_ambiguous')
         return dict(identity, unit_ids=members, stars=stars, member_count=occupied_count, boxes=boxes,
-                    support_unit_id=next((uid for uid in support if uid is not None), None))
+                    support_unit_id=next((uid for uid in support if uid is not None), None),
+                    stars_source='account_snapshot' if account_stars is not None else 'screen')
 
     def support_candidates(self, context, image):
         identity = self.page.read(context, image, 'support')
@@ -108,7 +116,9 @@ class ClanBattleCharacters(GuideTrialCharacters):
         if 'expected_remaining_seconds' in params:
             target_second = params['expected_remaining_seconds']
             if (type(target_second) is not int or not 0 <= target_second <= 89
-                    or page['remaining_seconds'] != target_second):
+                    or page['remaining_seconds'] != target_second
+                    or getattr(self, 'calibration', {}).get('version') == 2
+                    and (type(page.get('battle_speed')) is not int or page['battle_speed'] != 1)):
                 return None
         state = self.read_controls(argv.image)
         if (type(state.get('auto')) is not bool or len(state.get('sets', [])) != 5
@@ -138,6 +148,8 @@ class ClanBattleCharacters(GuideTrialCharacters):
             return None
         state.update(remaining_seconds=page['remaining_seconds'], same_frame=True, source='maa',
             frame_pixel_sha256=hashlib.sha256(argv.image.tobytes()).hexdigest())
+        if getattr(self, 'calibration', {}).get('version') == 2:
+            state['battle_speed'] = page.get('battle_speed')
         return self.AnalyzeResult(box=target, detail=state)
 
     def analyze(self, context, argv):

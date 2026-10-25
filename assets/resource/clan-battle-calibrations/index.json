@@ -1,4 +1,14 @@
 {
-  "version": 1,
-  "entries": []
+  "version": 2,
+  "entries": [
+    {
+      "calibration_id": "cn-bilibili-202610141448-clan-simulation",
+      "server": "cn-bilibili",
+      "content_version": "202610141448",
+      "frame_size": [1280, 720],
+      "profile_path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/profile.json",
+      "profile_sha256": "6f81b43129cd4927cad052c2a48ce03a538f83beb2814f08c4280eb4f5caab8a",
+      "capabilities": ["simulation"]
+    }
+  ]
 }

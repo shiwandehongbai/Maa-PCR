@@ -65,6 +65,459 @@ def calibration(tmp_path):
         samples=[dict(page=page, path=str(image), sha256=digest) for page in module.PAGES])
 
 
+@pytest.fixture
+def calibration_v2(calibration):
+    value = deepcopy(calibration)
+    value.update(version=2, boss_targets={str(index): dict(target=[index*180, 200, 100, 100],
+        name=f'合成魔物{index}') for index in range(1, 6)}, phase_labels={'第2阶段': 'B', '第3阶段': 'C'})
+    label = deepcopy(value['pages']['lobby']['labels'][0])
+    definitions = {
+        'adventure': ((), ()), 'lobby': (('period',), ()),
+        'boss_detail': (('phase', 'boss'), ('period',)),
+        'difficulty': ((), ('period', 'boss')),
+        'target': (('phase', 'boss', 'simulation'), ('period',)),
+        'formation': (('simulation',), ('period', 'phase', 'boss')),
+        'support': (('simulation',), ('period', 'phase', 'boss')),
+        'battle': (('remaining_seconds',), ()),
+        'result': (('damage', 'simulation'), ('period', 'phase', 'boss')), 'closed': ((), ()),
+    }
+    for page, (visible, inherited) in definitions.items():
+        value['pages'][page] = dict(labels=[deepcopy(label), deepcopy(label)],
+            fields={key: [200, 20+index*50, 300, 45] for index, key in enumerate(visible)}, inherit=list(inherited))
+        if page in ('formation', 'support'):
+            value['pages'][page]['formal'] = deepcopy(label)
+    value['pages']['battle']['speed_one'] = deepcopy(label)
+    value['pages']['target']['live_state'] = {state: deepcopy(label) for state in ('on', 'off', 'absent')}
+    value['actions'] = {name: dict(page=page, label=deepcopy(label), target=[10, 10, 40, 40],
+        begin=[1000, 350, 1, 1], end=[1000, 180, 1, 1]) for name, page in module.V2_ACTION_PAGES.items()}
+    value['actions']['select_difficulty']['choices'] = {'B': dict(label=deepcopy(label), selected=deepcopy(label))}
+    value['samples'].extend(dict(value['samples'][0], page=page) for page in ('boss_detail', 'difficulty'))
+    return value
+
+
+def v2_context(calibration, plan):
+    nodes = module.calibration_pipeline(calibration, plan)
+    texts = {'CBField_lobby_period': plan['period'], 'CBField_battle_remaining_seconds': '1:30',
+             'CBField_result_damage': '12,345',
+             'CBField_result_simulation': '模拟战的战斗结果不会显示在团队战成绩中。'}
+    for page in ('boss_detail', 'target'):
+        texts.update({f'CBField_{page}_phase': '第2阶段', f'CBField_{page}_boss': f'合成魔物{plan["boss"]}'})
+    for page in ('target', 'formation', 'support'):
+        texts[f'CBField_{page}_simulation'] = '设定为模拟战。'
+    guards = {f'CBLabel_{page}_{index}' for page in module.V2_PAGES for index in range(2)} | {'CBOneSpeed', 'CBLiveState_absent'}
+    return nodes, texts, guards, context_for(nodes, texts, guards)
+
+
+def own_only_profile(calibration):
+    calibration['support_modes'] = ['none']
+    calibration.pop('support')
+    for action in ('open_support', 'support_back', 'support_top', 'support_next'):
+        calibration['actions'].pop(action)
+    return calibration
+
+
+def test_v2_own_only_scope_omits_unverified_support_input_but_keeps_borrowed_markers(calibration_v2, plan):
+    profile = own_only_profile(calibration_v2)
+    nodes = module.calibration_pipeline(profile, plan)
+    assert all('CBSupport'+str(index) in nodes for index in range(5))
+    assert not any(name in nodes for name in ('CBReadSupport', 'CBAddSupport', 'CBAction_open_support',
+                                             'CBAction_support_back', 'CBAction_support_next', 'CBSupportId0'))
+    profile['formation'].pop('borrowed')
+    with pytest.raises(ValueError, match='formation_invalid'):
+        module.calibration_pipeline(profile, plan)
+
+
+@pytest.mark.parametrize('support_mode', ['qsjs', 'specified'])
+def test_v2_own_only_scope_rejects_support_plans_before_input(calibration_v2, plan, support_mode):
+    profile = own_only_profile(calibration_v2)
+    with pytest.raises(RuntimeError, match='support_mode_uncalibrated'):
+        module.calibration_pipeline(profile, dict(plan, support_mode=support_mode))
+
+
+@pytest.mark.parametrize('scope', [None, [], ['none', 'specified'], 'none', [False]])
+def test_v2_support_scope_rejects_unsupported_contract(calibration_v2, plan, scope):
+    calibration_v2['support_modes'] = scope
+    with pytest.raises(ValueError, match='support_scope_invalid'):
+        module.calibration_pipeline(calibration_v2, plan)
+
+
+def bind_v2_target(page, context, image):
+    page.read(context, image, 'lobby')
+    page.advance('open_boss')
+    page.read(context, image, 'boss_detail')
+    return page.read(context, image, 'target')
+
+
+def test_v2_boss_slots_and_selected_simulation_difficulty_bind_without_invented_round(calibration_v2, plan):
+    nodes, texts, guards, context = v2_context(calibration_v2, plan)
+    page = module.ClanBattlePage(plan, calibration_v2)
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    page.read(context, frame, 'lobby')
+    assert page.action(context, frame, 'open_boss') == calibration_v2['boss_targets']['3']['target']
+    assert 'CBActionLabel_open_boss' not in nodes
+    assert nodes['CBField_target_boss']['expected'] == '^合成魔物3$'
+    page.advance('open_boss')
+    assert 'simulation' not in page.read(context, frame, 'boss_detail')
+    target = page.read(context, frame, 'target')
+    assert target['round'] is None and target['round_source'] == 'selected_difficulty'
+    assert target['selected_difficulty'] == dict(phase='B', boss=3, simulation=True)
+    page.advance('open_formation')
+    formed = page.read(context, frame, 'formation')
+    assert formed['selected_difficulty'] == target['selected_difficulty']
+    with pytest.raises(RuntimeError, match='transition_unverified'):
+        page.read(context, frame, 'result')
+    page.advance('start')
+    battle = page.read(context, frame, 'battle')
+    assert battle['remaining_seconds'] == 90 and battle['battle_speed'] == 1
+    result = page.read(context, frame, 'result')
+    assert result['damage'] == 12345 and result['round'] is None
+    page.advance('return_to_target')
+    with pytest.raises(RuntimeError, match='transition_unverified'):
+        page.read(context, frame, 'target')
+    page.read(context, frame, 'lobby')
+    page.advance('open_boss')
+    page.read(context, frame, 'boss_detail')
+    assert page.read(context, frame, 'target')['boss'] == 3
+
+
+@pytest.mark.parametrize('observed', ['boss_detail', 'difficulty', 'target', 'formation', 'support', 'result'])
+def test_v2_unbound_pages_cannot_inherit_identity(calibration_v2, plan, observed):
+    _, _, _, context = v2_context(calibration_v2, plan)
+    page = module.ClanBattlePage(plan, calibration_v2)
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    with pytest.raises(RuntimeError, match='transition_unverified'):
+        page.read(context, frame, observed)
+    assert not page.bound
+
+
+def test_v2_initial_detail_observation_cannot_authorize_battle(calibration_v2, plan):
+    _, _, _, context = v2_context(calibration_v2, plan)
+    page = module.ClanBattlePage(plan, calibration_v2)
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    assert page.read(context, frame, 'boss_detail', observe_only=True) == dict(page='boss_detail')
+    assert page.action(context, frame, 'back_to_lobby', observe_only=True) == [10, 10, 40, 40]
+    assert not page.bound and page.current_page is None
+    with pytest.raises(RuntimeError, match='transition_unverified'):
+        page.action(context, frame, 'open_formation')
+    with pytest.raises(RuntimeError, match='observation_scope_invalid'):
+        page.action(context, frame, 'open_boss', observe_only=True)
+
+
+def test_v2_difficulty_selection_requires_radio_readback_then_actual_detail_phase(calibration_v2, plan):
+    _, texts, guards, context = v2_context(calibration_v2, plan)
+    texts['CBField_boss_detail_phase'] = '第1阶段'
+    page = module.ClanBattlePage(plan, calibration_v2)
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    page.read(context, frame, 'lobby')
+    page.advance('open_boss')
+    assert page.read(context, frame, 'boss_detail')['phase'] is None
+    page.advance('open_difficulty')
+    assert page.read(context, frame, 'difficulty')['boss'] == plan['boss']
+    guards.add('CBActionLabel_confirm_difficulty')
+    with pytest.raises(RuntimeError, match='selection_unverified'):
+        page.action(context, frame, 'confirm_difficulty')
+    guards.add('CBDifficultySelected')
+    assert page.action(context, frame, 'confirm_difficulty') == [30, 30, 20, 20]
+    page.advance('confirm_difficulty')
+    texts['CBField_boss_detail_phase'] = '第2阶段'
+    assert page.read(context, frame, 'boss_detail')['phase'] == 'B'
+    assert page.read(context, frame, 'target')['selected_difficulty']['phase'] == 'B'
+
+
+def test_v2_live_battle_settings_must_be_disabled_before_entering_formation(calibration_v2, plan):
+    _, _, guards, context = v2_context(calibration_v2, plan)
+    guards.remove('CBLiveState_absent')
+    guards.update({'CBLiveState_on', 'CBActionLabel_open_formation'})
+    page = module.ClanBattlePage(plan, calibration_v2)
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    assert bind_v2_target(page, context, frame)['live_state'] == 'on'
+    with pytest.raises(RuntimeError, match='settings_not_ready'):
+        page.action(context, frame, 'open_formation')
+    assert page.action(context, frame, 'disable_live_state') == [10, 10, 40, 40]
+    page.advance('disable_live_state')
+    guards.remove('CBLiveState_on')
+    guards.add('CBLiveState_off')
+    assert page.read(context, frame, 'target')['live_state'] == 'off'
+    with pytest.raises(RuntimeError, match='settings_changed'):
+        page.action(context, frame, 'disable_live_state')
+    assert page.action(context, frame, 'open_formation') == [30, 30, 20, 20]
+
+
+@pytest.mark.parametrize('markers', [set(), {'CBLiveState_on', 'CBLiveState_off'}])
+def test_v2_unknown_or_ambiguous_live_settings_cannot_prepare(calibration_v2, plan, markers):
+    _, _, guards, context = v2_context(calibration_v2, plan)
+    guards.remove('CBLiveState_absent')
+    guards.update(markers)
+    page = module.ClanBattlePage(plan, calibration_v2)
+    with pytest.raises(RuntimeError, match='settings_unknown'):
+        bind_v2_target(page, context, np.zeros((720, 1280, 3), np.uint8))
+    assert 'selected_difficulty' not in page.bound
+
+
+@pytest.mark.parametrize('field,text', [('phase', '第3阶段'), ('boss', '合成魔物4'), ('simulation', '设定为实战。')])
+def test_v2_detail_rejects_wrong_target_phase_or_selected_mode(calibration_v2, plan, field, text):
+    plan['phase'] = 'B'
+    _, texts, _, context = v2_context(calibration_v2, plan)
+    page = module.ClanBattlePage(plan, calibration_v2)
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    page.read(context, frame, 'lobby')
+    page.advance('open_boss')
+    page.read(context, frame, 'boss_detail')
+    texts[f'CBField_target_{field}'] = text
+    with pytest.raises(RuntimeError, match='target_mismatch|field_unknown'):
+        page.read(context, frame, 'target')
+    assert 'selected_difficulty' not in page.bound
+
+
+@pytest.mark.parametrize('change', [
+    lambda value: value['boss_targets']['2'].update(target=value['boss_targets']['1']['target']),
+    lambda value: value['pages']['target']['fields'].pop('phase'),
+    lambda value: value['pages']['formation']['inherit'].append('simulation'),
+    lambda value: value['pages']['support']['fields'].pop('simulation'),
+    lambda value: value['pages']['result']['fields'].pop('simulation'),
+])
+def test_v2_calibration_cannot_hide_mode_or_target_guards(calibration_v2, plan, change):
+    change(calibration_v2)
+    with pytest.raises(ValueError, match='calibration_'):
+        module.calibration_pipeline(calibration_v2, plan)
+
+
+def test_v2_calendar_window_derives_current_year_only_from_current_displayed_event(monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    class Clock:
+        @staticmethod
+        def now(zone):
+            return datetime(2026, 10, 25, 13, 0, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(module, 'datetime', Clock)
+    assert module._current_period('10/25 05:00～10/29 23:59') == '2026-10'
+    assert module._current_period('10/2505:00~10/2923:59') == '2026-10'
+    with pytest.raises(RuntimeError, match='not_current'):
+        module._current_period('09/25 05:00～09/29 23:59')
+    with pytest.raises(RuntimeError, match='period_unknown'):
+        module._current_period('10/40 05:00～10/41 23:59')
+
+
+@pytest.mark.parametrize('initial', ['CBObserve_lobby', 'CBObserve_boss_detail'])
+def test_v2_prepare_normalizes_current_clan_page_before_account_check(calibration_v2, plan, tmp_path, monkeypatch, initial):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    calls = []
+    port.page = NS(reset_context=lambda: calls.append('reset_context'))
+    monkeypatch.setattr(port, 'configure', lambda _: None)
+    monkeypatch.setattr(module, 'profile_player_id', lambda _: int(plan['account_id']))
+    states = [initial]
+    if initial == 'CBObserve_boss_detail':
+        states.append('CBObserve_lobby')
+    states += ['LabyClientAdventureObserved', 'LabyClientMainMenuObserved', module.PROFILE_NODE,
+               'LabyClientMainMenuObserved', 'LabyClientAdventureObserved', 'CBPage_lobby',
+               'CBPage_boss_detail', 'CBPage_formation']
+    readings = iter(states)
+    monkeypatch.setattr(port, 'wait', lambda *args, **kwargs: next(readings))
+    monkeypatch.setattr(port, 'run', lambda node, **kwargs: calls.append(node) or {})
+    monkeypatch.setattr(port, 'choose', lambda names, **kwargs: 'CBPage_target')
+    monkeypatch.setattr(port, 'read_page', lambda name: (calls.append('read_'+name) or dict(phase='B', live_state='absent'), {}))
+    monkeypatch.setattr(port, 'form_team', lambda: calls.append('form_team'))
+    port.prepare(plan)
+    assert calls.index('CBAction_back_to_adventure') < calls.index(module.PROFILE_NODE) < calls.index('CBAction_open_clan')
+    assert calls.index('read_target') < calls.index('CBAction_open_formation') < calls.index('form_team')
+    assert 'CBStart' not in calls and 'CBAction_open_simulation' not in calls
+    assert ('CBAction_back_to_lobby' in calls) == (initial == 'CBObserve_boss_detail')
+
+
+@pytest.mark.parametrize('mode_selected,live_state', [(True, 'absent'), (False, 'on')])
+def test_v2_return_reselects_simulation_after_next_returns_to_lobby(calibration_v2, plan, tmp_path, monkeypatch,
+                                                                 mode_selected, live_state):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    port.account = plan['account_id']
+    calls = []
+    state = dict(identity(plan), live_state=live_state)
+    def read_page(name):
+        calls.append('read_'+name)
+        return dict(state), {'read': name}
+    def run(node, **kwargs):
+        calls.append(node)
+        if node == 'CBAction_disable_live_state':
+            state['live_state'] = 'off'
+        return {'node': node}
+    monkeypatch.setattr(port, 'read_page', read_page)
+    monkeypatch.setattr(port, 'run', run)
+    monkeypatch.setattr(port, 'wait', lambda names, **kwargs: calls.append('wait_'+names[0]) or names[0])
+    monkeypatch.setattr(port, 'choose', lambda names, **kwargs: names[0] if mode_selected else None)
+    returned = port.return_to_target(plan)
+    assert returned['return_verified'] and returned['boss'] == plan['boss']
+    assert calls.index('CBAction_return_to_target') < calls.index('wait_CBPage_lobby') < calls.index('read_lobby')
+    assert calls.index('read_lobby') < calls.index('CBAction_open_boss') < calls.index('read_target')
+    assert calls.count('CBAction_return_to_target') == 1
+    assert ('CBAction_open_simulation' in calls) is not mode_selected
+    assert ('CBAction_disable_live_state' in calls) == (live_state == 'on')
+    assert 'CBStart' not in calls and 'CBAction_open_formation' not in calls
+
+
+def test_v2_return_wait_failure_never_repeats_next_or_opens_boss(calibration_v2, plan, tmp_path, monkeypatch):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    calls = []
+    monkeypatch.setattr(port, 'read_page', lambda name: (identity(plan), {}))
+    monkeypatch.setattr(port, 'run', lambda node, **kwargs: calls.append(node) or {})
+    def fail(*args, **kwargs):
+        raise RuntimeError('page_unknown')
+    monkeypatch.setattr(port, 'wait', fail)
+    with pytest.raises(RuntimeError, match='page_unknown'):
+        port.return_to_target(plan)
+    assert calls == ['CBAction_return_to_target']
+
+
+def test_v2_team_star_animation_survives_slow_first_observation_without_input(calibration_v2, plan, tmp_path, monkeypatch):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    incomplete = dict(team(plan), stars=[None]*5)
+    observations, calls = iter([incomplete, team(plan)]), []
+    monkeypatch.setattr(port, 'run', lambda node: calls.append(node) or receipt(next(observations)))
+    ticks = iter([10, 16])
+    monkeypatch.setattr(module.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(port, 'checkpoint', lambda: None)
+    monkeypatch.setattr(module.time, 'sleep', lambda _: None)
+    assert port.read_team()['stars'] == [5]*5
+    assert calls == ['CBReadTeam', 'CBReadTeam']
+
+
+def test_v2_missing_star_digits_stop_before_clearing_team(calibration_v2, plan, tmp_path, monkeypatch):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    calls = []
+    monkeypatch.setattr(port, 'run', lambda node: calls.append(node) or receipt(dict(team(plan), stars=[None]*5)))
+    ticks = iter([10, 26])
+    monkeypatch.setattr(module.time, 'monotonic', lambda: next(ticks))
+    with pytest.raises(RuntimeError, match='stars_unreadable'):
+        port.form_team()
+    assert calls == ['CBReadTeam']
+
+
+def test_v2_formation_uses_observed_slots_without_invented_owned_label(calibration_v2, plan):
+    reader = object.__new__(ClanBattleCharacters)
+    reader.team, reader.calibration = plan['unit_ids'], calibration_v2
+    slots = calibration_v2['formation']['slots']
+    hits = []
+    def hit(context, image, name):
+        hits.append(name)
+        assert not name.startswith('CBOwned')
+        return name.endswith('_5')
+    reader.page = NS(read=lambda *args: identity(plan), hit=hit)
+    reader.match = lambda image, uid, roi: dict(unit_id=uid, box=roi) if uid == plan['unit_ids'][slots.index(roi)] else None
+    actual = reader.formation(NS(), np.zeros((720, 1280, 3), np.uint8))
+    assert actual['member_count'] == 5 and actual['unit_ids'] == plan['unit_ids']
+    assert actual['support_unit_id'] is None and actual['stars'] == [5]*5
+
+
+def test_v2_account_stars_still_require_same_frame_owned_portraits(calibration_v2, plan, monkeypatch):
+    from pcr_maa import clan_battle
+    calibration_v2['formation']['star_source'] = 'account_snapshot'
+    reader = object.__new__(ClanBattleCharacters)
+    reader.plan, reader.team, reader.calibration = plan, plan['unit_ids'], calibration_v2
+    slots = calibration_v2['formation']['slots']
+    monkeypatch.setattr(clan_battle, 'account_battle_stars', lambda actual: dict(zip(plan['unit_ids'], [5]*5)))
+    def hit(context, image, name):
+        assert not name.startswith('CBStar')
+        return False
+    reader.page = NS(read=lambda *args: identity(plan), hit=hit)
+    reader.match = lambda image, uid, roi: dict(unit_id=uid, box=roi) if uid == plan['unit_ids'][slots.index(roi)] else None
+    actual = reader.formation(NS(), np.zeros((720, 1280, 3), np.uint8))
+    assert actual['unit_ids'] == plan['unit_ids'] and actual['stars'] == [5]*5
+    assert actual['stars_source'] == 'account_snapshot' and actual['support_unit_id'] is None
+
+
+@pytest.mark.parametrize('speed', [None, True, 3, 1])
+def test_v2_final_timed_input_guard_requires_observed_one_speed(plan, speed):
+    reader = object.__new__(ClanBattleCharacters)
+    reader.team, reader.calibration = plan['unit_ids'], {'version': 2}
+    reader.page = NS(read=lambda *args: dict(remaining_seconds=85, battle_speed=speed))
+    reader.read_controls = lambda image: dict(auto=True, sets=[True]*5, unit_ids=plan['unit_ids'])
+    context = NS(tasker=NS(stopping=False))
+    argv = NS(image=np.zeros((720, 1280, 3), np.uint8))
+    result = reader.battle_control(context, argv, dict(mode='battle_set', slot=0, previous=True,
+        desired=False, expected_remaining_seconds=85))
+    if type(speed) is int and speed == 1:
+        assert result.detail['battle_speed'] == 1 and result.detail['same_frame'] is True
+    else:
+        assert result is None
+
+
+@pytest.mark.parametrize('node,source,destination', [('CBAction_open_boss', 'lobby', 'boss_detail'),
+                                                   ('CBAddSupport', 'support', 'formation')])
+@pytest.mark.parametrize('outcome', ['sent', 'not_sent', 'failed', '6002'])
+def test_v2_transition_advances_only_after_verified_native_input(calibration_v2, plan, tmp_path, monkeypatch,
+                                                               node, source, destination, outcome):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    port.page = module.ClanBattlePage(plan, calibration_v2)
+    port.page.current_page = source
+    def execute(self, requested, *, click=False):
+        assert requested == node and click is True
+        if outcome == 'not_sent':
+            raise native.NativeInputNotSent(dict(input_execution='not_sent'))
+        if outcome == 'failed':
+            raise RuntimeError('native_failed')
+        return dict(nodes=[dict(name='LabyDisconnect6002Observed' if outcome == '6002' else node)])
+    monkeypatch.setattr(NativeGuideTrial, 'run', execute)
+    if outcome == 'sent':
+        port.run(node, click=True)
+        assert port.page.expected_page == destination
+    else:
+        with pytest.raises((RuntimeError, native.NativeInputNotSent)):
+            port.run(node, click=True)
+        assert port.page.expected_page is None
+    assert port.page.current_page == source
+
+
+def test_word_accepts_sdk_nested_ocr_node_with_one_expected_pattern(calibration, plan):
+    nodes = module.calibration_pipeline(calibration, plan)
+    context = context_for(nodes, field_texts('target', plan))
+    context.get_node_data = lambda name: dict(recognition=dict(type='OCR', param=dict(
+        roi=nodes[name]['roi'], expected=[nodes[name]['expected']])))
+    page = module.ClanBattlePage(plan, calibration)
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    assert page.word(context, frame, 'CBField_target_boss') == str(plan['boss'])
+    context.get_node_data = lambda name: dict(recognition=dict(type='OCR', param=dict(
+        roi=nodes[name]['roi'], expected=[nodes[name]['expected'], '^.*$'])))
+    with pytest.raises(RuntimeError, match='field_unknown'):
+        page.word(context, frame, 'CBField_target_boss')
+
+
+def test_v2_closed_sample_is_optional_but_actionable_page_sample_is_required(calibration_v2, plan):
+    calibration_v2['samples'] = [row for row in calibration_v2['samples'] if row['page'] != 'closed']
+    assert module.calibration_pipeline(calibration_v2, plan)['CBPage_closed']['action'] == 'DoNothing'
+    calibration_v2['samples'] = [row for row in calibration_v2['samples'] if row['page'] != 'formation']
+    with pytest.raises(ValueError, match='pages_missing'):
+        module.calibration_pipeline(calibration_v2, plan)
+
+
+def test_v2_unsampled_closed_page_can_be_absent_and_never_recognizes(calibration_v2, plan):
+    calibration_v2['pages'].pop('closed')
+    calibration_v2['samples'] = [row for row in calibration_v2['samples'] if row['page'] != 'closed']
+    nodes = module.calibration_pipeline(calibration_v2, plan)
+    assert nodes['CBPage_closed']['action'] == 'DoNothing'
+    context = context_for(nodes, {}, set())
+    page = module.ClanBattlePage(plan, calibration_v2)
+    args = NS(image=np.zeros((720, 1280, 3), np.uint8), custom_recognition_param='{"page":"closed"}')
+    assert page.analyze(context, args) is None
+    with pytest.raises(RuntimeError, match='page_uncalibrated:closed'):
+        page.read(context, args.image, 'closed')
+
+
+def test_template_alternatives_require_each_bound_file(calibration, tmp_path, monkeypatch):
+    root = tmp_path/'resource'
+    (root/'image').mkdir(parents=True)
+    data = Path(calibration['samples'][0]['path']).read_bytes()
+    for name in ('first.png', 'second.png'):
+        (root/'image'/name).write_bytes(data)
+    monkeypatch.setattr(native, 'RESOURCE', root)
+    spec = dict(recognition='TemplateMatch', roi=[0, 0, 100, 100],
+        template=['first.png', 'second.png'], sha256=[hashlib.sha256(data).hexdigest()]*2)
+    assert module._node(spec)['template'] == ['first.png', 'second.png']
+    changed = deepcopy(spec)
+    changed['sha256'][1] = '0'*64
+    with pytest.raises(ValueError, match='template_changed'):
+        module._node(changed)
+    changed['sha256'].pop()
+    with pytest.raises(ValueError, match='template_invalid'):
+        module._node(changed)
+
+
 class Registry:
     def __init__(self):
         self.nodes, self.callbacks = {}, {}
@@ -168,7 +621,7 @@ def test_bc_job_accepts_actual_b_or_c(plan, phase):
     module.require_target_identity(plan, value)
 
 
-def test_same_frame_page_read_binds_target_and_formal_marker(calibration, plan):
+def test_boss_detail_allows_both_battle_entries_but_formation_rejects_formal(calibration, plan):
     nodes = module.calibration_pipeline(calibration, plan)
     page = module.ClanBattlePage(plan, calibration)
     guards = {'CBLabel_target_0', 'CBLabel_target_1'}
@@ -176,8 +629,10 @@ def test_same_frame_page_read_binds_target_and_formal_marker(calibration, plan):
     image = np.zeros((720, 1280, 3), np.uint8)
     assert page.read(context, image, 'target') == dict(identity(plan), page='target')
     guards.add('CBFormal_target')
+    assert page.read(context, image, 'target') == dict(identity(plan), page='target')
+    guards.update({'CBLabel_formation_0', 'CBLabel_formation_1', 'CBFormal_formation'})
     with pytest.raises(RuntimeError, match='formal_battle_forbidden'):
-        page.read(context, image, 'target')
+        page.read(context, image, 'formation')
 
 
 @pytest.mark.parametrize('change', ['missing_label', 'wrong_damage_mode', 'disconnect', 'stop', 'box_outside'])
@@ -518,6 +973,20 @@ def test_timed_toggle_passes_target_second_to_final_callback(plan, tmp_path, mon
     assert calls == ['CBToggleAuto' if control == 'auto' else 'CBToggleSet']
 
 
+@pytest.mark.parametrize('speed', [None, True, 3])
+def test_v2_timed_toggle_rejects_changed_speed_after_input_without_retry(calibration_v2, plan, tmp_path, monkeypatch, speed):
+    port = module.NativeClanBattle(NS(resource=Registry()), tmp_path, calibration=calibration_v2)
+    state = dict(auto=True, sets=[False]*5, unit_ids=plan['unit_ids'], remaining_seconds=85,
+                 same_frame=True, battle_speed=1)
+    monkeypatch.setattr(port, 'read_battle_settings', lambda: state)
+    calls = []
+    monkeypatch.setattr(port, 'run', lambda node, **kwargs: calls.append(node) or receipt(
+        dict(state, auto=False, battle_speed=speed)))
+    with pytest.raises(RuntimeError, match='speed_unknown'):
+        port.toggle_auto(True, False, remaining_seconds=85)
+    assert calls == ['CBToggleAuto']
+
+
 @pytest.mark.parametrize('mode', ['battle_auto', 'battle_set'])
 @pytest.mark.parametrize('actual,allowed', [(85,True),(84,False)])
 def test_final_callback_requires_target_second_in_its_own_image(plan, mode, actual, allowed):
@@ -556,12 +1025,14 @@ def test_timing_uses_hash_bound_measurement_maxima(calibration, tmp_path):
     value = dict(kind='owner_native_clan_timing', calibration_id=calibration['calibration_id'],
         battle_hud=calibration['battle_hud'], observation_scope='full_read_tick',
         action_scope='toggle_dispatch_and_full_team_readback',
-        observation_intervals_ms=[200]*20, action_latencies_ms=[400]*20)
+        observation_intervals_ms=[200]*20, action_latencies_ms=[400]*20,
+        battle_speed=1, game_second_ms=[990]*20)
     path.write_text(json.dumps(value), encoding='utf-8')
     calibration['evidence_kind'] = 'device_saved_frame'
     calibration['timing_measurements'] = dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
     capability = module.timing_capability(calibration)
     assert capability['validated'] is True and capability['max_observation_interval_ms'] == 200
+    assert capability['battle_speed'] == 1 and capability['min_game_second_ms'] == 990
     path.write_text('{}', encoding='utf-8')
     assert module.timing_capability(calibration)['validated'] is False
 
@@ -571,7 +1042,8 @@ def test_timing_hash_and_parse_use_one_read_snapshot(calibration, tmp_path, monk
     value = dict(kind='owner_native_clan_timing', calibration_id=calibration['calibration_id'],
         battle_hud=calibration['battle_hud'], observation_scope='full_read_tick',
         action_scope='toggle_dispatch_and_full_team_readback',
-        observation_intervals_ms=[20]*20, action_latencies_ms=[40]*20)
+        observation_intervals_ms=[20]*20, action_latencies_ms=[40]*20,
+        battle_speed=1, game_second_ms=[990]*20)
     data = json.dumps(value).encode('utf-8')
     path.write_bytes(data)
     calibration['evidence_kind'] = 'device_saved_frame'
@@ -590,6 +1062,22 @@ def test_timing_hash_and_parse_use_one_read_snapshot(calibration, tmp_path, monk
     capability = module.timing_capability(calibration)
     assert len(reads) == 1 and capability['validated'] is True
     assert capability['max_observation_interval_ms'] == 20 and capability['max_action_latency_ms'] == 40
+
+
+@pytest.mark.parametrize('change', [lambda row: row.pop('battle_speed'), lambda row: row.update(battle_speed=True),
+    lambda row: row.update(battle_speed=3), lambda row: row.update(game_second_ms=[990]*19),
+    lambda row: row.update(game_second_ms=[0]*20)])
+def test_timing_requires_measured_one_speed_game_seconds(calibration, tmp_path, change):
+    value = dict(kind='owner_native_clan_timing', calibration_id=calibration['calibration_id'],
+        battle_hud=calibration['battle_hud'], observation_scope='full_read_tick',
+        action_scope='toggle_dispatch_and_full_team_readback', battle_speed=1,
+        observation_intervals_ms=[20]*20, action_latencies_ms=[40]*20, game_second_ms=[990]*20)
+    change(value)
+    path = tmp_path/'timing-invalid.json'
+    path.write_text(json.dumps(value), encoding='utf-8')
+    calibration.update(evidence_kind='device_saved_frame', timing_measurements=dict(path=str(path),
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+    assert module.timing_capability(calibration) == dict(validated=False)
 
 
 def test_start_waits_for_first_hud_once_then_passes_receipt(plan, tmp_path, monkeypatch):

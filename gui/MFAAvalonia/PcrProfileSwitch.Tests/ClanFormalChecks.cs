@@ -6,8 +6,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security.AccessControl;
-using System.Security.Principal;
 using System.Text;
 using Avalonia.Controls;
 using Avalonia.Styling;
@@ -23,7 +21,7 @@ using Newtonsoft.Json.Linq;
 
 internal static class ClanFormalChecks
 {
-    public static void Run(string sourceRoot, string directory)
+    public static void Run(string sourceRoot, string directory, bool checkSaveFailures = true)
     {
         ClanWorkflowChecks.Run(sourceRoot, directory);
         var root = Path.Combine(Path.GetFullPath(directory), "clan-workflow"); var config = Path.Combine(root, "config");
@@ -37,12 +35,13 @@ internal static class ClanFormalChecks
         var view = new PcrClanGuideView(sourceRoot, guide, config);
         Check(view.ExecutionMode == PcrClanDailyExecution.Simulation && !File.Exists(modePath), "legacy_default_simulation_without_migration");
         Check(view.ExecutionConfirmationForStart == view.Capture().ConfirmedFor, "simulation_uses_only_current_team_confirmation");
-        ModeSaveFailureChecks(sourceRoot, root, config, guide, Check);
+        if (checkSaveFailures) ModeSaveFailureChecks(sourceRoot, root, config, guide, Check);
         view.ChangeExecutionMode(PcrClanDailyExecution.FormalDaily);
         Check(view.ExecutionMode == PcrClanDailyExecution.FormalDaily && view.HasCurrentConfirmation && view.ExecutionConfirmationForStart == null, "single_confirmation_is_not_three_target_confirmation");
         Reject(() => PcrClanDailyExecution.CreatePlan(config, sourceRoot, DateTimeOffset.Now), "unconfirmed_formal_request");
         view.PreviewDaily(); Check(view.ExecutionSummaryText.Contains("第 1 刀") && view.ExecutionSummaryText.Contains("第 2 刀") && view.ExecutionSummaryText.Contains("第 3 刀")
             && view.ExecutionSummaryText.Contains("实际次数、日界与补偿未知"), "preview_exact_three_with_unknown_actual_state");
+        if (checkSaveFailures) DailyConfirmationReadbackFailure(view, sourceRoot, root, config, guide, Check);
         view.ConfirmDaily(); var request = PcrClanDailyExecution.CreatePlan(config, sourceRoot, DateTimeOffset.Now);
         Check(view.ExecutionConfirmationForStart == (string?)request["confirmed_for"] && view.ExecutionConfirmationForStart != view.Capture().ConfirmedFor, "independent_batch_confirmation");
         Check(request.Properties().Select(p => p.Name).Order().SequenceEqual(new[] { "confirmed_for", "daily_plan", "slot_materials", "slot_plans", "version" }), "strict_daily_request_schema");
@@ -98,12 +97,20 @@ internal static class ClanFormalChecks
         {
             configField.SetValue(null, config);
             Check(!MaaProcessorManager.IsInstanceCreated, "fresh_process_has_no_manager");
-            Reject(() => PcrAlphaOwner.RequestStartAsync(vm).GetAwaiter().GetResult(), "formal_start_rejected_before_owner", "production_daily_adapter_unavailable");
+            Reject(() => PcrAlphaOwner.RequestStartAsync(vm).GetAwaiter().GetResult(), "formal_start_rejected_before_owner", "clan_battle_calibration_capability_missing:formal");
             Check(!MaaProcessorManager.IsInstanceCreated && typeof(PcrAlphaOwner).GetField("pendingStart", hidden)!.GetValue(null) == null
                 && (int)typeof(PcrAlphaOwner).GetField("prompting", hidden)!.GetValue(null)! == 0, "no_manager_pending_owner_or_prompt_allocated");
             Check(ownerCounts == (PcrAlphaOwner.ControllerCreations, PcrAlphaOwner.AgentCreations, PcrAlphaOwner.Grants, PcrAlphaOwner.SessionCreations), "no_controller_agent_grant_session_allocated");
             var player = (PcrPlayerSettings)RuntimeHelpers.GetUninitializedObject(typeof(PcrPlayerSettings)); Set(player, "vm", vm);
-            Reject(() => player.ExportForStart(sourceRoot, selected), "export_rejects_before_device_access", "production_daily_adapter_unavailable");
+            Reject(() => player.ExportForStart(sourceRoot, selected), "export_rejects_before_device_access", "clan_battle_calibration_capability_missing:formal");
+            try
+            {
+                PcrClanDailyExecution.Save(new() { Mode = PcrClanDailyExecution.Simulation }, modePath, PcrClanGuide.Stamp(modePath));
+                Reject(() => PcrAlphaOwner.RequestStartAsync(vm).GetAwaiter().GetResult(), "uncalibrated_simulation_rejected_before_owner", "clan_battle_calibration_capability_missing:simulation");
+                Check(!MaaProcessorManager.IsInstanceCreated && ownerCounts == (PcrAlphaOwner.ControllerCreations, PcrAlphaOwner.AgentCreations, PcrAlphaOwner.Grants, PcrAlphaOwner.SessionCreations),
+                    "uncalibrated_simulation_allocates_no_owner_or_device");
+            }
+            finally { File.WriteAllBytes(modePath, stateBytes); }
             var requireProfile = typeof(PcrAlphaOwner).GetMethod("RequireProfileSelection", hidden)!;
             requireProfile.Invoke(null, new object[] { processor, selected }); count++;
             foreach (var id in new[] { "pcr-alpha-v1", "pcr-labyrinth-v1" })
@@ -170,8 +177,53 @@ internal static class ClanFormalChecks
         reopened.ChangeExecutionMode(PcrClanDailyExecution.Simulation);
         Check(reopened.ExecutionConfirmationForStart == reopened.Capture().ConfirmedFor && PcrClanDailyExecution.Read(modePath, out _).ConfirmedFor == null, "return_to_simulation_clears_batch_confirmation");
         File.WriteAllText(Path.Combine(root, "formal-checks.json"), new JObject { ["checks"] = count, ["synthetic"] = true, ["mode_default"] = "simulation", ["formal_request_schema"] = new JArray(request.Properties().Select(p => p.Name)),
-            ["formal_start_enabled"] = false, ["owner_created"] = false, ["game_input"] = false, ["daily_request_sha256"] = PcrClanGuide.Stamp(Path.Combine(root, "daily-request.json")) }.ToString(), new UTF8Encoding(false));
+            ["formal_start_enabled"] = false, ["owner_created"] = false, ["game_input"] = false, ["mode_save_failures_checked"] = checkSaveFailures, ["daily_request_sha256"] = PcrClanGuide.Stamp(Path.Combine(root, "daily-request.json")) }.ToString(), new UTF8Encoding(false));
         Console.WriteLine($"PCR clan formal configuration checks passed: {count}; default simulation, three-target confirmation, formal Start before allocation blocked, game input=0");
+    }
+
+    private static void DailyConfirmationReadbackFailure(PcrClanGuideView view, string sourceRoot, string root, string config, string guide, Action<bool, string> check)
+    {
+        var modePath = PcrClanDailyExecution.PathFor(config); var dailyPath = PcrClanDailyPlan.PathFor(config);
+        var guideBytes = File.ReadAllBytes(guide); var dailyBytes = File.ReadAllBytes(dailyPath); var draft = JObject.FromObject(view.Capture()).ToString();
+        var expected = (string?)PcrClanDailyExecution.BuildPlan(dailyPath, guide, config, sourceRoot, DateTimeOffset.Now)["confirmed_for"];
+        check(view.ExecutionMode == PcrClanDailyExecution.FormalDaily && PcrClanDailyExecution.Read(modePath, out _).ConfirmedFor == null,
+            "daily_readback_fixture_starts_with_unconfirmed_formal_mode");
+        var readStamp = typeof(PcrClanGuideView).GetProperty("ReadSavedModeStamp", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var originalReader = readStamp.GetValue(view); var reads = 0; var events = 0; string? readPath = null; byte[]? savedBytes = null;
+        var selector = (ComboBox)typeof(PcrClanGuideView).GetField("executionMode", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
+        EventHandler changed = (_, _) => events++; view.ExecutionModeChanged += changed;
+        const string injectedFailure = "injected final daily confirmation readback IOException";
+        try
+        {
+            readStamp.SetValue(view, new Func<string, string?>(path =>
+            {
+                reads++; readPath = path;
+                var written = PcrClanDailyExecution.Read(path, out var stamp); savedBytes = File.ReadAllBytes(path);
+                check(path == modePath && stamp != null && written.Mode == PcrClanDailyExecution.FormalDaily
+                    && written.ConfirmedFor != null && written.ConfirmedFor == expected, "daily_final_reader_observes_saved_batch_confirmation");
+                throw new IOException(injectedFailure);
+            }));
+            var failed = false;
+            try { view.ConfirmDaily(); }
+            catch (IOException ex) when (ex.Message == injectedFailure) { failed = true; }
+            check(failed, "daily_confirmation_propagates_exact_final_readback_failure");
+            check(reads == 1 && readPath == modePath, "daily_confirmation_injects_only_one_final_read");
+            check(view.ExecutionMode == "unavailable" && selector.SelectedItem == null && view.ExecutionConfirmationForStart == null,
+                "daily_confirmation_failure_revokes_visible_mode_and_start_confirmation");
+            check(events == 1, "daily_confirmation_failure_notifies_owner_once");
+            check(JObject.FromObject(view.Capture()).ToString() == draft && File.ReadAllBytes(guide).SequenceEqual(guideBytes)
+                && File.ReadAllBytes(dailyPath).SequenceEqual(dailyBytes), "daily_confirmation_failure_preserves_draft_guide_and_targets");
+        }
+        finally { readStamp.SetValue(view, originalReader); view.ExecutionModeChanged -= changed; }
+        check(ReferenceEquals(readStamp.GetValue(view), originalReader), "daily_confirmation_final_reader_restored");
+        check(savedBytes != null && File.ReadAllBytes(modePath).SequenceEqual(savedBytes)
+            && PcrClanDailyExecution.Read(modePath, out _).ConfirmedFor == expected, "daily_confirmation_actual_saved_mode_not_rolled_back");
+        view.Reload();
+        check(view.ExecutionMode == PcrClanDailyExecution.FormalDaily && selector.SelectedIndex == 1 && view.ExecutionConfirmationForStart == expected,
+            "daily_confirmation_explicit_reload_recovers_saved_confirmation");
+        File.WriteAllText(Path.Combine(root, "daily-confirm-readback-fault.json"), new JObject { ["fault"] = injectedFailure,
+            ["stage"] = "final stamp after confirmed batch atomic save", ["read_count"] = reads, ["read_path"] = readPath,
+            ["mode_changed_events"] = events, ["saved_confirmation"] = expected, ["acl_changed"] = false }.ToString(), new UTF8Encoding(false));
     }
 
     private static void ModeSaveFailureChecks(string sourceRoot, string root, string config, string guide, Action<bool, string> check)
@@ -207,37 +259,32 @@ internal static class ClanFormalChecks
         }
         check(File.ReadAllBytes(modePath).SequenceEqual(beforeIo), "io_failure_keeps_actual_mode_file");
         view.Reload(); check(view.ExecutionConfirmationForStart == view.Capture().ConfirmedFor && Selector(view).SelectedIndex == 0, "io_failure_recovers_only_after_reload");
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("The mode post-save ACL fault requires Windows.");
-        File.Delete(modePath); File.Delete(modePath + ".lock"); view.Reload();
-        var info = new DirectoryInfo(isolated); var baselineAcl = info.GetAccessControl(AccessControlSections.Access);
-        // Stabilize this fixture's inherited ACL; new files still inherit the injected deny below.
-        baselineAcl.SetAccessRuleProtection(true, true); info.SetAccessControl(baselineAcl);
-        var originalSddl = info.GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
-        var sid = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("Current Windows SID unavailable.");
-        var oldFiles = Directory.EnumerateFiles(isolated).ToHashSet(StringComparer.OrdinalIgnoreCase); var readDenied = false;
+        var readStamp = typeof(PcrClanGuideView).GetProperty("ReadSavedModeStamp", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var originalReader = readStamp.GetValue(view);
+        var postSaveReads = 0; string? readPath = null; var postSaveEvents = events;
+        const string injectedFailure = "injected final mode readback IOException";
         try
         {
-            var acl = info.GetAccessControl(AccessControlSections.Access);
-            acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.ReadData, InheritanceFlags.ObjectInherit, PropagationFlags.InheritOnly, AccessControlType.Deny)); info.SetAccessControl(acl);
+            readStamp.SetValue(view, new Func<string, string?>(path =>
+            {
+                postSaveReads++; readPath = path;
+                var written = PcrClanDailyExecution.Read(path, out var stamp);
+                check(path == modePath && written.Mode == PcrClanDailyExecution.FormalDaily && written.ConfirmedFor == null && stamp != null,
+                    "postsave_final_reader_observes_actual_saved_mode");
+                throw new IOException(injectedFailure);
+            }));
             Select(1);
             check(File.Exists(modePath), "postsave_mode_written_before_read_failure: " + view.StatusText);
-            try { File.ReadAllBytes(modePath); } catch (UnauthorizedAccessException) { readDenied = true; }
-            check(readDenied, "postsave_mode_read_actually_denied");
+            check(postSaveReads == 1 && readPath == modePath && view.StatusText.Contains(injectedFailure), "postsave_final_readback_fault_reached_once");
             Unavailable("postsave_mode_event_revokes_old_confirmation");
+            check(events == postSaveEvents + 1 && view.Capture().Job.ToString() == draft, "postsave_failure_notifies_owner_and_preserves_draft");
         }
-        finally
-        {
-            var restore = new DirectorySecurity(); restore.SetSecurityDescriptorSddlForm(originalSddl, AccessControlSections.Access); info.SetAccessControl(restore);
-            foreach (var path in Directory.EnumerateFiles(isolated).Where(p => !oldFiles.Contains(p)))
-            {
-                var file = new FileInfo(path); var acl = file.GetAccessControl(AccessControlSections.Access); acl.SetAccessRuleProtection(true, false);
-                acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, AccessControlType.Allow)); file.SetAccessControl(acl);
-            }
-        }
-        var restoredSddl = info.GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
-        File.WriteAllText(Path.Combine(root, "mode-acl-restoration.json"), new JObject { ["original_access_sddl"] = originalSddl,
-            ["restored_access_sddl"] = restoredSddl, ["directory"] = isolated }.ToString(), new UTF8Encoding(false));
-        check(restoredSddl == originalSddl, "postsave_fixture_acl_restored");
+        finally { readStamp.SetValue(view, originalReader); }
+        var readerRestored = ReferenceEquals(readStamp.GetValue(view), originalReader);
+        check(readerRestored, "postsave_final_reader_restored");
+        File.WriteAllText(Path.Combine(root, "mode-readback-fault.json"), new JObject { ["fault"] = injectedFailure,
+            ["stage"] = "final stamp after atomic save", ["read_count"] = postSaveReads, ["read_path"] = readPath,
+            ["reader_restored"] = readerRestored, ["acl_changed"] = false }.ToString(), new UTF8Encoding(false));
         check(PcrClanDailyExecution.Read(modePath, out _).Mode == PcrClanDailyExecution.FormalDaily && File.ReadAllBytes(copiedGuide).SequenceEqual(guideBytes), "postsave_actual_write_and_original_guide_preserved");
         view.Reload(); check(view.ExecutionMode == PcrClanDailyExecution.FormalDaily && Selector(view).SelectedIndex == 1 && view.ExecutionConfirmationForStart == null, "postsave_reload_reads_saved_mode_without_old_confirmation");
         Select(0); check(view.ExecutionConfirmationForStart == view.Capture().ConfirmedFor && view.Capture().Job.ToString() == draft, "postsave_explicit_mode_selection_preserves_team");

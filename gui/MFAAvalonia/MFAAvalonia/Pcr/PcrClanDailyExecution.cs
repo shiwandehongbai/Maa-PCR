@@ -15,7 +15,7 @@ public sealed class PcrClanDailyExecutionDocument
     [JsonProperty("confirmed_for")] public string? ConfirmedFor { get; set; }
 }
 
-// Configuration and review only. Formal game input still has no calibrated production adapter.
+// Saved review is separate from the bundled capabilities required at Start.
 public static class PcrClanDailyExecution
 {
     public const string Simulation = "simulation";
@@ -40,14 +40,16 @@ public static class PcrClanDailyExecution
             || document.ConfirmedFor != null && (document.Mode != FormalDaily || document.ConfirmedFor.Length != 64 || document.ConfirmedFor.Any(c => !"0123456789abcdef".Contains(c))))
             throw new InvalidDataException("会战模式或三目标确认无效。");
     }
-    public static string Save(PcrClanDailyExecutionDocument document, string path, string? expectedHash)
+    public static string Save(PcrClanDailyExecutionDocument document, string path, string? expectedHash) =>
+        Save(document, path, expectedHash, PcrClanGuide.Stamp);
+    internal static string Save(PcrClanDailyExecutionDocument document, string path, string? expectedHash, Func<string, string?> readSavedStamp)
     {
         Validate(document); Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         using var gate = new FileStream(path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         if (PcrClanGuide.Stamp(path) != expectedHash) throw new IOException("会战模式已被其他窗口修改，请重新打开；原文件未覆盖。");
         var json = JsonConvert.SerializeObject(document, Formatting.Indented); JsonHelper.SaveJsonTextAtomicallyOrThrow(path, json);
         var expected = PcrClanGuide.Hash(Encoding.UTF8.GetBytes(json));
-        if (PcrClanGuide.Stamp(path) != expected) throw new IOException("会战模式写后核对失败，请重新打开。");
+        if (readSavedStamp(path) != expected) throw new IOException("会战模式写后核对失败，请重新打开。");
         return expected;
     }
     public static JObject BuildPlan(string dailyPath, string guidePath, string configDirectory, string repository, DateTimeOffset now)
@@ -77,8 +79,27 @@ public static class PcrClanDailyExecution
     }
     public static void RequireStartAllowed(string mode)
     {
-        if (mode == FormalDaily) throw new InvalidOperationException("正式三刀尚未完成开放后的真实页面与次数、补偿校准；本轮仅能保存和预览，不会创建 Owner、连接设备或出刀。[production_daily_adapter_unavailable]");
-        if (mode != Simulation) throw new InvalidDataException("未知会战执行模式。");
+        if (mode is not (Simulation or FormalDaily)) throw new InvalidDataException("未知会战执行模式。");
+        var repository = string.IsNullOrWhiteSpace(PcrAlphaOwner.Repository)
+            ? PcrRuntimePaths.ResolveDataRepository(AppContext.BaseDirectory) : PcrAlphaOwner.Repository;
+        if (mode == Simulation)
+        {
+            var plan = PcrClanGuide.CreatePlan(Path.Combine(AppPaths.ConfigDirectory, "agent-guide-review.json"), AppPaths.ConfigDirectory, repository, DateTimeOffset.Now);
+            PcrClanCalibration.Read(repository, (string?)plan["content_version"]).Require(plan, "simulation");
+            return;
+        }
+        RequireCapabilities(CreatePlan(AppPaths.ConfigDirectory, repository, DateTimeOffset.Now), repository);
+    }
+    public static void RequireCapabilities(JObject request, string repository)
+    {
+        if (request["slot_plans"] is not JObject plans || plans.Count != 3
+            || !plans.Properties().Select(p => p.Name).Order().SequenceEqual(new[] { "1", "2", "3" })
+            || plans.Properties().Any(p => p.Value is not JObject)) throw new InvalidDataException("正式校准核对需要完整三目标。");
+        foreach (var plan in plans.Properties().Select(p => (JObject)p.Value))
+        {
+            try { PcrClanCalibration.Read(repository, (string?)plan["content_version"]).Require(plan, "formal"); }
+            catch (InvalidOperationException ex) { throw new InvalidOperationException("正式三刀不可用：" + ex.Message + " [production_daily_adapter_unavailable]", ex); }
+        }
     }
     public static void RequireSelectionAllowed(JObject selection)
     { if (selection["selected_modules"]!.Values<string>().Contains("clan_battle_daily")) RequireStartAllowed(FormalDaily); }

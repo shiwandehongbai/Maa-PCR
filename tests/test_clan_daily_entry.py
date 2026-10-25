@@ -70,6 +70,23 @@ def test_formal_missing_adapter_message_does_not_claim_three_remaining():
     assert '未发出正式或补偿开战' in text and '已用完' not in text
 
 
+@pytest.mark.parametrize('capability,reason', [('formal', '缺少正式战验收'),
+    ('carryover', '缺少补偿战验收'), ('timed', '缺少秒数轴完整链验收')])
+def test_formal_missing_capability_summary_names_the_actual_gap(capability, reason):
+    report = dict(selected_modules=[MODULE], steps=[dict(result=dict(outcome='stopped',
+        error='clan_battle_calibration_capability_missing:' + capability))])
+    assert reason in gui_contract.result_text(report)
+
+
+def test_missing_carry_capability_after_regular_settlement_does_not_claim_no_input():
+    report = dict(selected_modules=[MODULE], steps=[dict(result=dict(outcome='stopped',
+        error='clan_battle_calibration_capability_missing:carryover', consumption_sent=True,
+        regular_settled=1, carryover_settled=0))])
+    text = gui_contract.result_text(report)
+    assert '已核实 1 次主刀' in text and '缺少补偿战验收' in text
+    assert '未发出' not in text
+
+
 @pytest.mark.parametrize('count,remaining',[(2,0),(3,None),(3,1)])
 def test_formal_reminder_requires_three_settlements_and_actual_zero(count,remaining):
     report=dict(selected_modules=[MODULE],steps=[dict(result=dict(outcome='remind_carryover',
@@ -98,6 +115,17 @@ def test_formal_batch_all_unavailable_is_finite_and_keeps_slots(daily_request,tm
     assert result['outcome']=='no_available_target' and result['attempts']==[]
     text=gui_contract.result_text(dict(selected_modules=[MODULE],steps=[dict(result=result)]))
     assert '第 1、2、3 刀目标已保留' in text and '本轮没有可执行目标' in text
+
+
+def test_formal_low_cp_summary_keeps_known_reason_and_pending_targets(daily_request,tmp_path):
+    from test_clan_battle_batch import Port
+    from pcr_maa.clan_battle_batch import execute_batch
+    from pcr_maa.preset_execution import Journal
+    port=Port(daily_request);port.cp=299;port.remaining=0
+    result=execute_batch(port,Journal(tmp_path/'ledger'),daily_request,now=port.now(),explicit_start=True)
+    text=gui_contract.result_text(dict(selected_modules=[MODULE],steps=[dict(result=result)]))
+    assert '实际 CP 不足' in text and '目标已保留' in text
+    assert not port.executions
 
 
 @pytest.mark.parametrize('verified',[False,True])
@@ -171,7 +199,7 @@ def test_formal_owner_real_entry_stops_before_intent_without_adapter(formal_flow
     assert formal_flow.events==['scope_enter','scope_exit']
     assert report['selected_modules']==[MODULE]
     value=report['steps'][0]['result']
-    assert value['error']=='clan_battle_daily_calibration_missing:production_daily_adapter_unavailable'
+    assert value['error']=='clan_battle_calibration_missing'
     assert value['consumption_sent'] is False and value['intents_created']==0 and value['daily_execution_available'] is False
     assert '实际剩余次数与尾刀库存仍未知' in result['summary']
 

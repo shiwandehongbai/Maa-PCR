@@ -28,7 +28,7 @@ public sealed class PcrClanDailyPlanView : UserControl
         this.repository = Path.GetFullPath(repository); this.statePath = Path.GetFullPath(statePath); this.configDirectory = Path.GetFullPath(configDirectory);
         this.guideStatePath = Path.GetFullPath(guideStatePath); this.capture = capture; this.hasCurrentConfirmation = hasCurrentConfirmation; this.loadCurrent = loadCurrent;
         var panel = new StackPanel { Spacing = 8 };
-        panel.Children.Add(Note("仅离线预设。开始任务仍只模拟当前队伍一局；实际出刀数与补偿状态未知。三刀不会自动连打。"));
+        panel.Children.Add(Note("这里保存三刀目标，不会开始战斗。单次模拟只执行当前队伍；正式三刀需切换执行模式，单独核对三目标，并通过随包校准与现场检查。"));
         for (var n = 1; n <= 3; n++)
         {
             var slot = n;

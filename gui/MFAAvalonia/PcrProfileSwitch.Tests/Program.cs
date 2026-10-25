@@ -19,19 +19,22 @@ using MFAAvalonia.ViewModels.Pages;
 try
 {
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-if (args.Length != 3 && !(args.Length == 4 && args[3] is "--guide-only" or "--guide-owner" or "--clan-only" or "--clan-daily-only" or "--clan-workflow-only" or "--clan-workflow-window" or "--clan-package-fixture" or "--clan-formal-only" or "--clan-postsave-only" or "--profile-registration-only"))
-    throw new ArgumentException("Usage: PcrProfileSwitch.Tests <source-root> <isolated-fixture-directory> <development-python> [--guide-only|--guide-owner|--clan-only|--clan-daily-only|--clan-workflow-only|--clan-workflow-window|--clan-package-fixture|--clan-formal-only|--clan-postsave-only|--profile-registration-only]");
+if (args.Length != 3 && !(args.Length == 4 && args[3] is "--guide-only" or "--guide-owner" or "--clan-only" or "--clan-daily-only" or "--clan-workflow-only" or "--clan-workflow-window" or "--clan-package-fixture" or "--clan-formal-only" or "--clan-formal-start-only" or "--clan-postsave-only" or "--clan-calibration-only" or "--profile-registration-only"))
+    throw new ArgumentException("Usage: PcrProfileSwitch.Tests <source-root> <isolated-fixture-directory> <development-python> [--guide-only|--guide-owner|--clan-only|--clan-daily-only|--clan-workflow-only|--clan-workflow-window|--clan-package-fixture|--clan-formal-only|--clan-formal-start-only|--clan-postsave-only|--clan-calibration-only|--profile-registration-only]");
 // Initialize rendering services for log themes without creating a window or the product App.
 AppBuilder.Configure<Application>().UsePlatformDetect().SetupWithoutStarting();
 Application.Current!.Styles.Add(new Avalonia.Themes.Fluent.FluentTheme());
 Application.Current!.Styles.Add(new SukiUI.SukiTheme());
 if (args.Length == 4 && args[3] == "--clan-package-fixture") { ClanWorkflowChecks.SeedPackage(args[0], args[1]); return 0; }
 if (args.Length == 4 && args[3] == "--clan-formal-only") { ClanFormalChecks.Run(args[0], args[1]); return 0; }
+if (args.Length == 4 && args[3] == "--clan-formal-start-only") { ClanFormalChecks.Run(args[0], args[1], checkSaveFailures: false); return 0; }
+if (args.Length == 4 && args[3] == "--clan-calibration-only") { ClanCalibrationChecks.Run(args[0], args[1]); return 0; }
 if (args.Length == 4 && args[3] == "--clan-postsave-only") { ClanPostSaveFailureChecks.Run(args[0], args[1]); return 0; }
 if (args.Length == 4 && args[3] == "--clan-workflow-only") { ClanWorkflowChecks.Run(args[0], args[1]); return 0; }
 if (args.Length == 4 && args[3] == "--clan-workflow-window") { ClanWorkflowChecks.ShowWindow(args[0], args[1]); return 0; }
 if (args.Length == 4 && args[3] == "--clan-daily-only") { ClanDailyPlanChecks.Run(args[0], args[1]); return 0; }
 if (args.Length == 4 && args[3] == "--profile-registration-only") { AgentProfileRegistrationChecks.Run(args[1]); return 0; }
+ClanCalibrationChecks.Run(args[0], args[1]);
 ClanUiFlowChecks.Run(args[1]);
 ClanGuideChecks.Run(args[1]);
 if (args.Length == 4 && args[3] == "--clan-only") return 0;

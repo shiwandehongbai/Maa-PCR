@@ -29,10 +29,16 @@ internal static class ClanUiFlowChecks
         Check(view.ExecutionMode == PcrClanDailyExecution.Simulation && !formal.IsVisible && !File.Exists(modePath),
             "first_open_defaults_to_simulation_without_writing_mode");
         Check(view.ExecutionConfirmationForStart == null, "empty_selection_cannot_start");
+        var calibration = Field<TextBlock>(view, "calibrationSummary").Text ?? "";
+        Check(new[] { "模拟战", "秒数轴", "正式三刀", "补偿刀", "不可用", "缺失" }.All(calibration.Contains),
+            "missing_bundle_lists_each_unavailable_capability_and_reason");
+        Check(view.ExecutionSummaryText.Contains("已击败的 BOSS 仍可选择模拟战"), "simulation_explains_defeated_boss_availability");
 
         selector.SelectedIndex = 1;
         Check(view.ExecutionMode == PcrClanDailyExecution.FormalDaily && formal.IsVisible,
             "actual_selector_reveals_formal_review_controls");
+        Check(view.ExecutionSummaryText.Contains("对应校准可用") && (Field<TextBlock>(view, "calibrationSummary").Text ?? "").Contains("不可用"),
+            "formal_mode_does_not_claim_capability_from_mode_selection");
         Check(PcrClanDailyExecution.Read(modePath, out _).Mode == PcrClanDailyExecution.FormalDaily
             && view.ExecutionConfirmationForStart == null, "formal_selection_saves_without_start_confirmation");
         var reopened = new PcrClanGuideView(root, state, config);

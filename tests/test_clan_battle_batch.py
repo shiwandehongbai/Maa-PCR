@@ -67,14 +67,17 @@ def rebind(value):
 
 
 class Port:
-    timing_capability = dict(validated=True, max_observation_interval_ms=25, max_action_latency_ms=30, source='synthetic-only')
+    timing_capability = dict(validated=True, max_observation_interval_ms=25, max_action_latency_ms=30,
+        source='synthetic-only', battle_speed=1, min_game_second_ms=1000)
 
     def __init__(self, request, *, now=NOW):
         self.request = request
         self.clock = now
         self.executions, self.prepared, self.observations = [], [], []
         self.remaining, self.used, self.inventory = 3, [], []
+        self.cp = 900
         self.available = {slot: True for slot in (1, 2, 3)}
+        self.rounds = {slot: 4 for slot in (1, 2, 3)}
         self.instances = {slot: (f'synthetic-instance-{slot}-original', now - timedelta(seconds=30)) for slot in (1, 2, 3)}
         self.issue = set()
         self.grant_time = 34
@@ -96,9 +99,10 @@ class Port:
     def observe(self, binding):
         self.binding = binding
         row = dict(deepcopy(binding), observed_at=self.clock.isoformat(), remaining_count=self.remaining,
+            cp=self.cp, cp_semantics='daily_earned', cp_evidence={'source': 'synthetic_cp_readback'},
             used_unit=list(self.used), carry_stock_indices=list(self.inventory), reset_verified=self.reset_verified,
             reset_evidence={'source': 'synthetic_reset_readback'} if self.reset_verified else {},
-            bosses=[dict(boss=slot, round=4, phase='B', available=self.available[slot],
+            bosses=[dict(boss=slot, round=self.rounds[slot], phase='B', available=self.available[slot],
                 instance_id=self.instances[slot][0], appeared_at=self.instances[slot][1].isoformat(),
                 evidence={'source': 'synthetic_boss_page'}) for slot in (1, 2, 3)])
         self.observations.append(deepcopy(row))
@@ -134,10 +138,12 @@ class Port:
                     issued_at=self.clock.isoformat(), evidence={'source': 'synthetic_actual_stock_page'})
                 if self.refresh:
                     self.clock += timedelta(seconds=1)
+                    self.rounds[action['boss']] += 1
                     self.instances[action['boss']] = (f"synthetic-instance-{action['boss']}-new", self.clock)
         else:
             self.inventory.remove(action['stock_index'])
-        state = dict(auto=job['auto'], unit_ids=deepcopy(job['unit_ids']), sets=[job['set_by_unit'][str(uid)] for uid in job['unit_ids']])
+        state = dict(auto=job['auto'], unit_ids=deepcopy(job['unit_ids']),
+            sets=[job['set_by_unit'][str(uid)] for uid in job['unit_ids']], battle_speed=1)
         settings = dict(settings_verified=True, auto=job['auto'], set_by_unit=deepcopy(job['set_by_unit']),
             opening_evidence=deepcopy(state), observation=deepcopy(state), actions=[], switch_evidence=[])
         for switch in job['switches']:
@@ -269,7 +275,7 @@ def test_carryover_uses_actual_new_instance_before_next_regular(tmp_path, daily_
     assert result['outcome'] == 'complete' and result['carryover_settled'] == 1
     assert [(row['action']['kind'], row['action']['slot']) for row in port.executions] == [('regular', 1), ('carryover', 1), ('regular', 2), ('regular', 3)]
     assert port.executions[1]['action']['start_seconds'] == 34
-    assert port.executions[1]['action']['round'] == port.executions[0]['action']['round']
+    assert port.executions[1]['action']['round'] > port.executions[0]['action']['round']
 
 
 @pytest.mark.parametrize('fault', ['same_instance', 'appeared_before_issue', 'unavailable'])
@@ -304,6 +310,7 @@ def test_held_carry_can_resume_after_main_targets_complete(tmp_path, daily_reque
     assert result['remaining_count'] == 0
     port.clock += timedelta(seconds=1)
     port.instances[1] = ('synthetic-later-instance', port.clock)
+    port.rounds[1] += 1
     result, _ = run(tmp_path, daily_request, port)
     assert result['outcome'] == 'complete' and len(port.executions) == 4
 
@@ -318,6 +325,8 @@ def test_carry_priority_is_source_slot_then_stock_not_grant_insertion(tmp_path, 
     port.clock += timedelta(seconds=1)
     port.instances[1] = ('later-one', port.clock)
     port.instances[2] = ('later-two', port.clock)
+    port.rounds[1] += 1
+    port.rounds[2] += 1
     result, _ = run(tmp_path, daily_request, port)
     assert result['outcome'] == 'complete'
     assert [row['action']['slot'] for row in port.executions if row['action']['kind'] == 'carryover'] == [1, 2]
@@ -436,7 +445,7 @@ def test_known_damage_return_failure_is_settled_but_stops_batch(tmp_path, daily_
     result, _ = run(tmp_path, daily_request, port)
     assert result['outcome'] == 'complete'
     assert [row['action']['slot'] for row in port.executions] == [1, 2, 3]
-    assert [row['slot'] for row in port.prepared] == [1, 2, 3]
+    assert [row['slot'] for row in port.prepared] == [1, 1, 2, 2, 3, 3]
 
 
 @pytest.mark.parametrize('boundary,error', [('checkpoint', 'stopped'), ('observe', 'synthetic_observation_failure')])
@@ -538,6 +547,50 @@ def test_target_changed_after_prepare_stops_before_intent(tmp_path, daily_reques
     assert result['error'] == 'daily_target_changed_before_input' and not port.executions and not ledgers(tmp_path)
 
 
+def test_final_inventory_observation_is_followed_by_real_formation_reentry(tmp_path, daily_request):
+    port = Port(daily_request)
+    observe, prepare, execute = port.observe, port.prepare, port.execute
+    def observed(binding):
+        port.on_formation = False
+        return observe(binding)
+    def prepared(*args):
+        value = prepare(*args)
+        port.on_formation = True
+        value['evidence']['reading'] = len(port.prepared)
+        return value
+    def executed(*args):
+        assert port.on_formation is True
+        assert args[0]['ready']['evidence']['reading'] == len(port.prepared)
+        return execute(*args)
+    port.observe, port.prepare, port.execute = observed, prepared, executed
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['outcome'] == 'complete'
+    assert len(port.prepared) == 6
+
+
+@pytest.mark.parametrize('change,error', [
+    ('team', 'daily_team_or_target_unknown'),
+    ('order', 'daily_team_changed_before_input'),
+    ('stale', 'daily_fresh_observation_required'),
+    ('day', 'daily_fresh_observation_required'),
+])
+def test_final_formation_recheck_stops_before_intent(tmp_path, daily_request, change, error):
+    port = Port(daily_request)
+    def changed(ready, owner):
+        if len(owner.prepared) != 2:
+            return
+        if change == 'team':
+            ready['unit_ids'][0] = 999901
+        elif change == 'order':
+            ready['unit_ids'].reverse()
+            ready['stars'].reverse()
+        else:
+            owner.clock += timedelta(seconds=61 if change == 'stale' else 86400)
+    port.prepare_change = changed
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['error'] == error and not port.executions and not ledgers(tmp_path)
+
+
 @pytest.mark.parametrize('field', ['slot', 'boss', 'round', 'start_seconds'])
 def test_boolean_action_readbacks_cannot_alias_integer_fields(tmp_path, daily_request, field):
     port = Port(daily_request)
@@ -607,7 +660,249 @@ def test_production_run_owned_always_zero_input_zero_intent(tmp_path, daily_requ
     monkeypatch.setattr(subprocess, 'Popen', forbidden)
     report = batch.run_owned(Tasker(), {'clan_battle_daily': daily_request}, tmp_path / 'report')
     result = report['steps'][0]['result']
-    assert result['error'] == 'clan_battle_daily_calibration_missing:production_daily_adapter_unavailable'
+    assert result['error'] == 'clan_battle_calibration_missing'
     assert result['consumption_sent'] is False and result['intents_created'] == 0 and result['daily_execution_available'] is False
     assert 'remaining_count' not in result and not list(tmp_path.rglob('transactions.jsonl'))
     assert json.loads((tmp_path / 'report/report.json').read_text(encoding='utf-8')) == report
+
+
+@pytest.mark.parametrize('missing', ['formal', 'timed', None])
+def test_production_checks_bundled_capabilities_for_every_slot_without_accepting_request_authority(
+        tmp_path, daily_request, monkeypatch, missing):
+    from pcr_maa import clan_battle_calibration
+    checked = []
+    def load(job, *, capability):
+        checked.append((job['confirmed_for'], capability))
+        if missing:
+            raise RuntimeError('clan_battle_calibration_capability_missing:' + missing)
+        return {'daily': {'read_only': True}}
+    monkeypatch.setattr(clan_battle_calibration, 'load_calibration', load)
+    result = batch.run_owned(object(), {'clan_battle_daily': daily_request}, tmp_path / 'report')['steps'][0]['result']
+    assert checked == [(daily_request['slot_plans']['1']['confirmed_for'], 'formal')]
+    assert result['error'] == ('clan_battle_calibration_capability_missing:' + missing if missing else
+        'clan_battle_daily_calibration_invalid')
+    assert result['consumption_sent'] is False and result['intents_created'] == 0
+    assert not list(tmp_path.rglob('transactions.jsonl'))
+
+
+def test_production_entry_dispatches_reviewed_adapter_through_existing_batch_and_journal(
+        tmp_path, daily_request, monkeypatch):
+    from pcr_maa import clan_battle_calibration, clan_battle_daily_native, native
+    port, checked = Port(daily_request), []
+    monkeypatch.setattr(native, 'ROOT', tmp_path)
+    def loaded(job, *, capability):
+        checked.append((job['confirmed_for'], capability))
+        return {'calibration_id': 'synthetic-full-profile'}
+    monkeypatch.setattr(clan_battle_calibration, 'load_calibration', loaded)
+    monkeypatch.setattr(clan_battle_daily_native, 'require_daily_execution', lambda *args: {})
+    def adapter(tasker, directory, *, request, calibrations):
+        assert request == daily_request and len(calibrations) == 3
+        return port
+    monkeypatch.setattr(clan_battle_daily_native, 'NativeClanDailyAdapter', adapter)
+    report = batch.run_owned(object(), {'clan_battle_daily': daily_request}, tmp_path / 'report')
+    result = report['steps'][0]['result']
+    assert report['outcome'] == result['outcome'] == 'complete'
+    assert result['daily_execution_available'] is True and result['regular_settled'] == 3
+    assert len(checked) == 3 and all(capability == 'formal' for _, capability in checked)
+    assert len(list((tmp_path / '.runtime/clan-battle-daily-work').rglob('transactions.jsonl'))) == 1
+
+
+def test_insufficient_cp_keeps_all_targets_without_creating_an_intent(tmp_path, daily_request):
+    port = Port(daily_request)
+    port.cp, port.remaining = 299, 0
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['outcome'] == 'insufficient_cp' and result['cp'] == 299
+    assert [row['slot'] for row in result['held_regular']] == [1, 2, 3]
+    assert not port.prepared and not port.executions and not ledgers(tmp_path)
+
+
+def test_rescanning_same_boss_round_cannot_manufacture_a_new_carry_target(tmp_path, daily_request):
+    port = Port(daily_request)
+    port.issue, port.refresh = {1}, False
+    first, _ = run(tmp_path, daily_request, port)
+    assert first['outcome'] == 'remind_carryover'
+    port.clock += timedelta(seconds=1)
+    port.instances[1] = ('invented-from-new-scan-time', port.clock)
+    second, _ = run(tmp_path, daily_request, port)
+    assert second['outcome'] == 'remind_carryover'
+    assert second['held_carryovers'][0]['reason'] == 'same_boss_new_appearance_not_observed'
+    assert len(port.executions) == 3 and port.inventory == [0]
+
+
+@pytest.mark.parametrize('cp,earned', [(0, 0), (299, 0), (300, 1), (599, 1), (600, 2), (900, 3)])
+def test_only_earned_challenges_are_executed_without_assuming_three(tmp_path, daily_request, cp, earned):
+    port = Port(daily_request)
+    port.cp, port.remaining = cp, earned
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['regular_settled'] == earned and len(port.executions) == earned
+    assert result['remaining_count'] == 0 and result['cp'] == cp
+    assert result['outcome'] == ('complete' if earned == 3 else 'insufficient_cp')
+
+
+def test_newly_earned_challenges_resume_remaining_slots_only(tmp_path, daily_request):
+    port = Port(daily_request)
+    for cp, count in ((300, 1), (600, 2), (900, 3)):
+        port.cp, port.remaining = cp, 1
+        result, _ = run(tmp_path, daily_request, port)
+        assert result['regular_settled'] == count and len(port.executions) == count
+    assert result['outcome'] == 'complete'
+
+
+def test_cp_threshold_change_during_result_is_accounted_separately_from_consumption(tmp_path, daily_request):
+    port = Port(daily_request)
+    port.cp, port.remaining = 599, 1
+    def earn(result, owner):
+        if owner.cp == 599:
+            owner.cp, owner.remaining = 600, owner.remaining + 1
+            result['after'].update(cp=owner.cp, remaining_count=owner.remaining)
+    port.result_change = earn
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['outcome'] == 'insufficient_cp' and result['regular_settled'] == 2
+
+
+def test_earned_count_does_not_hide_external_manual_consumption(tmp_path, daily_request):
+    port = Port(daily_request)
+    port.cp, port.remaining = 600, 1
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['error'] == 'daily_remaining_count_history_mismatch' and not port.executions
+
+
+@pytest.mark.parametrize('fault', ['unknown', 'boolean', 'balance_semantics', 'decreased'])
+def test_cp_requires_actual_cumulative_observation(tmp_path, daily_request, fault):
+    port = Port(daily_request)
+    if fault == 'boolean':
+        port.cp = True
+    elif fault in ('unknown', 'balance_semantics'):
+        observe = port.observe
+        def missing(binding):
+            row = observe(binding)
+            if fault == 'unknown':
+                row['cp_evidence'] = {}
+            else:
+                row['cp_semantics'] = 'available_balance'
+            return row
+        port.observe = missing
+    else:
+        port.result_change = lambda result, owner: result['after'].update(cp=899)
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['error'] == ('daily_cp_observation_unknown' if fault != 'decreased'
+        else 'daily_consumption_readback_mismatch')
+    assert result['regular_settled'] == 0
+    if fault != 'decreased':
+        assert not port.executions and not ledgers(tmp_path)
+    else:
+        assert len(Journal(ledgers(tmp_path)[0].parent).events()) == 1
+
+
+def test_carry_does_not_spend_cp_and_can_run_with_zero_regular_challenges(tmp_path, daily_request):
+    port = Port(daily_request)
+    port.issue, port.refresh = {1}, False
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['outcome'] == 'remind_carryover' and result['cp'] == 900 and result['remaining_count'] == 0
+    port.clock += timedelta(seconds=1)
+    port.instances[1] = ('synthetic-later-instance', port.clock)
+    port.rounds[1] += 1
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['outcome'] == 'complete' and result['cp'] == 900
+
+
+def test_defeated_boss_does_not_require_invented_round_or_instance(tmp_path, daily_request):
+    port = Port(daily_request)
+    observe = port.observe
+    def defeated(binding):
+        row = observe(binding)
+        row['bosses'][0].update(available=False, round=None, phase=None, instance_id=None, appeared_at=None)
+        return row
+    port.observe = defeated
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['outcome'] == 'no_available_target' and result['regular_settled'] == 2
+    assert result['held_regular'][0]['slot'] == 1
+
+
+def test_first_seen_instance_has_no_invented_appearance_time_for_carry(tmp_path, daily_request):
+    port = Port(daily_request)
+    port.issue = {1}
+    observe = port.observe
+    def first_seen(binding):
+        row = observe(binding)
+        for boss in row['bosses']:
+            boss['appeared_at'] = None
+        return row
+    port.observe = first_seen
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['outcome'] == 'remind_carryover' and result['regular_settled'] == 3
+    assert result['carryover_settled'] == 0
+
+
+def test_current_start_not_sent_closes_only_this_attempt_and_requires_new_start(tmp_path, daily_request):
+    from pcr_maa.native import NativeInputNotSent
+    port = Port(daily_request)
+    calls = []
+    execute = port.execute
+    def rejected(intent, job):
+        calls.append(intent)
+        port.battle_start = 'not_sent'
+        raise NativeInputNotSent(dict(input_execution='not_sent', clan_battle_phase='regular_start',
+            daily_intent_id=intent['intent_id'], source='synthetic_rejected_dispatch'))
+    port.execute = rejected
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['error'] == 'native_input_not_sent' and result['consumption_sent'] is False
+    rows = Journal(ledgers(tmp_path)[0].parent).events()
+    assert len(calls) == 1 and len(rows) == 2 and rows[-1]['input_execution'] == 'not_sent'
+    port.execute = execute
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['outcome'] == 'complete' and len(port.executions) == 3
+    assert len(Journal(ledgers(tmp_path)[0].parent).events()) == 8
+
+
+@pytest.mark.parametrize('fault', ['settings', 'wrong_intent', 'sent', 'unknown'])
+def test_other_not_sent_or_unknown_does_not_clear_the_reserved_start(tmp_path, daily_request, fault):
+    from pcr_maa.native import NativeInputNotSent
+    port = Port(daily_request)
+    def rejected(intent, job):
+        port.battle_start = 'sent' if fault == 'sent' else 'not_sent'
+        raise NativeInputNotSent(dict(input_execution='unknown' if fault == 'unknown' else 'not_sent',
+            clan_battle_phase='settings' if fault == 'settings' else 'regular_start',
+            daily_intent_id='wrong' if fault == 'wrong_intent' else intent['intent_id']))
+    port.execute = rejected
+    run(tmp_path, daily_request, port)
+    assert len(Journal(ledgers(tmp_path)[0].parent).events()) == 1
+    result, fresh = run(tmp_path, daily_request, Port(daily_request))
+    assert result['error'] == 'daily_previous_result_unknown' and not fresh.executions
+
+
+def test_not_sent_resumption_does_not_claim_old_history_as_new_consumption(tmp_path, daily_request):
+    from pcr_maa.native import NativeInputNotSent
+    port = Port(daily_request)
+    port.available = {1: True, 2: False, 3: False}
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['regular_settled'] == 1
+    port.available[2] = True
+    def rejected(intent, job):
+        port.battle_start = 'not_sent'
+        raise NativeInputNotSent(dict(input_execution='not_sent', clan_battle_phase='regular_start',
+            daily_intent_id=intent['intent_id']))
+    port.execute = rejected
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['consumption_sent'] is False and result['regular_settled'] == 1
+
+
+def test_carry_start_not_sent_preserves_grant_for_explicit_resumption(tmp_path, daily_request):
+    from pcr_maa.native import NativeInputNotSent
+    port = Port(daily_request)
+    port.issue = {1}
+    execute = port.execute
+    def rejected(intent, job):
+        if intent['action']['kind'] == 'regular':
+            return execute(intent, job)
+        port.battle_start = 'not_sent'
+        raise NativeInputNotSent(dict(input_execution='not_sent', clan_battle_phase='carryover_start',
+            daily_intent_id=intent['intent_id']))
+    port.execute = rejected
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['consumption_sent'] is True and result['regular_settled'] == 1
+    assert result['carryover_settled'] == 0 and port.inventory == [0]
+    port.execute = execute
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['outcome'] == 'complete' and result['carryover_settled'] == 1
+    assert len([row for row in port.executions if row['action']['kind'] == 'regular']) == 3
