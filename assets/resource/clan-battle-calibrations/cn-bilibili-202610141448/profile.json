@@ -346,6 +346,28 @@
         ],
         "template": "clan-battle/cn-bilibili-202610141448/speed_one.png",
         "sha256": "902acbc349e06cf73f0d11a72e01db47cd1a0f6c3d2e0482354d5e998ad7269f"
+      },
+      "speed_four": {
+        "recognition": "TemplateMatch",
+        "roi": [
+          1201,
+          634,
+          39,
+          42
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/speed_four.png",
+        "sha256": "5a11cb72a5a20e005df021b2f114ce98418ed150550225c93d43a115902fd6af"
+      },
+      "speed_two": {
+        "recognition": "TemplateMatch",
+        "roi": [
+          1201,
+          634,
+          39,
+          42
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/speed_two.png",
+        "sha256": "a92119ff3261b571632f7b03c938df9a65e61215ce17bb399e56d20200a18ee1"
       }
     },
     "result": {
@@ -1007,6 +1029,221 @@
       "page": "difficulty",
       "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/difficulty.png",
       "sha256": "6ccfc98884652cbe46480bdb5af27d1840edf423fb07ecb6506bbc1426d75625"
+    },
+    {
+      "page": "battle",
+      "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/battle-two.png",
+      "sha256": "c670d016240def4198146bbeb3b7aa84ca8d3387436697a7704ba41c3e38bc9c"
     }
-  ]
+  ],
+  "auto_battle": {
+    "speeds": [
+      1,
+      2
+    ],
+    "opening_guards": [
+      {
+        "recognition": "TemplateMatch",
+        "roi": [
+          1176,
+          21,
+          53,
+          28
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/opening-menu.png",
+        "sha256": "557154af7021a4c28c9b2d21c703763d0977c45b42ecd55c65b468dff6e35339"
+      },
+      {
+        "recognition": "TemplateMatch",
+        "roi": [
+          253,
+          18,
+          90,
+          29
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/opening-simulation.png",
+        "sha256": "280108a9cbaa5f8f22e9fb6061e0a9a647655228b562c5e5d73b632b218a7523"
+      },
+      {
+        "recognition": "TemplateMatch",
+        "roi": [
+          1080,
+          21,
+          43,
+          26
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/opening-clock90.png",
+        "sha256": "cd1ffcc1bbf8bcde902993f17705d4bbf9904a61a4bbf729dcedd1c6064d44d0"
+      }
+    ],
+    "paused_guards": [
+      {
+        "recognition": "OCR",
+        "roi": [
+          580,
+          96,
+          140,
+          41
+        ],
+        "expected": "^主菜单$"
+      },
+      {
+        "recognition": "TemplateMatch",
+        "roi": [
+          253,
+          18,
+          90,
+          29
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/paused-simulation.png",
+        "sha256": "f5be087d3a59f7f5898618ce970368607784da5bfa87489cc4cbbb3b945dbe42"
+      },
+      {
+        "recognition": "TemplateMatch",
+        "roi": [
+          1080,
+          21,
+          43,
+          26
+        ],
+        "template": [
+          "clan-battle/cn-bilibili-202610141448/paused-clock90.png",
+          "clan-battle/cn-bilibili-202610141448/paused-clock89.png"
+        ],
+        "sha256": [
+          "d0a25b7563d6ac500e06615ab5a90a652853b8851684687aed67ae5c0706f822",
+          "3755719d4957b9dfe4a43d6e1989e479fc4009066310bebb0d86e4e982b4dded"
+        ]
+      },
+      {
+        "recognition": "TemplateMatch",
+        "roi": [
+          110,
+          50,
+          23,
+          28
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/paused-zero.png",
+        "sha256": "7904fa6a1ddf3b4d77f9876c307c841be10142dcd57bdf79c1cea9e42ffc241a"
+      }
+    ],
+    "auto_on": {
+      "recognition": "TemplateMatch",
+      "roi": [
+        570,
+        459,
+        135,
+        35
+      ],
+      "template": "clan-battle/cn-bilibili-202610141448/paused-auto-on.png",
+      "sha256": "0d6f75551a9bcaafd6477c81a4bc6c990420ddc987504a830bb3aea81b0601ce"
+    },
+    "auto_off": {
+      "recognition": "TemplateMatch",
+      "roi": [
+        570,
+        459,
+        135,
+        35
+      ],
+      "template": "clan-battle/cn-bilibili-202610141448/paused-auto-off.png",
+      "sha256": "d84e0739754c252a5c47a951fa68c39fd3e52dd71294ed67afd14359adcb9a52"
+    },
+    "speed": {
+      "1": {
+        "recognition": "OCR",
+        "roi": [
+          795,
+          459,
+          90,
+          35
+        ],
+        "expected": "^1倍速$"
+      },
+      "2": {
+        "recognition": "OCR",
+        "roi": [
+          795,
+          459,
+          90,
+          35
+        ],
+        "expected": "^2倍速$"
+      },
+      "4": {
+        "recognition": "OCR",
+        "roi": [
+          795,
+          459,
+          90,
+          35
+        ],
+        "expected": "^4倍速$"
+      }
+    },
+    "set_badge": {
+      "recognition": "TemplateMatch",
+      "roi": [
+        433,
+        245,
+        50,
+        50
+      ],
+      "template": "clan-battle/cn-bilibili-202610141448/paused-set-badge.png",
+      "sha256": "e050aa85d3613955d9d7e74ac364935fb4534ec4e3e091dad2671c78c28203e0"
+    },
+    "samples": [
+      {
+        "page": "paused",
+        "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/paused-all-on.png",
+        "sha256": "2e5725d0b7606fbf71e2b8201bdc1c04986c972641d270e013bd9d5cb2937829"
+      },
+      {
+        "page": "paused",
+        "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/paused-all-off.png",
+        "sha256": "0fab2784cf5eaad2de2c962b8bdddb36ef9a65893795a5dea9281608754bc724"
+      },
+      {
+        "page": "paused",
+        "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/paused-mixed-1.png",
+        "sha256": "bfeda1c82f7fd8829273e052a54daacc8a766a78d1ef828af5cbd1a20f5bdcda"
+      },
+      {
+        "page": "paused",
+        "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/paused-mixed-2.png",
+        "sha256": "5d8c639af7abea8065410e2a21939eb0e32896f6ad2e9e0be91a0759f462c540"
+      },
+      {
+        "page": "paused",
+        "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/paused-mixed-4.png",
+        "sha256": "ea2afd950b2363cf30088c37d0c61a3d14fa870b042ae26dda61d52549704890"
+      },
+      {
+        "page": "paused",
+        "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/paused89-first-on-two.png",
+        "sha256": "dfcae9d8188968dd14d0d234feaed672e70330144dd14dfb0ee11fc30b233edb"
+      },
+      {
+        "page": "paused",
+        "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/paused89-all-off.png",
+        "sha256": "c5dac9e6ef93590d2e5654c3777a060b8b702cd818ccc56a16f76fa306a642eb"
+      },
+      {
+        "page": "paused",
+        "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/paused-all-on-auto-one.png",
+        "sha256": "6d3bc438f4cff3a7827936300c189119e0f0c401b1762e2341610cd9655f1da3"
+      }
+    ],
+    "empty_tp": {
+      "recognition": "TemplateMatch",
+      "roi": [
+        358,
+        381,
+        98,
+        15
+      ],
+      "template": "clan-battle/cn-bilibili-202610141448/paused-empty-tp.png",
+      "sha256": "98408533217338e80cb71f40bb05fcbf72479d35c47330596d3e1070bef1e400"
+    }
+  }
 }

@@ -97,6 +97,75 @@ def _difficulty_choice(calibration, plan):
     return choices[phase]
 
 
+def auto_battle_pipeline(calibration, plan):
+    spec = calibration.get('auto_battle')
+    if spec is None:
+        return {}
+    if (calibration.get('version') != 2 or type(spec) is not dict
+            or set(spec) != {'speeds', 'opening_guards', 'paused_guards', 'auto_on', 'auto_off', 'speed', 'set_badge', 'empty_tp', 'samples'}
+            or type(spec['speeds']) is not list or not spec['speeds'] or 1 not in spec['speeds']
+            or any(type(n) is not int or n not in (1, 2, 4) for n in spec['speeds'])
+            or len(set(spec['speeds'])) != len(spec['speeds'])
+            or type(spec['speed']) is not dict or set(spec['speed']) != {'1', '2', '4'}):
+        raise ValueError('clan_battle_auto_calibration_invalid')
+    if any(key not in calibration['pages']['battle'] for speed, key in ((2, 'speed_two'), (4, 'speed_four')) if speed in spec['speeds']):
+        raise ValueError('clan_battle_auto_speed_calibration_missing')
+    nodes = {}
+    for group, count in (('opening_guards', 3), ('paused_guards', 4)):
+        if type(spec[group]) is not list or len(spec[group]) != count:
+            raise ValueError('clan_battle_auto_calibration_invalid')
+        for index, marker in enumerate(spec[group]):
+            nodes[f'CBOpening_{group}_{index}'] = _node(marker)
+    clock = spec['paused_guards'][2]
+    if (clock.get('recognition') != 'TemplateMatch' or type(clock.get('template')) is not list
+            or len(clock['template']) != 2 or type(clock.get('sha256')) is not list or len(clock['sha256']) != 2):
+        raise ValueError('clan_battle_auto_clock_calibration_invalid')
+    for index, second in enumerate((90, 89)):
+        marker = dict(clock, template=clock['template'][index], sha256=clock['sha256'][index])
+        nodes['CBOpeningClock'+str(second)] = _node(marker)
+    nodes['CBOpeningBoss'] = _node(dict(roi=[805, 160, 135, 33]),
+        expected='^' + re.escape(calibration['boss_targets'][str(plan['boss'])]['name']) + '$')
+    for name in ('auto_on', 'auto_off'):
+        nodes['CBOpening_'+name] = _node(spec[name])
+    for speed, marker in spec['speed'].items():
+        nodes['CBOpeningSpeed'+speed] = _node(marker, expected='^'+speed+'倍速$')
+    for index in range(5):
+        marker = deepcopy(spec['set_badge'])
+        marker['roi'] = _roi(marker['roi']).copy()
+        marker['roi'][0] += 116*index
+        nodes['CBOpeningSet'+str(index)] = _node(marker)
+        marker = deepcopy(spec['empty_tp'])
+        marker['roi'] = _roi(marker['roi']).copy()
+        marker['roi'][0] += 116*index
+        nodes['CBOpeningEmptyTp'+str(index)] = _node(marker)
+    for name, mode, click in (('CBOpeningRead', 'opening_read', False), ('CBOpeningConfirmed', 'opening_read', False),
+            ('CBOpeningAuto', 'opening_auto', True), ('CBOpeningSet', 'opening_set', True),
+            ('CBOpeningSpeed', 'opening_speed', True), ('CBResumeOpening', 'opening_resume', True)):
+        nodes[name] = dict(recognition='Custom', custom_recognition='ClanBattleCharacters',
+            custom_recognition_param=dict(mode=mode), action='Click' if click else 'DoNothing', target=True,
+            next=['CBOpeningConfirmed'] if name in ('CBOpeningAuto', 'CBOpeningSet', 'CBOpeningSpeed') else [],
+            timeout=15000, pre_delay=0, post_delay=300 if click else 0,
+            on_error=['LabyDisconnect6002Observed'])
+        if click:
+            nodes[name]['max_hit'] = 1
+    # The fading intro already shows 90s but ignores Menu; only the bright button accepts input.
+    nodes['CBOpeningInputReady'] = dict(recognition='ColorMatch', roi=[1180, 22, 45, 24], method=4,
+        lower=[220, 220, 220], upper=[255, 255, 255], count=400, action='DoNothing', next=[], pre_delay=0, post_delay=0)
+    # Native same-frame guards avoid three image IPC round trips in the short 4x opening.
+    nodes['CBPauseOpening'] = dict(recognition='And',
+        all_of=['CBOpeningInputReady', *[f'CBOpening_opening_guards_{i}' for i in range(3)]], action='Click', target=[1204, 31, 6, 6],
+        max_hit=1, next=['CBOpeningRead'], timeout=15000, rate_limit=1, pre_delay=0, post_delay=300,
+        on_error=['LabyDisconnect6002Observed'])
+    return nodes
+
+
+def require_battle_speed(calibration, plan, battle_speed):
+    if type(battle_speed) is not int or battle_speed not in (1, 2, 4):
+        raise ValueError('clan_battle_speed_invalid')
+    if battle_speed != 1 and (plan.get('switches') or battle_speed not in calibration.get('auto_battle', {}).get('speeds', [])):
+        raise RuntimeError('clan_battle_auto_speed_uncalibrated')
+
+
 def calibration_pipeline(calibration, plan):
     """Explicit injection for saved-frame checks; no discovered file enables it."""
     if calibration is None:
@@ -206,6 +275,9 @@ def calibration_pipeline(calibration, plan):
             nodes[f'CBField_{page}_{field}'] = _node(dict(roi=roi), expected=expected)
         if modern and page == 'battle':
             nodes['CBOneSpeed'] = _node(spec.get('speed_one'))
+            for speed, key in ((2, 'speed_two'), (4, 'speed_four')):
+                if key in spec:
+                    nodes['CBBattleSpeed'+str(speed)] = _node(spec[key])
         if modern and page == 'target':
             states = spec.get('live_state')
             if type(states) is not dict or set(states) != {'on', 'off', 'absent'}:
@@ -319,6 +391,9 @@ def calibration_pipeline(calibration, plan):
         if click:
             nodes[name]['max_hit'] = 1
     nodes['CBSettingsConfirmed']['on_error'] = ['LabyDisconnect6002Observed']
+    nodes.update(auto_battle_pipeline(calibration, plan))
+    if calibration.get('auto_battle') and not plan['switches']:
+        nodes['CBStart'].update(next=['CBPauseOpening'], timeout=30000, rate_limit=1)
     return nodes
 
 
@@ -453,7 +528,9 @@ class ClanBattlePage(CustomRecognition):
             values[field] = value
         if self.modern:
             if page == 'battle':
-                values['battle_speed'] = 1 if self.hit(context, image, 'CBOneSpeed') else None
+                speeds = [speed for speed, key in ((1, 'speed_one'), (2, 'speed_two'), (4, 'speed_four'))
+                    if key in spec and self.hit(context, image, 'CBOneSpeed' if speed == 1 else 'CBBattleSpeed'+str(speed))]
+                values['battle_speed'] = speeds[0] if len(speeds) == 1 else None
             if page == 'target':
                 states = [state for state in ('on', 'off', 'absent') if self.hit(context, image, 'CBLiveState_'+state)]
                 if len(states) != 1:
@@ -573,16 +650,18 @@ def timing_capability(calibration):
 
 
 class NativeClanBattle(NativeGuideTrial):
-    def __init__(self, tasker, directory, *, calibration=None):
+    def __init__(self, tasker, directory, *, calibration=None, battle_speed=1):
         super().__init__(tasker, Path(directory))
         self.calibration = calibration
         self.timing_capability = dict(validated=False)
         self.started = False
+        self.battle_speed, self.opening_paused = battle_speed, False
 
     def configure(self, plan):
         from .clan_battle import load_snapshot, support_requirement
         from .clan_battle_characters import ClanBattleCharacters
         nodes = calibration_pipeline(self.calibration, plan)
+        require_battle_speed(self.calibration, plan, self.battle_speed)
         self.plan, self.snapshot = plan, load_snapshot(plan)
         if self.calibration['formation'].get('star_source') == 'account_snapshot':
             from .clan_battle import account_battle_stars
@@ -837,7 +916,8 @@ class NativeClanBattle(NativeGuideTrial):
 
     def read_battle_settings(self, initial=None):
         if initial is None:
-            if self.choose(['CBReadSettings']) != 'CBReadSettings':
+            node = 'CBOpeningRead' if self.opening_paused else 'CBReadSettings'
+            if self.choose([node]) != node:
                 raise RuntimeError('clan_battle_controls_unknown')
             initial = self.last_receipt
         state = _detail(initial)
@@ -855,6 +935,8 @@ class NativeClanBattle(NativeGuideTrial):
             raise RuntimeError('clan_battle_switch_window_missed')
         if before is not None and any(before.get(key) != state.get(key) for key in ('auto', 'sets', 'unit_ids')):
             raise RuntimeError('clan_battle_switch_state_changed')
+        if self.opening_paused and before is not None and before.get('battle_speed') != state.get('battle_speed'):
+            raise RuntimeError('clan_battle_switch_state_changed')
         key = 'auto' if slot is None else 'sets'
         value = state['auto'] if slot is None else state['sets'][slot]
         if type(previous) is not bool or type(desired) is not bool or value is not previous or previous is desired:
@@ -870,8 +952,16 @@ class NativeClanBattle(NativeGuideTrial):
             params['expected_remaining_seconds'] = remaining_seconds
         if slot is not None:
             params['slot'] = slot
+        confirmed = 'CBSettingsConfirmed'
+        if self.opening_paused:
+            if remaining_seconds is not None:
+                raise RuntimeError('clan_battle_switch_window_missed')
+            node = 'CBOpeningAuto' if slot is None else 'CBOpeningSet'
+            params.update(mode='opening_auto' if slot is None else 'opening_set', battle_speed=state['battle_speed'])
+            expected['battle_speed'] = state['battle_speed']
+            confirmed = 'CBOpeningConfirmed'
         if self.tasker.resource.override_pipeline({node: dict(custom_recognition_param=params),
-                'CBSettingsConfirmed': dict(custom_recognition_param=dict(mode='battle_read', **expected))}) is False:
+                confirmed: dict(custom_recognition_param=dict(mode='opening_read' if self.opening_paused else 'battle_read', **expected))}) is False:
             raise RuntimeError('clan_battle_switch_pipeline_rejected')
         reading = _detail(self.run(node, click=True))
         if any(reading.get(name) != expected[name] for name in expected):
@@ -914,11 +1004,44 @@ class NativeClanBattle(NativeGuideTrial):
         ready = self.verify_team(plan)
         require_timing(self, plan)
         start = self.run('CBStart', click=True)
-        hit = self.wait(['CBReadSettings', 'CBPage_result'], seconds=30)
-        if hit != 'CBReadSettings':
-            raise RuntimeError('clan_battle_settings_not_observed')
-        initial = self.last_receipt
+        if self.calibration and self.calibration.get('auto_battle') and not plan['switches']:
+            initial = start
+            self.opening_paused = True
+        else:
+            hit = self.wait(['CBReadSettings', 'CBPage_result'], seconds=30)
+            if hit != 'CBReadSettings':
+                raise RuntimeError('clan_battle_settings_not_observed')
+            initial = self.last_receipt
         settings = execute_switches(self, plan, initial=initial)
+        if self.opening_paused:
+            state = self.read_battle_settings()
+            if any(state.get(key) != settings['opening_evidence'].get(key) for key in ('auto', 'sets', 'unit_ids', 'battle_speed')):
+                raise RuntimeError('clan_battle_switch_state_changed')
+            for _ in range(2):
+                if state['battle_speed'] == self.battle_speed:
+                    break
+                expected = {key: deepcopy(state[key]) for key in ('auto', 'sets', 'unit_ids', 'battle_speed')}
+                desired = {1: 2, 2: 4, 4: 1}[state['battle_speed']]
+                if not self.tasker.resource.override_pipeline({
+                        'CBOpeningSpeed': dict(custom_recognition_param=dict(mode='opening_speed', **expected)),
+                        'CBOpeningConfirmed': dict(custom_recognition_param=dict(mode='opening_read', **dict(expected, battle_speed=desired)))}):
+                    raise RuntimeError('clan_battle_switch_pipeline_rejected')
+                state = self.read_battle_settings(self.run('CBOpeningSpeed', click=True))
+                if any(state.get(key) != value for key, value in dict(expected, battle_speed=desired).items()):
+                    raise RuntimeError('clan_battle_speed_readback_unknown')
+                settings['actions'].append(dict(control='speed', previous=expected['battle_speed'], target=desired))
+            if state['battle_speed'] != self.battle_speed:
+                raise RuntimeError('clan_battle_speed_readback_unknown')
+            settings['opening_evidence'] = deepcopy(state)
+            expected = {key: deepcopy(state[key]) for key in ('auto', 'sets', 'unit_ids', 'battle_speed')}
+            if not self.tasker.resource.override_pipeline({'CBResumeOpening': dict(custom_recognition_param=dict(mode='opening_resume', **expected)),
+                    'CBSettingsConfirmed': dict(custom_recognition_param=dict(mode='battle_read', **expected))}):
+                raise RuntimeError('clan_battle_switch_pipeline_rejected')
+            self.run('CBResumeOpening', click=True)
+            self.opening_paused = False
+            self.wait(['CBSettingsConfirmed'], seconds=15)
+            settings['observation'] = self.read_battle_settings(self.last_receipt)
+            settings['battle_speed'] = self.battle_speed
         self.wait(['CBPage_result'], seconds=180)
         result, result_receipt = self.read_page('result')
         require_target_identity(plan, result)

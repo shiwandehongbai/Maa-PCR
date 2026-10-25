@@ -95,10 +95,15 @@ def validate_config(value):
     controller_v4 = value['version'] == 4
     portable = value['version'] in (2, 3, 4)
     if controller_v4:
-        require(set(value) - {'collect_gift_stamina', 'guide_trial', 'clan_battle_simulation', 'clan_battle_daily'} == {'version', 'start', 'presets', 'count_context', 'connection', 'controller'},
+        require(set(value) - {'collect_gift_stamina', 'guide_trial', 'clan_battle_simulation', 'clan_battle_daily', 'clan_battle_speed'} == {'version', 'start', 'presets', 'count_context', 'connection', 'controller'},
                 'v4 顶层字段无效')
         require(len(set(value) & {'guide_trial', 'clan_battle_simulation', 'clan_battle_daily'}) <= 1,
                 '试打、公会战模拟与正式三刀不能混用')
+        if 'clan_battle_speed' in value:
+            require(type(value.get('clan_battle_simulation')) is dict and type(value['clan_battle_speed']) is int
+                and value['clan_battle_speed'] in (1, 2, 4), '会战倍速仅可用于单次模拟，支持 1、2、4 倍')
+            require(value['clan_battle_speed'] == 1 or value['clan_battle_simulation'].get('switches') == [],
+                '含战中切换的秒数轴仅支持 1 倍速')
         if 'guide_trial' in value:
             from .guide_trial import validate_plan
             validate_plan(value['guide_trial'])

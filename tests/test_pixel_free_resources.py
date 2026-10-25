@@ -40,7 +40,8 @@ def test_daily_resources_have_no_game_image_templates():
         assert isinstance(templates, list) and templates
         assert all(isinstance(template, str) and Path(template).parent == Path('guide-trial')
                    for template in templates), (filename, templates)
-    assert all(path.name in {'labyrinth', 'guide-trial'} and path.is_dir()
+    # Shared resources keep calibrated modes in their own namespaces; daily stays OCR-only.
+    assert all(path.name in {'labyrinth', 'guide-trial', 'clan-battle'} and path.is_dir()
                for path in native.RESOURCE.joinpath('image').iterdir())
 
 

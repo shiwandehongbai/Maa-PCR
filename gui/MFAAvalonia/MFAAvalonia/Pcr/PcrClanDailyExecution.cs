@@ -13,6 +13,7 @@ public sealed class PcrClanDailyExecutionDocument
     [JsonProperty("version")] public int Version { get; set; } = 1;
     [JsonProperty("mode")] public string Mode { get; set; } = PcrClanDailyExecution.Simulation;
     [JsonProperty("confirmed_for")] public string? ConfirmedFor { get; set; }
+    [JsonProperty("battle_speed")] public int BattleSpeed { get; set; } = 1;
 }
 
 // Saved review is separate from the bundled capabilities required at Start.
@@ -28,8 +29,9 @@ public static class PcrClanDailyExecution
         if (!File.Exists(path)) return new();
         var before = PcrClanGuide.Stamp(path); var value = PcrClanGuide.ReadJson(path);
         if (PcrClanGuide.Stamp(path) != before) throw new IOException("会战模式在读取时变化，请重新打开。");
-        if (value.Count != 3 || value.Properties().Any(p => p.Name is not ("version" or "mode" or "confirmed_for"))
+        if (value.Count is not (3 or 4) || value.Properties().Any(p => p.Name is not ("version" or "mode" or "confirmed_for" or "battle_speed"))
             || value["version"]?.Type != JTokenType.Integer || (int?)value["version"] != 1 || value["mode"]?.Type != JTokenType.String
+            || value.ContainsKey("battle_speed") && (value["battle_speed"]?.Type != JTokenType.Integer || (int?)value["battle_speed"] is not (1 or 2 or 4))
             || value["confirmed_for"]?.Type is not (JTokenType.Null or JTokenType.String)) throw new InvalidDataException("会战模式配置格式无效，请保留原文件。");
         var document = value.ToObject<PcrClanDailyExecutionDocument>()!; Validate(document); stamp = before; return document;
     }
@@ -37,6 +39,7 @@ public static class PcrClanDailyExecution
     private static void Validate(PcrClanDailyExecutionDocument document)
     {
         if (document.Version != 1 || document.Mode is not (Simulation or FormalDaily)
+            || document.BattleSpeed is not (1 or 2 or 4) || document.Mode == FormalDaily && document.BattleSpeed != 1
             || document.ConfirmedFor != null && (document.Mode != FormalDaily || document.ConfirmedFor.Length != 64 || document.ConfirmedFor.Any(c => !"0123456789abcdef".Contains(c))))
             throw new InvalidDataException("会战模式或三目标确认无效。");
     }
@@ -85,7 +88,8 @@ public static class PcrClanDailyExecution
         if (mode == Simulation)
         {
             var plan = PcrClanGuide.CreatePlan(Path.Combine(AppPaths.ConfigDirectory, "agent-guide-review.json"), AppPaths.ConfigDirectory, repository, DateTimeOffset.Now);
-            PcrClanCalibration.Read(repository, (string?)plan["content_version"]).Require(plan, "simulation");
+            var state = Read(StatePath, out _);
+            PcrClanCalibration.Read(repository, (string?)plan["content_version"]).Require(plan, "simulation", state.BattleSpeed);
             return;
         }
         RequireCapabilities(CreatePlan(AppPaths.ConfigDirectory, repository, DateTimeOffset.Now), repository);

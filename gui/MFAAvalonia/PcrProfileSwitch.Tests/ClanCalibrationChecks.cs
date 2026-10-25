@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -313,6 +314,19 @@ internal static class ClanCalibrationChecks
             try { PcrClanDailyExecution.RequireCapabilities(invalid, root); }
             catch (InvalidDataException ex) when (ex.Message.Contains("完整三目标")) { count++; continue; }
             throw new InvalidOperationException("clan_calibration_expected_rejection_incomplete_formal_targets");
+        }
+        var autoCalibration = new PcrClanCalibration(2, new HashSet<string> { "simulation", "timed", "formal" }, null,
+            AutoBattleSpeeds: new HashSet<int> { 1, 2, 4 });
+        foreach (var speed in new[] { 1, 2, 4 }) { autoCalibration.Require(Plan(false), "simulation", speed); count++; }
+        Reject(() => autoCalibration.Require(Plan(), "simulation", 3), "invalid_speed", "speed_invalid");
+        Reject(() => autoCalibration.Require(Plan(timed: true), "simulation", 4), "axis_cannot_accelerate", "auto_speed_uncalibrated");
+        Reject(() => autoCalibration.Require(Plan(), "formal", 4), "formal_cannot_accelerate", "auto_speed_uncalibrated");
+        Reject(() => new PcrClanCalibration(2, new HashSet<string> { "simulation" }, null).Require(Plan(), "simulation", 4), "old_profile_no_fast_speed", "auto_speed_uncalibrated");
+        var shippedEntry = JObject.Parse(File.ReadAllText(bundledIndex))["entries"]!.OfType<JObject>().FirstOrDefault();
+        if (shippedEntry != null)
+        {
+            var shipped = PcrClanCalibration.Read(sourceRoot, (string?)shippedEntry["content_version"]);
+            Check(shipped.Error == null && shipped.AutoBattleSpeeds?.SetEquals(new[] { 1, 2 }) == true, "shipped_opening_and_speed_dependencies_verified");
         }
         Console.WriteLine($"clan_calibration_checks={count}; synthetic fixtures only, game input=0");
     }

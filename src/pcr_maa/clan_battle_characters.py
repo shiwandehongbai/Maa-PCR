@@ -129,6 +129,8 @@ class ClanBattleCharacters(GuideTrialCharacters):
         for key in ('auto', 'sets', 'unit_ids'):
             if key in params and state[key] != params[key]:
                 return None
+        if 'battle_speed' in params and page.get('battle_speed') != params['battle_speed']:
+            return None
         mode, target = params['mode'], [0, 0, 1, 1]
         if mode == 'battle_auto':
             if (type(params.get('previous')) is not bool or type(params.get('desired')) is not bool
@@ -152,12 +154,87 @@ class ClanBattleCharacters(GuideTrialCharacters):
             state['battle_speed'] = page.get('battle_speed')
         return self.AnalyzeResult(box=target, detail=state)
 
+    def opening_control(self, context, argv, params):
+        spec = self.calibration.get('auto_battle')
+        mode = params['mode']
+        if not spec or self.plan.get('switches') or self.page.current_page != 'battle':
+            return None
+        if self.page.hit(context, argv.image, 'LabyDisconnect6002Observed'):
+            return None
+        if not all(self.page.hit(context, argv.image, f'CBOpening_paused_guards_{i}') for i in range(4)):
+            return None
+        if not self.page.hit(context, argv.image, 'CBOpeningBoss'):
+            return None
+        seconds = [second for second in (90, 89) if self.page.hit(context, argv.image, 'CBOpeningClock'+str(second))]
+        if len(seconds) != 1:
+            return None
+        for i in range(5):
+            if not self.page.hit(context, argv.image, 'CBOpeningEmptyTp'+str(i)):
+                return None
+            tp = cv2.cvtColor(argv.image[385:392, 363+116*i:452+116*i], cv2.COLOR_BGR2HSV)
+            if ((tp[:,:,0] >= 80) & (tp[:,:,0] <= 120) & (tp[:,:,1] >= 100) & (tp[:,:,2] >= 130)).any():
+                return None
+        members = self.read_paused(argv.image)
+        ids = [row['unit_id'] if row else None for row in members]
+        if len(set(ids)) != 5 or set(ids) != set(self.team):
+            return None
+        sets, evidence = [], []
+        for i in range(5):
+            hsv = cv2.cvtColor(argv.image[286:346, 358+116*i:363+116*i], cv2.COLOR_BGR2HSV)
+            cyan = float(((hsv[:,:,0]>=75)&(hsv[:,:,0]<=105)&(hsv[:,:,1]>=70)&(hsv[:,:,2]>=100)).mean())
+            red = float((((hsv[:,:,0]<=15)|(hsv[:,:,0]>=170))&(hsv[:,:,1]>=70)&(hsv[:,:,2]>=100)).mean())
+            badge = self.page.hit(context, argv.image, 'CBOpeningSet'+str(i))
+            sets.append(True if badge and cyan >= .6 else False if not badge and cyan < .2 and red >= .6 else None)
+            evidence.append(dict(badge=badge, cyan_border=cyan, red_border=red))
+        auto = [value for value, label in ((True, 'on'), (False, 'off'))
+                if self.page.hit(context, argv.image, 'CBOpening_auto_'+label)]
+        speeds = [speed for speed in (1, 2, 4) if self.page.hit(context, argv.image, 'CBOpeningSpeed'+str(speed))]
+        if any(value is None for value in sets) or len(auto) != 1 or len(speeds) != 1:
+            return None
+        state = dict(unit_ids=ids, sets=sets, auto=auto[0], battle_speed=speeds[0], paused=True,
+            remaining_seconds=seconds[0], zero_damage_verified=True, zero_tp_verified=True,
+            same_frame=True, source='maa', portrait_evidence=members, slot_evidence=evidence,
+            frame_pixel_sha256=hashlib.sha256(argv.image.tobytes()).hexdigest())
+        if mode != 'opening_read' and not all(key in params for key in ('unit_ids', 'sets', 'auto', 'battle_speed')):
+            return None
+        if 'battle_speed' in params and type(params['battle_speed']) is not int:
+            return None
+        if any(key in params and state[key] != params[key] for key in ('unit_ids', 'sets', 'auto', 'battle_speed')):
+            return None
+        # This menu layout is calibrated with the 1280x720 clan HUD; every click is read back while paused.
+        target = [0, 0, 1, 1]
+        if mode == 'opening_auto':
+            if (type(params.get('previous')) is not bool or type(params.get('desired')) is not bool
+                    or params['previous'] is params['desired'] or state['auto'] is not params['previous']):
+                return None
+            target = [634, 473, 6, 6]
+        elif mode == 'opening_set':
+            slot = params.get('slot')
+            if (type(slot) is not int or not 0 <= slot < 5 or type(params.get('previous')) is not bool
+                    or type(params.get('desired')) is not bool or params['previous'] is params['desired']
+                    or sets[slot] is not params['previous']):
+                return None
+            target = [403+116*slot, 311, 6, 6]
+        elif mode == 'opening_speed':
+            target = [830, 473, 6, 6]
+        elif mode == 'opening_resume':
+            if not all(key in params for key in ('unit_ids', 'sets', 'auto', 'battle_speed')):
+                return None
+            target = [442, 574, 6, 6]
+        elif mode != 'opening_read':
+            return None
+        if context.tasker.stopping:
+            return None
+        return self.AnalyzeResult(box=target, detail=state)
+
     def analyze(self, context, argv):
         try:
             if context.tasker.stopping or argv.image is None or argv.image.shape != (720, 1280, 3):
                 return None
             params = json.loads(argv.custom_recognition_param)
             mode = params.get('mode')
+            if str(mode).startswith('opening_'):
+                return self.opening_control(context, argv, params)
             if str(mode).startswith('battle_'):
                 return self.battle_control(context, argv, params)
             if mode in ('support_read', 'support_add'):
@@ -191,6 +268,8 @@ class ClanBattleCharacters(GuideTrialCharacters):
                 elif mode == 'start':
                     self.page.require_team(detail)
                     target = self.page.action(context, argv.image, 'start')
+                    if self.calibration.get('auto_battle') and not self.plan['switches']:
+                        self.page.current_page, self.page.expected_page = 'battle', None
                 elif mode != 'read':
                     return None
             if mode in ('clear', 'add', 'support_add'):

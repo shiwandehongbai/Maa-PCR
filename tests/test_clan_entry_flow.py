@@ -58,9 +58,10 @@ def flow(plan, tmp_path, monkeypatch):
         finally:
             events.append('scope_exit')
 
-    def factory(tasker, directory, *, calibration=None):
+    def factory(tasker, directory, *, calibration=None, battle_speed=1):
         assert tasker is owner
         port = Port(plan)
+        port.battle_speed = battle_speed
         ports.append(port)
         return port
 
@@ -115,6 +116,62 @@ def test_pure_auto_owner_entry_publishes_one_start_and_verified_damage(flow):
     assert intent['operation'] == settled['operation'] == 'clan_battle_simulation'
     assert intent['intent_id'] == settled['intent_id']
     assert settled['damage'] == battle['damage'] and settled['simulation'] is True
+
+
+@pytest.mark.parametrize('speed', [1, 2, 4])
+def test_normal_owner_config_passes_simulation_speed_to_native_port(flow, speed):
+    path = Path(entry.CONFIG_PATH)
+    config = json.loads(path.read_text(encoding='utf-8'))
+    config['clan_battle_speed'] = speed
+    path.write_text(json.dumps(config), encoding='utf-8')
+    success, _, report = flow.invoke()
+    assert success and report['outcome'] == 'complete' and flow.ports[0].battle_speed == speed
+    assert flow.ports[0].starts == 1
+
+
+@pytest.mark.parametrize('speed', [True, 3, 2.0, '4', None])
+def test_invalid_speed_configuration_stops_before_owner_or_input(flow, speed):
+    from pcr_maa.daily import validate_config
+    config = json.loads(Path(entry.CONFIG_PATH).read_text(encoding='utf-8'))
+    config['clan_battle_speed'] = speed
+    with pytest.raises(ValueError, match='倍速'):
+        validate_config(config)
+    assert flow.ports == [] and flow.events == []
+
+
+def test_speed_is_scoped_to_single_simulation_without_axis(flow):
+    from pcr_maa.daily import validate_config
+    config = json.loads(Path(entry.CONFIG_PATH).read_text(encoding='utf-8'))
+    config['clan_battle_speed'] = 4
+    config['clan_battle_simulation']['switches'] = [dict(remaining_seconds=60, auto=False, set_by_unit={})]
+    with pytest.raises(ValueError, match='1 倍速'):
+        validate_config(config)
+    config.pop('clan_battle_simulation')
+    with pytest.raises(ValueError, match='单次模拟'):
+        validate_config(config)
+    assert flow.ports == [] and flow.events == []
+
+
+@pytest.mark.parametrize('verified_audit', [False, True])
+def test_only_audited_finished_simulation_allows_a_fresh_owner_request(flow, verified_audit):
+    intent = dict(state='in_flight', operation='clan_battle_simulation', intent_id='old-attempt',
+        account_id=flow.plan['account_id'], confirmed_for=flow.plan['confirmed_for'])
+    settled = dict(intent, state='settled', outcome='manual_calibration_result', simulation=True,
+        damage=12345678, damage_verified=verified_audit, settings_verified=False,
+        resolution_source='manual_same_battle_saved_frame_replay',
+        result_evidence=dict(intent_id='old-attempt', damage_verified=verified_audit, normal_owner_acceptance=False))
+    with flow.journal.locked() as journal:
+        journal.append(intent)
+        journal.append(settled)
+    success, _, report = flow.invoke()
+    assert success is verified_audit
+    assert flow.journal.events()[:2] == [intent, settled]
+    if verified_audit:
+        assert flow.ports[0].starts == 1 and len(flow.journal.events()) == 4
+        assert flow.journal.events()[2]['intent_id'] != 'old-attempt'
+    else:
+        assert report['steps'][0]['result']['error'] == 'clan_battle_previous_result_unknown'
+        assert len(flow.journal.events()) == 2 and flow.ports[0].starts == 0
 
 
 @pytest.mark.parametrize('stop', [False, True])

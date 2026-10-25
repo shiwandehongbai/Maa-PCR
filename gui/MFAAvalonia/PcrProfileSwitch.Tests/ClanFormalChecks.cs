@@ -176,6 +176,23 @@ internal static class ClanFormalChecks
         finally { configField.SetValue(null, beforeConfig); }
         reopened.ChangeExecutionMode(PcrClanDailyExecution.Simulation);
         Check(reopened.ExecutionConfirmationForStart == reopened.Capture().ConfirmedFor && PcrClanDailyExecution.Read(modePath, out _).ConfirmedFor == null, "return_to_simulation_clears_batch_confirmation");
+        foreach (var speed in new[] { 2, 4, 1 })
+        {
+            reopened.ChangeBattleSpeed(speed);
+            Check(reopened.BattleSpeed == speed && PcrClanDailyExecution.Read(modePath, out _).BattleSpeed == speed, "speed_saved_" + speed);
+            var speedView = new PcrClanGuideView(sourceRoot, guide, config);
+            Check(speedView.BattleSpeed == speed && speedView.ExecutionConfirmationForStart == reopened.Capture().ConfirmedFor, "speed_reopened_without_changing_job_" + speed);
+        }
+        var oldModePath = Path.Combine(root, "old-mode.json");
+        File.WriteAllText(oldModePath, "{\"version\":1,\"mode\":\"simulation\",\"confirmed_for\":null}");
+        Check(PcrClanDailyExecution.Read(oldModePath, out _).BattleSpeed == 1, "old_three_field_mode_defaults_to_one");
+        foreach (var invalidSpeed in new[] { "true", "3", "2.0", "\"4\"", "null" })
+        {
+            File.WriteAllText(oldModePath, "{\"version\":1,\"mode\":\"simulation\",\"confirmed_for\":null,\"battle_speed\":" + invalidSpeed + "}");
+            Reject(() => PcrClanDailyExecution.Read(oldModePath, out _), "reject_speed_" + invalidSpeed);
+        }
+        Reject(() => PcrClanDailyExecution.Save(new() { Mode = PcrClanDailyExecution.FormalDaily, BattleSpeed = 4 }, modePath, PcrClanGuide.Stamp(modePath)), "formal_speed_not_calibrated");
+        Reject(() => PcrClanDailyExecution.Save(new() { BattleSpeed = 3 }, modePath, PcrClanGuide.Stamp(modePath)), "invalid_speed_save");
         File.WriteAllText(Path.Combine(root, "formal-checks.json"), new JObject { ["checks"] = count, ["synthetic"] = true, ["mode_default"] = "simulation", ["formal_request_schema"] = new JArray(request.Properties().Select(p => p.Name)),
             ["formal_start_enabled"] = false, ["owner_created"] = false, ["game_input"] = false, ["mode_save_failures_checked"] = checkSaveFailures, ["daily_request_sha256"] = PcrClanGuide.Stamp(Path.Combine(root, "daily-request.json")) }.ToString(), new UTF8Encoding(false));
         Console.WriteLine($"PCR clan formal configuration checks passed: {count}; default simulation, three-target confirmation, formal Start before allocation blocked, game input=0");

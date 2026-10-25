@@ -7,7 +7,7 @@ import re
 
 INDEX_PATH = 'assets/resource/clan-battle-calibrations/index.json'
 # Updated with reviewed bundle contents, never with a player's local configuration.
-INDEX_SHA256 = '92b5650bfee39216146b7a3c5380533c9ffbbe77b6ba8c7c616e4db23016051b'
+INDEX_SHA256 = '2fb31caadc4976e835b3725665ccb1808fd15b9d8b567da1163ae4a7f8dfa965'
 HEX = re.compile(r'[0-9a-f]{64}')
 ENTRY_KEYS = {'calibration_id', 'server', 'content_version', 'frame_size', 'profile_path', 'profile_sha256'}
 CAPABILITIES = {'simulation', 'timed', 'formal', 'carryover'}
@@ -106,7 +106,7 @@ def load_calibration(plan, *, root=None, capability='simulation'):
     profile_options = {'timing_measurements'}
     profile_keys = PROFILE_KEYS
     if type(calibration) is dict and calibration.get('version') == 2:
-        profile_options |= {'boss_targets', 'phase_labels', 'daily', 'support_modes'}
+        profile_options |= {'boss_targets', 'phase_labels', 'daily', 'support_modes', 'auto_battle'}
         if calibration.get('support_modes') == ['none']:
             profile_keys = PROFILE_KEYS - {'support'}
             profile_options.add('support')
@@ -126,6 +126,10 @@ def load_calibration(plan, *, root=None, capability='simulation'):
         raise RuntimeError('clan_battle_calibration_capability_missing:timed')
     calibration = deepcopy(calibration)
     sample_sections = [calibration]
+    if 'auto_battle' in calibration:
+        if type(calibration['auto_battle']) is not dict:
+            raise ValueError('clan_battle_auto_calibration_invalid')
+        sample_sections.append(calibration['auto_battle'])
     if 'daily' in calibration:
         daily = calibration['daily']
         if type(daily) is not dict:

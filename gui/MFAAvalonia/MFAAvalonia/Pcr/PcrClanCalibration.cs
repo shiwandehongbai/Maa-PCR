@@ -10,11 +10,11 @@ using Newtonsoft.Json.Linq;
 
 namespace MFAAvalonia.Pcr;
 
-public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabilities, string? Error, bool OwnUnitsOnly = false, bool AccountStars = false)
+public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabilities, string? Error, bool OwnUnitsOnly = false, bool AccountStars = false, IReadOnlySet<int>? AutoBattleSpeeds = null)
 {
     public const string IndexPath = "assets/resource/clan-battle-calibrations/index.json";
     // Kept with the reviewed Python calibration loader when the bundled index changes.
-    public const string IndexSha256 = "92b5650bfee39216146b7a3c5380533c9ffbbe77b6ba8c7c616e4db23016051b";
+    public const string IndexSha256 = "2fb31caadc4976e835b3725665ccb1808fd15b9d8b567da1163ae4a7f8dfa965";
     private static readonly string[] Names = { "simulation", "timed", "formal", "carryover" };
     private static readonly string[] Labels = { "模拟战", "秒数轴", "正式三刀", "补偿刀" };
     public bool Supports(string capability) => Error == null && Capabilities.Contains(capability);
@@ -23,6 +23,8 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
             ? name == "timed" ? "测量资料齐全，开始前核对时限" : Version == 1 && name == "simulation" ? "已校准（仅全程 AUTO、无切换）" : "已校准" : "缺少校准"))))
         + (OwnUnitsOnly ? "。仅全自有队伍可用；借人身份尚未校准。" : "")
         + (AccountStars ? " 出战星级使用24小时内的已确认账号资料，调整后须重新同步。" : "");
+    public string AutoBattleSummary => AutoBattleSpeeds == null ? "开场设置与倍速：缺少校准。"
+        : "开场 SET／AUTO 可逐角色设置；无战中切换时支持 " + string.Join("／", AutoBattleSpeeds.Order()) + " 倍速。";
 
     public static PcrClanCalibration Read(string repository, string? contentVersion) => Read(repository, contentVersion, IndexSha256);
 
@@ -78,14 +80,15 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
             if (starSource != null && ((int?)profile["version"] != 2 || !ownUnitsOnly || (string?)starSource != "account_snapshot"))
                 throw new InvalidDataException("星级资料来源无效。[clan_battle_calibration_star_source_invalid]");
             VerifyDependencies(root, profile, capabilities, ownUnitsOnly);
-            return new(version == 1 ? 1 : (int)profile["version"]!, capabilities, null, ownUnitsOnly, starSource != null);
+            return new(version == 1 ? 1 : (int)profile["version"]!, capabilities, null, ownUnitsOnly, starSource != null,
+                profile["auto_battle"] is JObject autoBattle ? autoBattle["speeds"]!.Values<int>().ToHashSet() : null);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException
             or InvalidCastException or FormatException or OverflowException or Newtonsoft.Json.JsonException)
         { return new(0, new HashSet<string>(StringComparer.Ordinal), ex.Message); }
     }
 
-    public void Require(JObject plan, string capability)
+    public void Require(JObject plan, string capability, int battleSpeed = 1)
     {
         if (!Names.Contains(capability)) throw new InvalidDataException("未知会战校准能力。");
         if (!Supports(capability)) throw new InvalidOperationException((Error ?? "缺少" + Labels[Array.IndexOf(Names, capability)] + "校准")
@@ -96,6 +99,10 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
             throw new InvalidOperationException("当前内容版本缺少秒数轴校准。[clan_battle_calibration_capability_missing:timed]");
         if (OwnUnitsOnly && (string?)plan["support_mode"] != "none")
             throw new InvalidOperationException("仅全自有队伍可用；借人身份尚未校准。[clan_battle_support_mode_uncalibrated]");
+        if (battleSpeed is not (1 or 2 or 4)) throw new InvalidOperationException("会战倍速无效。[clan_battle_speed_invalid]");
+        if (battleSpeed != 1 && (capability != "simulation" || plan["switches"] is not JArray { Count: 0 }
+                || AutoBattleSpeeds?.Contains(battleSpeed) != true))
+            throw new InvalidOperationException("此作业或内容版本尚未校准所选倍速；秒数轴只支持 1 倍速。[clan_battle_auto_speed_uncalibrated]");
         if (AccountStars) RequireAccountStars(plan);
     }
 
@@ -149,6 +156,35 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
             || !ownUnitsOnly && profile["support"] is not JObject)
             throw new InvalidDataException("校准档案缺少必填结构。[clan_battle_calibration_not_reviewed_device_profile]");
         var sections = new List<JObject> { profile };
+        if (profile.ContainsKey("auto_battle"))
+        {
+            if ((int?)profile["version"] != 2 || profile["auto_battle"] is not JObject autoBattle
+                || !Keys(autoBattle, "speeds", "opening_guards", "paused_guards", "auto_on", "auto_off", "speed", "set_badge", "empty_tp", "samples")
+                || autoBattle["speeds"] is not JArray { Count: > 0 } speeds || !speeds.Any(v => v.Type == JTokenType.Integer && (int)v == 1)
+                || speeds.Any(v => v.Type != JTokenType.Integer || (int)v is not (1 or 2 or 4)) || speeds.Values<int>().Distinct().Count() != speeds.Count
+                || autoBattle["opening_guards"] is not JArray { Count: 3 } || autoBattle["paused_guards"] is not JArray { Count: 4 }
+                || autoBattle["speed"] is not JObject speed || !Keys(speed, "1", "2", "4")
+                || new[] { "auto_on", "auto_off", "set_badge", "empty_tp" }.Any(key => autoBattle[key] is not JObject))
+                throw new InvalidDataException("开场设置校准无效。[clan_battle_auto_calibration_invalid]");
+            if (autoBattle["paused_guards"]![2] is not JObject clock || (string?)clock["recognition"] != "TemplateMatch"
+                || clock["template"] is not JArray { Count: 2 } || clock["sha256"] is not JArray { Count: 2 })
+                throw new InvalidDataException("开场时钟校准无效。[clan_battle_auto_clock_calibration_invalid]");
+            if (speeds.Values<int>().Contains(2) && profile["pages"]?["battle"]?["speed_two"] is not JObject
+                || speeds.Values<int>().Contains(4) && profile["pages"]?["battle"]?["speed_four"] is not JObject)
+                throw new InvalidDataException("所选倍速缺少战斗画面校准。[clan_battle_auto_speed_calibration_missing]");
+            foreach (var marker in ((JArray)autoBattle["opening_guards"]!).Concat((JArray)autoBattle["paused_guards"]!)
+                .Concat(speed.Properties().Select(p => p.Value)).Concat(new[] { autoBattle["auto_on"]!, autoBattle["auto_off"]!, autoBattle["set_badge"]!, autoBattle["empty_tp"]! }))
+            {
+                if (marker is not JObject node || (string?)node["recognition"] is not ("OCR" or "TemplateMatch")
+                    || node["roi"] is not JArray { Count: 4 } roi || roi.Any(v => v.Type != JTokenType.Integer)
+                    || (int)roi[0] < 0 || (int)roi[1] < 0 || (int)roi[2] <= 0 || (int)roi[3] <= 0
+                    || (long)roi[0] + (long)roi[2] > 1280 || (long)roi[1] + (long)roi[3] > 720
+                    || (string?)node["recognition"] == "OCR" && (node["expected"]?.Type != JTokenType.String
+                        || !((string)node["expected"]!).StartsWith('^') || !((string)node["expected"]!).EndsWith('$')))
+                    throw new InvalidDataException("开场设置页面锚点无效。[clan_battle_auto_calibration_invalid]");
+            }
+            sections.Add(autoBattle);
+        }
         if (profile.ContainsKey("daily"))
         {
             if (profile["daily"] is not JObject daily) throw new InvalidDataException("正式校准结构无效。[clan_battle_daily_calibration_invalid]");

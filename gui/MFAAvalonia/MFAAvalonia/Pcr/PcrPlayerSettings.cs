@@ -256,6 +256,10 @@ public partial class PcrPlayerSettings : ObservableObject
         {
             if (GamePackage != "com.bilibili.priconne") throw new InvalidOperationException("会战模拟首版仅支持国服 B 站。");
             config["clan_battle_simulation"] = PcrClanGuide.CreatePlan(repository);
+            var clanSpeed = PcrClanDailyExecution.Read(PcrClanDailyExecution.StatePath, out _).BattleSpeed;
+            PcrClanCalibration.Read(repository, (string?)config["clan_battle_simulation"]?["content_version"])
+                .Require((JObject)config["clan_battle_simulation"]!, "simulation", clanSpeed);
+            config["clan_battle_speed"] = clanSpeed;
             if ((string?)config["clan_battle_simulation"]?["confirmed_for"] != vm.PcrClanGuideConfirmationForStart())
                 throw new InvalidOperationException("当前会战作业与已保存确认不一致，请重新核对并保存后开始。");
         }

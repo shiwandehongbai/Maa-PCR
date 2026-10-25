@@ -38,6 +38,7 @@ public sealed class PcrClanGuideView : UserControl
         return (value, stamp);
     };
     private readonly ComboBox executionMode = new() { ItemsSource = new[] { new Choice(PcrClanDailyExecution.Simulation, "单次模拟"), new Choice(PcrClanDailyExecution.FormalDaily, "正式三刀") }, MinWidth = 260 };
+    private readonly ComboBox battleSpeed = new() { ItemsSource = new[] { new Choice("1", "1 倍速"), new Choice("2", "2 倍速"), new Choice("4", "4 倍速") }, MinWidth = 120 };
     private readonly TextBlock executionSummary = Note("");
     private readonly TextBlock calibrationSummary = Note("");
     private readonly StackPanel formalControls = new() { Spacing = 6, IsVisible = false };
@@ -76,6 +77,7 @@ public sealed class PcrClanGuideView : UserControl
     private readonly TextBlock accountNote = Note("");
     public string StatusText => status.Text ?? "";
     public string ExecutionMode => executionLoaded ? execution.Mode : "unavailable";
+    public int BattleSpeed => execution.BattleSpeed;
     public string ExecutionSummaryText => executionSummary.Text ?? "";
     public event EventHandler? ExecutionModeChanged;
     public event EventHandler? AccountRefreshRequested;
@@ -102,7 +104,8 @@ public sealed class PcrClanGuideView : UserControl
         var guide = new StackPanel { Spacing = 10 };
         guide.Children.Add(new TextBlock { Text = "公会战", FontSize = 22, FontWeight = FontWeight.SemiBold });
         Avalonia.Automation.AutomationProperties.SetName(executionMode, "会战执行模式");
-        guide.Children.Add(Buttons(Note("执行模式"), executionMode));
+        Avalonia.Automation.AutomationProperties.SetName(battleSpeed, "模拟战倍速");
+        guide.Children.Add(Buttons(Note("执行模式"), executionMode, Note("模拟战倍速"), battleSpeed));
         guide.Children.Add(executionSummary);
         guide.Children.Add(calibrationSummary);
         guide.Children.Add(selectionSummary);
@@ -169,6 +172,7 @@ public sealed class PcrClanGuideView : UserControl
         auto.SelectionChanged += (_, _) => Invalidate(); support.SelectionChanged += (_, _) => { supportRole.IsVisible = (support.SelectedItem as Choice)?.Value == "specified"; Invalidate(); if (!displaying) UpdateCalibrationSummary(); };
         Watch(supportRole); Watch(switches); Watch(video);
         executionMode.SelectionChanged += (_, _) => { if (!displaying && executionMode.SelectedItem is Choice selected) GuardExecution(() => ChangeExecutionMode(selected.Value)); };
+        battleSpeed.SelectionChanged += (_, _) => { if (!displaying && battleSpeed.SelectedItem is Choice selected) GuardExecution(() => ChangeBattleSpeed(int.Parse(selected.Value, CultureInfo.InvariantCulture))); };
         foreach (var (control, name) in new (Control, string)[] { (video, "公会战视频链接"), (page, "视频分 P"), (package, "视频套餐"), (teams, "视频队伍"), (accounts, "共用账号缓存"), (auto, "开场 AUTO"), (support, "支援方式"), (supportRole, "指定支援角色"), (switches, "剩余秒数 SET AUTO 切换轴") })
             Avalonia.Automation.AutomationProperties.SetName(control, name);
         DetachedFromVisualTree += (_, _) => { fetchCancel?.Cancel(); ReleaseImages(); };
@@ -456,7 +460,7 @@ public sealed class PcrClanGuideView : UserControl
         }
         catch (Exception) { /* Invalid account data is explained by the account panel. */ }
         var calibration = PcrClanCalibration.Read(repository, version);
-        calibrationSummary.Text = "当前账号的随包校准：" + calibration.Summary;
+        calibrationSummary.Text = "当前账号的随包校准：" + calibration.Summary + " " + calibration.AutoBattleSummary;
         if (calibration.OwnUnitsOnly && (support.SelectedItem as Choice)?.Value is "qsjs" or "specified")
             calibrationSummary.Text += " 当前队伍选择了支援，开始任务前会停止，请先改用已核对的全自有队伍。";
     }
@@ -484,7 +488,23 @@ public sealed class PcrClanGuideView : UserControl
         try
         {
             if (!executionLoaded) throw new InvalidOperationException("会战模式未成功读取，禁止覆盖。请重新打开。");
-            var value = new PcrClanDailyExecutionDocument { Mode = mode };
+            var value = new PcrClanDailyExecutionDocument { Mode = mode, BattleSpeed = mode == PcrClanDailyExecution.FormalDaily ? 1 : execution.BattleSpeed };
+            executionHash = PcrClanDailyExecution.Save(value, PcrClanDailyExecution.PathFor(configDirectory), executionHash, ReadSavedModeStamp); execution = value;
+        }
+        catch
+        {
+            executionLoaded = false; SetExecutionDisplay(); ExecutionModeChanged?.Invoke(this, EventArgs.Empty);
+            throw;
+        }
+        SetExecutionDisplay(); ExecutionModeChanged?.Invoke(this, EventArgs.Empty);
+    }
+    public void ChangeBattleSpeed(int speed)
+    {
+        try
+        {
+            if (!executionLoaded || execution.Mode != PcrClanDailyExecution.Simulation)
+                throw new InvalidOperationException("请在单次模拟模式设置倍速。");
+            var value = new PcrClanDailyExecutionDocument { Mode = execution.Mode, BattleSpeed = speed };
             executionHash = PcrClanDailyExecution.Save(value, PcrClanDailyExecution.PathFor(configDirectory), executionHash, ReadSavedModeStamp); execution = value;
         }
         catch
@@ -497,11 +517,16 @@ public sealed class PcrClanGuideView : UserControl
     private void SetExecutionDisplay()
     {
         var before = displaying; displaying = true;
-        try { executionMode.SelectedItem = executionLoaded ? ((IEnumerable<Choice>)executionMode.ItemsSource!).Single(c => c.Value == execution.Mode) : null; }
+        try
+        {
+            executionMode.SelectedItem = executionLoaded ? ((IEnumerable<Choice>)executionMode.ItemsSource!).Single(c => c.Value == execution.Mode) : null;
+            battleSpeed.SelectedItem = executionLoaded ? ((IEnumerable<Choice>)battleSpeed.ItemsSource!).Single(c => c.Value == execution.BattleSpeed.ToString(CultureInfo.InvariantCulture)) : null;
+            battleSpeed.IsEnabled = executionLoaded && execution.Mode == PcrClanDailyExecution.Simulation;
+        }
         finally { displaying = before; }
         formalControls.IsVisible = executionLoaded && execution.Mode == PcrClanDailyExecution.FormalDaily;
         executionSummary.Text = !executionLoaded ? "会战模式保存未完成，执行确认已取消；编辑内容保留，请重新打开后核对实际保存的模式。"
-            : execution.Mode == PcrClanDailyExecution.Simulation ? "当前为单次模拟。选作业 → 核对阵容与操作 → 保存 → 开始任务。已击败的 BOSS 仍可选择模拟战。"
+            : execution.Mode == PcrClanDailyExecution.Simulation ? $"当前为单次模拟，{execution.BattleSpeed} 倍速。开场前请临时关闭游戏的战斗设置继承，结束后恢复原选项。程序暂停核对五人 SET／AUTO 和倍速后继续；含战中切换的秒数轴仅支持 1 倍速。已击败的 BOSS 仍可选择模拟战。"
             : "当前为正式三刀。请预览完整三目标后单独核对保存；只有对应校准可用时才能开始。";
         UpdateCalibrationSummary();
     }

@@ -228,6 +228,12 @@ def _settings(result, plan):
     if type(evidence) is not dict or evidence.get('settings_verified') is not True:
         return False
     opening = _controls(evidence.get('opening_evidence'), plan)
+    if 'battle_speed' in evidence and (type(evidence['battle_speed']) is not int
+            or evidence['battle_speed'] not in (1, 2, 4) or opening.get('battle_speed') != evidence['battle_speed']
+            or type(opening.get('battle_speed')) is not int
+            or type(evidence.get('observation', {}).get('battle_speed')) is not int
+            or evidence.get('observation', {}).get('battle_speed') != evidence['battle_speed']):
+        return False
     if (opening['auto'] != plan['auto']
             or {str(uid): value for uid, value in zip(opening['unit_ids'], opening['sets'])} != plan['set_by_unit']):
         return False
@@ -284,12 +290,21 @@ def execute_switches(port, plan, initial=None):
     desired, auto, actions, switch_evidence = dict(plan['set_by_unit']), plan['auto'], [], []
     state = _controls(port.read_battle_settings(initial), plan)
     calibration = getattr(port, 'calibration', None)
+    paused = (getattr(port, 'opening_paused', False) is True and not plan['switches']
+        and type(calibration) is dict and bool(calibration.get('auto_battle')) and state.get('paused') is True)
+    opening_second = state.get('remaining_seconds')
+    if getattr(port, 'opening_paused', False) and (not paused or type(opening_second) is not int or opening_second not in (90, 89)
+            or state.get('zero_damage_verified') is not True or state.get('zero_tp_verified') is not True
+            or type(state.get('battle_speed')) is not int or state['battle_speed'] not in (1, 2, 4)):
+        raise RuntimeError('clan_battle_opening_not_verified')
+    opening_speed = state.get('battle_speed')
     if type(calibration) is dict and calibration.get('version') == 2:
         start_seconds = getattr(port, 'start_seconds', 90)
         if (not _integer(start_seconds, 1, 90) or state.get('same_frame') is not True
                 or type(state.get('remaining_seconds')) is not int
-                or state['remaining_seconds'] != start_seconds or state['auto'] != auto
-                or {str(uid): value for uid, value in zip(state['unit_ids'], state['sets'])} != desired):
+                or not paused and state['remaining_seconds'] != start_seconds
+                or not paused and (state['auto'] != auto
+                    or {str(uid): value for uid, value in zip(state['unit_ids'], state['sets'])} != desired)):
             raise RuntimeError('clan_battle_opening_not_verified')
 
     def check_window(second):
@@ -310,6 +325,11 @@ def execute_switches(port, plan, initial=None):
             check_window(second)
             expected = dict(zip(state['unit_ids'], state['sets']))
             reading = _controls(port.toggle_auto(state['auto'], target_auto, **toggle_options), plan)
+            if paused and (reading.get('paused') is not True or reading.get('remaining_seconds') != opening_second
+                    or reading.get('zero_damage_verified') is not True or reading.get('zero_tp_verified') is not True
+                    or reading.get('same_frame') is not True or type(reading.get('battle_speed')) is not int
+                    or reading['battle_speed'] != opening_speed):
+                raise RuntimeError('clan_battle_opening_not_verified')
             if reading['auto'] != target_auto or dict(zip(reading['unit_ids'], reading['sets'])) != expected:
                 raise RuntimeError('clan_battle_controls_not_applied')
             check_window(second)
@@ -327,6 +347,11 @@ def execute_switches(port, plan, initial=None):
             expected = dict(zip(state['unit_ids'], state['sets']))
             expected[uid] = target_sets[str(uid)]
             reading = _controls(port.toggle_set(slot, state['sets'][slot], target_sets[str(uid)], **toggle_options), plan)
+            if paused and (reading.get('paused') is not True or reading.get('remaining_seconds') != opening_second
+                    or reading.get('zero_damage_verified') is not True or reading.get('zero_tp_verified') is not True
+                    or reading.get('same_frame') is not True or type(reading.get('battle_speed')) is not int
+                    or reading['battle_speed'] != opening_speed):
+                raise RuntimeError('clan_battle_opening_not_verified')
             if reading['auto'] != state['auto'] or dict(zip(reading['unit_ids'], reading['sets'])) != expected:
                 raise RuntimeError('clan_battle_controls_not_applied')
             check_window(second)
@@ -394,8 +419,15 @@ def execute_simulation(port, journal, plan):
             if any(result.get(key) != intent.get(key) for key in ('intent_id', 'operation', 'account_id', 'confirmed_for')):
                 raise ValueError('clan_battle_ledger_binding_invalid')
             known_not_sent = result.get('input_execution') == 'not_sent' and result.get('consumption_sent') is False
-            if not known_not_sent and not (result.get('outcome') == 'simulated' and result.get('damage_verified') is True
-                    and result.get('settings_verified') is True
+            audited = (result.get('outcome') == 'manual_calibration_result'
+                and result.get('resolution_source') == 'manual_same_battle_saved_frame_replay'
+                and type(result.get('result_evidence')) is dict and bool(result['result_evidence'])
+                and result['result_evidence'].get('intent_id') == intent['intent_id']
+                and result['result_evidence'].get('damage_verified') is True
+                and result['result_evidence'].get('normal_owner_acceptance') is False)
+            # An audited finished simulation can precede a fresh request; its failed settings stay failed.
+            if not known_not_sent and not ((result.get('outcome') == 'simulated' and result.get('settings_verified') is True or audited)
+                    and result.get('damage_verified') is True
                     and _integer(result.get('damage'), 0, 10**15) and result.get('simulation') is True):
                 report['error'] = 'clan_battle_previous_result_unknown'
                 return report
@@ -468,7 +500,8 @@ def run_owned(tasker, config, directory):
     except (ValueError, RuntimeError, OSError) as exc:
         result = dict(_simulation_report(plan), error=str(exc) or type(exc).__name__)
     else:
-        result = execute_simulation(NativeClanBattle(tasker, directory, calibration=calibration),
+        options = {'battle_speed': config['clan_battle_speed']} if 'clan_battle_speed' in config else {}
+        result = execute_simulation(NativeClanBattle(tasker, directory, calibration=calibration, **options),
             Journal(ROOT / '.runtime/clan-battle-simulation-work/ledger'), plan)
     complete = (result['outcome'] == 'simulated' and result['damage_verified']
         and result['settings_verified'] and result['return_verified'] and not result.get('error'))
