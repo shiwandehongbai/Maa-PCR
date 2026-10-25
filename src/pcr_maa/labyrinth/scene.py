@@ -29,6 +29,8 @@ _OCR={
  'NO_REWARD_BODY':(r'^无法获得报酬[。.]?$',[510,320,270,80]),
  'NEXT':(r'^下一步$',[350,600,890,110]),
  'RETRY':(r'^重新挑战$',[936,623,288,74]),
+ 'REVIVE_NEXT':(r'^下一步$',[936,623,288,74]),
+ 'DAMAGE_REPORT':(r'^伤害报告$',[1020,25,230,60]),
  'FREE_ROLE_TITLE':(r'^角色选择$',[470,25,360,60]),
  'FREE_ROLE_PROMPT':(r'^邀请选择的角色成为伙伴[。.]?$',[410,85,490,50]),
  'CHEST_ANIMATION':(r'^获得宝箱$',[430,25,420,120]),
@@ -106,6 +108,7 @@ _ACTIONS={
  'advance_character_animation':(frozenset(('event_animation','unknown')),'EVENT_ANIMATION_SKIP'),
  'advance_final_unknown':(frozenset(('unknown',)),'advance'),
  'retry_battle':(frozenset(('battle_defeat',)),'RETRY'),
+ 'advance_revived_battle':(frozenset(('battle_defeat',)),'REVIVE_NEXT'),
  'advance_final_animation':(frozenset(('clear_congratulations','clear_reward_animation','clear_chest_animation')),'advance'),
  'challenge':(frozenset(('normal_challenge','ex_challenge','boss_challenge')),'BATTLE_CHALLENGE_BUTTON'),
  'start_battle':(frozenset(('team',)),'START_WORD'),
@@ -209,6 +212,20 @@ def _probe_scope(kinds):
     kinds={kinds} if isinstance(kinds,str) else set(kinds)
     return sorted((kinds & set(_RULES)) | {'battle','team','map','move_confirmation','home'})
 
+def _revive_layout(image,anchors):
+    # Pinned upstream two-button layout: lit report, blue title/next, no pale End.
+    if (not any(anchors.get(key,{}).get('score',0)>=.8 for key in ('DEFEAT','BATTLE_DEFEAT_TITLE'))
+            or any(anchors.get(key,{}).get('score',0)<.8 for key in ('DAMAGE_REPORT','REVIVE_NEXT'))
+            or 'RETRY' in anchors):return False
+    def coverage(x,y,w,h,blue=False):
+        pixels=image[y:y+h:4,x:x+w:4,:3].astype('int16')
+        b,g,r=pixels[:,:,0],pixels[:,:,1],pixels[:,:,2]
+        matches=(b>=150)&(b-r>=35)&(b-g>=10) if blue else (r>=205)&(g>=205)&(b>=205)
+        return float(matches.mean())
+    return (coverage(493,26,300,87,True)>=.18 and coverage(986,643,174,37,True)>=.60
+        and coverage(1066,36,147,31)>=.48 and coverage(673,643,174,37)<.60)
+
+
 class SceneRecognition(CustomRecognition):
     def __init__(self,stopped=None):
         super().__init__();self.stopped=stopped;self.specs=_anchors()
@@ -236,7 +253,8 @@ class SceneRecognition(CustomRecognition):
             return anchors.get(key)
         if scope is None:
             for key in self.specs:read(key)
-            for key in _OCR:read(key)
+            for key in _OCR:
+                if key not in ('REVIVE_NEXT','DAMAGE_REPORT'):read(key)
         else:
             read('DATE');read('DISCONNECT')
             for page in scope:
@@ -269,6 +287,11 @@ class SceneRecognition(CustomRecognition):
             recognition_scope='full_scene' if scope is None else 'owned_transition',
             score_method='Maa TemplateMatch method 5 NCC / OCR; not probability')
         if event is not None:payload['event']=event
+        if kind=='battle_defeat':
+            read('DAMAGE_REPORT');read('REVIVE_NEXT')
+            payload['battle_failure_layout']='two_button' if _revive_layout(argv.image,anchors) else None
+        if guard.get('battle_failure_layout') is not None and payload.get('battle_failure_layout')!=guard['battle_failure_layout']:
+            return self.AnalyzeResult(None,dict(kind=kind,payload=payload))
         if kind=='team' and all(k in anchors for k in ('BOSS_MEMBER','BOSS_TAB1','BOSS_TAB2','BOSS_TAB3')):
             payload['team_mode']='boss';payload['member_label']=anchors['BOSS_MEMBER']['text'].lstrip('·◆◇');payload['member_label_raw']=anchors['BOSS_MEMBER']['text']
         if 'AREA' in anchors and re.fullmatch('[1-5]',anchors['AREA'].get('text','')):payload['area']=int(anchors['AREA']['text'])
@@ -352,6 +375,8 @@ def perform_scene_action(tasker,scene,action,*,stopped=None,timings=None,target=
         found=next((n for n in receipt.get('nodes',[]) if n.get('name')=='LabySceneActionOnce' and n.get('completed') is True),None)
         if receipt.get('native_ok') is not True or found is None or found.get('action',{}).get('success') is not True:raise BatchStopped('scene_input_unknown')
         return receipt
+    if action=='advance_revived_battle' and scene.payload.get('battle_failure_layout')!='two_button':
+        raise native.NativeInputNotSent(dict(input_execution='not_sent',pre_input_validation_failed=True,reason='battle_failure_layout_unknown'))
     control=scene.payload.get('controls',{}).get(_ACTIONS[action][1])
     if type(control) is not dict or not _box(control.get('box')) or not _score(control.get('score')):raise native.NativeInputNotSent(dict(input_execution='not_sent',pre_input_validation_failed=True,reason='scene_action_control_unknown'))
     box=control['box'];key=control['anchor'];nodes={};guard_kind=scene.kind
@@ -383,7 +408,7 @@ def perform_scene_action(tasker,scene,action,*,stopped=None,timings=None,target=
         nodes['LabySceneActionControl']=dict(recognition='Or',
             any_of=[f'LabySceneTemplate_{key}_{i}' for i in range(len(spec['rois']))],
             action='DoNothing',next=[])
-    nodes['LabySceneActionGuard']=dict(recognition='Custom',custom_recognition=NAME,custom_recognition_param=dict(kind=guard_kind,control_logical=_ACTIONS[action][1],control_anchor=key,**({'probe_kinds':scene.payload['probe_kinds']} if scene.payload.get('probe_kinds') is not None else {}),**({'node_type':scene.payload['node_type']} if action=='confirm_move' and scene.payload.get('node_type') is not None else {})),roi=[0,0,1280,720],action='DoNothing',next=[])
+    nodes['LabySceneActionGuard']=dict(recognition='Custom',custom_recognition=NAME,custom_recognition_param=dict(kind=guard_kind,control_logical=_ACTIONS[action][1],control_anchor=key,**({'battle_failure_layout':'two_button'} if action=='advance_revived_battle' else {}),**({'probe_kinds':scene.payload['probe_kinds']} if scene.payload.get('probe_kinds') is not None else {}),**({'node_type':scene.payload['node_type']} if action=='confirm_move' and scene.payload.get('node_type') is not None else {})),roi=[0,0,1280,720],action='DoNothing',next=[])
     nodes['LabySceneActionOnce']=dict(recognition='And',all_of=['LabySceneActionControl','LabySceneActionGuard'],action='Click',target=([640,360,1,1] if action=='advance_character_animation' else [640,360,1,1] if action=='advance_final_animation'
             and scene.kind!='clear_reward_animation' else [640,645,1,1] if action=='advance_final_animation' else True),
         max_hit=1,next=[],timeout=3000,pre_delay=0,post_delay=0)

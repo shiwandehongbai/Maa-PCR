@@ -782,8 +782,10 @@ class MaaRunActions:
                     self.batch.checkpoint();now=time.monotonic()
                     if now>=deadline:raise BatchStopped('battle_timeout')
                     if scene.kind in ('battle_victory','battle_defeat','boss_summary'):
+                        revived=scene.kind=='battle_defeat' and scene.payload.get('battle_failure_layout')=='two_button'
+                        if revived:self.battle_result_scene=scene
                         return dict(verified=True,enter_id=enter,block_id=block,
-                            outcome='defeated' if scene.kind=='battle_defeat' else 'won',native=scene.native)
+                            outcome='revived' if revived else 'defeated' if scene.kind=='battle_defeat' else 'won',native=scene.native)
                     recovered=_owned_boss_summary_scene(scene,node)
                     if recovered is not None:
                         self.battle_result_scene=recovered
@@ -876,7 +878,7 @@ class AutoplayRunner:
         try:clicked=batch.transaction(operation or action,expected,send)
         except BatchStopped as error:
             cause=error.__cause__
-            if (action not in ('close_reward','settlement_next','advance_final_animation')
+            if (action not in ('close_reward','settlement_next','advance_final_animation','advance_revived_battle')
                     or error.args!=('native_input_not_sent',)
                     or not isinstance(cause,native.NativeInputNotSent)
                     or cause.receipt.get('native_evidence',{}).get('entry')!='LabySceneActionOnce'):
@@ -1065,7 +1067,9 @@ class AutoplayRunner:
         recovered=getattr(self.actions,'battle_result_scene',None)
         if recovered is None:return self._observe(batch,route,timeout=30)
         self.actions.battle_result_scene=None;batch.checkpoint()
-        if type(recovered) is not Scene or recovered.kind!='boss_summary' or node.block_type!=8:
+        if type(recovered) is not Scene:raise BatchStopped('battle_result_unknown')
+        revived=recovered.kind=='battle_defeat' and recovered.payload.get('battle_failure_layout')=='two_button'
+        if not revived and (recovered.kind!='boss_summary' or node.block_type!=8):
             raise BatchStopped('battle_result_unknown')
         self.last_scene=recovered
         return recovered
@@ -1182,11 +1186,18 @@ class AutoplayRunner:
                         self.last_confirmed_defeat=(node.block_id,scene)
                         continue
                     self.owned_defeat=False
-                    if result.get('outcome')!='won':raise BatchStopped('battle_result_unknown')
+                    revived=result.get('outcome')=='revived'
+                    if revived:
+                        scene=self._battle_following_scene(batch,route,node)
+                        if scene.kind!='battle_defeat' or scene.payload.get('battle_failure_layout')!='two_button':
+                            raise BatchStopped('battle_result_unknown')
+                        scene=self._do(batch,route,scene,'advance_revived_battle',{'item_reward'},extra=dict(block_id=node.block_id))
+                    elif result.get('outcome')!='won':raise BatchStopped('battle_result_unknown')
                     self.cursor.node_finished=True
                     if node.block_type==8 and self.cursor.index==len(route.nodes)-1:
                         self.cursor.final_boss_won=True;self.cursor.final_settlement_phase='before_score'
-                    scene=self._battle_following_scene(batch,route,node);continue
+                    if not revived:scene=self._battle_following_scene(batch,route,node)
+                    continue
                 if scene.kind=='battle':raise BatchStopped('battle_without_owned_start')
                 if scene.kind in ('battle_victory','boss_summary'):
                     if not self.cursor.node_finished:raise BatchStopped('battle_result_without_owned_start')

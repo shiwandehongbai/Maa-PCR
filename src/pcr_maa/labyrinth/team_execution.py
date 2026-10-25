@@ -132,7 +132,7 @@ class MaaTeam:
             return self.stamp(operation_id=oid,**fields,native=receipt,input_native=receipt,input_action_verified=True)
         clicked=batch.transaction('battle_start',fields,send)
         batch.checkpoint();result=read_result(enter_id,block_id)
-        if not isinstance(result,dict) or result.get('verified') is not True or result.get('outcome') not in ('won','defeated') or result.get('enter_id')!=enter_id or result.get('block_id')!=block_id:raise BatchStopped('battle_result_unknown')
+        if not isinstance(result,dict) or result.get('verified') is not True or result.get('outcome') not in ('won','defeated','revived') or result.get('enter_id')!=enter_id or result.get('block_id')!=block_id:raise BatchStopped('battle_result_unknown')
         return batch.observation(self.stamp(operation_id=clicked['operation_id'],**fields,battle_finished=True,outcome=result['outcome'],native=result,input_native=clicked['input_native']),**fields)
 
 
@@ -280,5 +280,5 @@ class MaaTeam:
             return self.stamp(operation_id=oid,**fields,native=receipt,input_native=receipt,input_action_verified=True)
         clicked=batch.transaction('battle_start',fields,send)
         batch.checkpoint();result=read_result(enter_id,block_id)
-        if not isinstance(result,dict) or result.get('verified') is not True or result.get('outcome') not in ('won','defeated') or result.get('enter_id')!=enter_id or result.get('block_id')!=block_id:raise BatchStopped('battle_result_unknown')
+        if not isinstance(result,dict) or result.get('verified') is not True or result.get('outcome') not in ('won','defeated','revived') or result.get('enter_id')!=enter_id or result.get('block_id')!=block_id:raise BatchStopped('battle_result_unknown')
         return batch.observation(self.stamp(operation_id=clicked['operation_id'],**fields,battle_finished=True,outcome=result['outcome'],native=result,input_native=clicked['input_native']),**fields)

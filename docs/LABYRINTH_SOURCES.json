@@ -44,8 +44,15 @@
           "sha256": "666522d3bf9a49d89223645fb66096ede579aee6082bdd67a723728fbf2c1226"
         }
       ],
-      "local_sha256": "84e3fa5adee1b32614ac1d6687728a8ebd3bf06ed247c7c9c8a87ab74ce8e612",
-      "production_runtime": true
+      "local_sha256": "578162ec9e484905361722f4081435086f82be014a88a22adb67c5bd3a0db9a7",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthShopPolicy.kt",
+          "sha256": "f8dac2f675c70fa3bc77dd853cfd9b26b6bd8e357e22f084d5a4a7c23592e372"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/roles.py",
@@ -204,9 +211,21 @@
           "sha256": "03f9a2f1d572fd8164e33ddf7b93f4b10b0d12dae91bfd1ee2b86470dac1cf57"
         }
       ],
-      "local_sha256": "1ad5725edfc0ae28122719998e4679d6ce2c7d0c440c2cf6d4e02503da83d1a6",
+      "local_sha256": "a9aeaf5462f7584a7582d0580bcc7007c4d9f630d16f70c392155bacb0b3b279",
       "combined_distribution_compatibility": "not-established",
-      "production_runtime": true
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthBattleFailureRecognition.kt",
+          "sha256": "1d2ac08c08d1e16500dd323cf9860cc38c244e2e584f6789d6fb864ede1d25eb"
+        },
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/shop_execution.py",
@@ -231,9 +250,16 @@
           "sha256": "689293e2a9d7ca87d8fc19ba26b4f7939d4a628b4f19828ac6f50c2ceea41b9c"
         }
       ],
-      "local_sha256": "dd838042e22eca212dbc89fb69bd40f01132d894cad7343fe7922e7a3953d4e7",
+      "local_sha256": "241704ff9d63ca0867fe3894306dde284690904529d04680ced1a12ce0d47388",
       "combined_distribution_compatibility": "not-established",
-      "production_runtime": true
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthShopPolicy.kt",
+          "sha256": "f8dac2f675c70fa3bc77dd853cfd9b26b6bd8e357e22f084d5a4a7c23592e372"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/event_observation.py",
@@ -320,9 +346,16 @@
           "sha256": "9f65df1a08613f39e93f8d6c707b4a0533db39df596623b686999a2933dff6cc"
         }
       ],
-      "local_sha256": "6b54068fefc5d891026e95aeecb890a588f1e39320b6d91c57dee44d62eb42db",
+      "local_sha256": "4bf666c582ac7efbe8dd0b2d06a7c41906b30dd39429e94a01717d4bc7dbb404",
       "combined_distribution_compatibility": "not-established",
-      "production_runtime": true
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/game_port.py",
@@ -467,9 +500,16 @@
           "sha256": "689293e2a9d7ca87d8fc19ba26b4f7939d4a628b4f19828ac6f50c2ceea41b9c"
         }
       ],
-      "local_sha256": "2b54e9a7bb811b4f77aaff557e1281063c40e76a236c45210e91cf2824156a0a",
+      "local_sha256": "b67bed2c7f3d3e2dc70cb6728b494919435402ed17f6c834e7e82da3eea17f2e",
       "combined_distribution_compatibility": "not-established",
-      "production_runtime": true
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/rewards.py",
@@ -7159,7 +7199,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/autoplay.py",
-      "local_sha256": "6b54068fefc5d891026e95aeecb890a588f1e39320b6d91c57dee44d62eb42db",
+      "local_sha256": "4bf666c582ac7efbe8dd0b2d06a7c41906b30dd39429e94a01717d4bc7dbb404",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7375,7 +7415,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/scene.py",
-      "local_sha256": "1ad5725edfc0ae28122719998e4679d6ce2c7d0c440c2cf6d4e02503da83d1a6",
+      "local_sha256": "a9aeaf5462f7584a7582d0580bcc7007c4d9f630d16f70c392155bacb0b3b279",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7387,7 +7427,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/shop_execution.py",
-      "local_sha256": "dd838042e22eca212dbc89fb69bd40f01132d894cad7343fe7922e7a3953d4e7",
+      "local_sha256": "241704ff9d63ca0867fe3894306dde284690904529d04680ced1a12ce0d47388",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7405,7 +7445,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/strategies.py",
-      "local_sha256": "84e3fa5adee1b32614ac1d6687728a8ebd3bf06ed247c7c9c8a87ab74ce8e612",
+      "local_sha256": "578162ec9e484905361722f4081435086f82be014a88a22adb67c5bd3a0db9a7",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7417,7 +7457,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/team_execution.py",
-      "local_sha256": "2b54e9a7bb811b4f77aaff557e1281063c40e76a236c45210e91cf2824156a0a",
+      "local_sha256": "b67bed2c7f3d3e2dc70cb6728b494919435402ed17f6c834e7e82da3eea17f2e",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
