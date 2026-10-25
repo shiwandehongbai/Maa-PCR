@@ -1,4 +1,4 @@
-"""Independent fixed-scope Bilibili labyrinth client.
+"""Independent fixed-scope CN labyrinth client.
 
 Reuses the existing read-only authentication/wire primitives without changing
 its request classes or allowlist. No general URL/body entry point is exposed.
@@ -13,8 +13,10 @@ from enum import Enum
 from contextlib import asynccontextmanager
 from pathlib import Path
 import sys
+from urllib.parse import urlsplit
 from .routes import Node
 from .timing import Timings
+from .servers import get_server
 
 class ProtocolFailure(RuntimeError):
     pass
@@ -29,12 +31,23 @@ class Endpoint(Enum):
     RETIRE='labyrinth/retire'
 
 class LabyrinthClient:
-    def __init__(self,username,password,*,content_version='',app_version=None,http=None,manual_captcha=None,captcha_http=None,timings=None):
+    def __init__(self,username,password,*,content_version='',app_version=None,http=None,manual_captcha=None,captcha_http=None,timings=None,server='cn-bilibili',before_game_login=None):
+        try:self.server=get_server(server)
+        except ValueError:raise ProtocolFailure('unknown_game_server') from None
+        if self.server.channel:
+            if (type(username) is not str or not 0<len(username.strip())<=512
+                    or type(password) is not str or not 0<len(password.strip())<=4096
+                    or any(c in username+password for c in '\r\n\x00')):
+                raise ProtocolFailure('channel_credentials_invalid')
+            username,password=username.strip(),password.strip()
+        self.before_game_login=before_game_login
         # Package belongs to this checkout/player. Never search arbitrary PATHs.
         vendor=Path(__file__).resolve().parents[3]/'vendor/autopcr_sync'
         if str(vendor) not in sys.path: sys.path.insert(0,str(vendor))
         from autopcr_sync.core.readonly import ReadOnlyClient
         self.auth=ReadOnlyClient(username,password,content_version=content_version)
+        self.auth.root=self.server.root
+        self.auth.headers.update({'RES-KEY':self.server.res_key,'PLATFORM-ID':self.server.platform_id})
         if app_version is not None:
             from .app_version import validate_version
             try:self.auth.headers['APP-VER']=validate_version(app_version)
@@ -122,8 +135,20 @@ class LabyrinthClient:
         from autopcr_sync.model.requests import LoadIndexRequest,HomeIndexRequest
         proof=None
         try:
+            if self.server.closes_client_before_login:
+                if not callable(self.before_game_login):raise ProtocolFailure('channel_client_close_required')
+                try:
+                    closed=self.before_game_login(self.server.server_id,expected_viewer_id)
+                    if hasattr(closed,'__await__'):closed=await closed
+                except Exception as error:
+                    from .batch import BatchStopped
+                    raise ProtocolFailure('stopped' if type(error) is BatchStopped and str(error)=='stopped'
+                        else 'channel_client_close_failed') from None
+                self._check_open()
+                if closed is not True:raise ProtocolFailure('channel_client_close_failed')
             sdk=await self._auth_request(ToolSdkLoginRequest(uid=uid,access_key=access_key,platform='2',channel_id='1'),expected_viewer_id)
             if sdk.is_risk:
+                if self.server.channel:raise ProtocolFailure('channel_game_verification_required')
                 proof=await self._verify_captcha('game')
                 sdk=await self._auth_request(ToolSdkLoginRequest(uid=uid,access_key=access_key,
                     platform='2',channel_id='1',challenge=proof.challenge,validate=proof.validate,
@@ -143,8 +168,7 @@ class LabyrinthClient:
         if not self._positive_id(expected_viewer_id):
             if self._phase=='new' and not self.lock.locked():self.close()
             raise ProtocolFailure('account_identity_required')
-        from autopcr_sync.core.readonly import login1, SyncFailure
-        from autopcr_sync.sdk.bsgamesdk import login2
+        from autopcr_sync.core.readonly import SyncFailure
         from autopcr_sync.model.sdkrequests import SourceIniIndexRequest, SourceIniGetMaintenanceStatusRequest
         response={}
         proof=None
@@ -153,30 +177,37 @@ class LabyrinthClient:
             self._phase='authenticating'
             self.auth.viewer_id=0
             try:
-                response=await self._timed_auth('sdk_login',asyncio.wait_for(login1(self.auth.username,self.auth.password),SDK_LOGIN_TIMEOUT_SECONDS))
-                self._check_open()
-                if type(response) is not dict:raise ProtocolFailure('sdk_login_failed')
-                if response.get('code')==200000:
-                    response.clear()
-                    proof=await self._verify_captcha('sdk')
+                if self.server.channel:
+                    uid,key=self.auth.username,self.auth.password
+                else:
+                    from autopcr_sync.core.readonly import login1
+                    from autopcr_sync.sdk.bsgamesdk import login2
+                    response=await self._timed_auth('sdk_login',asyncio.wait_for(login1(self.auth.username,self.auth.password),SDK_LOGIN_TIMEOUT_SECONDS))
                     self._check_open()
-                    response=await self._timed_auth('sdk_login',asyncio.wait_for(login2(self.auth.username,self.auth.password,proof.challenge,proof.gt_user_id,proof.validate),SDK_LOGIN_TIMEOUT_SECONDS))
-                    self._check_open()
-                    proof=None
                     if type(response) is not dict:raise ProtocolFailure('sdk_login_failed')
-                    if response.get('code')==200000:raise ProtocolFailure('captcha_rejected')
-                uid=response.get('uid');key=response.get('access_key')
-                if (type(response.get('code')) is not int or response['code']!=0
-                        or type(uid) not in (str,int) or type(uid) is int and not self._positive_id(uid)
-                        or not 0<len(str(uid))<=512 or type(key) is not str or not 0<len(key)<=4096):
-                    raise ProtocolFailure('sdk_login_failed')
-                uid=str(uid)
+                    if response.get('code')==200000:
+                        response.clear()
+                        proof=await self._verify_captcha('sdk')
+                        self._check_open()
+                        response=await self._timed_auth('sdk_login',asyncio.wait_for(login2(self.auth.username,self.auth.password,proof.challenge,proof.gt_user_id,proof.validate),SDK_LOGIN_TIMEOUT_SECONDS))
+                        self._check_open()
+                        proof=None
+                        if type(response) is not dict:raise ProtocolFailure('sdk_login_failed')
+                        if response.get('code')==200000:raise ProtocolFailure('captcha_rejected')
+                    uid=response.get('uid');key=response.get('access_key')
+                    if (type(response.get('code')) is not int or response['code']!=0
+                            or type(uid) not in (str,int) or type(uid) is int and not self._positive_id(uid)
+                            or not 0<len(str(uid))<=512 or type(key) is not str or not 0<len(key)<=4096):
+                        raise ProtocolFailure('sdk_login_failed')
+                    uid=str(uid)
                 # Password is not needed for protocol/game handoffs. Do not
                 # retain it while doing game startup or future protocol phases.
                 self.auth.username=self.auth.password=''
                 servers=await self._auth_request(SourceIniIndexRequest(),expected_viewer_id)
                 if not servers.server:raise ProtocolFailure('server_rejected')
                 self.auth.root=self.auth.validate_root('https://'+servers.server[0].replace('\t',''))
+                if self.server.channel and '-prod-uo-' not in urlsplit(self.auth.root).hostname:
+                    raise ProtocolFailure('server_rejected')
                 for attempt in range(2):
                     try:
                         maintenance=await self._auth_request(SourceIniGetMaintenanceStatusRequest(),expected_viewer_id);break

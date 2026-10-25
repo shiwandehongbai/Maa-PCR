@@ -22,6 +22,52 @@ public partial class PcrLabyrinthSettings : ObservableObject {
     private string? saved;
     private int? loadedMaxSeconds;
     private string? loadedMaxMinutes;
+    private PcrLabyrinthAccounts? accountLibrary;
+    private PcrLabyrinthAccount? selectedAccount;
+    private bool switchingAccount;
+    public ObservableCollection<PcrLabyrinthAccount> Accounts { get; } = new();
+    public IReadOnlyList<PcrLabyrinthServer> Servers => PcrLabyrinthServer.All;
+    [ObservableProperty] private string accountName = "账号 1";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedServer),nameof(LoginLabel),nameof(PasswordLabel),nameof(LoginHint))]
+    private string server = "cn-bilibili";
+    public PcrLabyrinthServer? SelectedServer { get => Servers.FirstOrDefault(item=>item.Id==Server); set { if (value is not null) Server=value.Id; } }
+    public string LoginLabel => Server=="cn-bilibili" ? "登录账号" : "渠道登录 UID";
+    public string PasswordLabel => Server=="cn-bilibili" ? "密码" : "渠道 access_key";
+    public string LoginHint => Server=="cn-bilibili" ? "填写 B 站账号和密码；账号须与模拟器中的游戏一致。"
+        : "填写本渠道授权得到的 UID 和 access_key；游戏玩家 ID 仍填个人简介中的 ID。切换渠道后请重新填写凭据。";
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(PauseLabel))] private bool isPaused;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(PauseLabel))] private bool pausePending;
+    public string PauseLabel => PausePending ? "正在等待暂停…" : IsPaused ? "继续" : "暂停";
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(DeleteAccountText))] private bool deleteAccountPending;
+    public string DeleteAccountText => DeleteAccountPending ? "确认删除所选账号" : "删除所选账号";
+    public PcrLabyrinthAccount? SelectedAccount {
+        get => selectedAccount;
+        set {
+            if (value is null || ReferenceEquals(value,selectedAccount) || !Accounts.Contains(value)) return;
+            if (!ready) { SetProperty(ref selectedAccount,value); return; }
+            if (!vm.CanEditPcrTarget || !SaveBeforeAccountChange()) { OnPropertyChanged(nameof(SelectedAccount)); return; }
+            try {
+                accountLibrary!.Save(Accounts.ToArray(),value.Id);
+                SetProperty(ref selectedAccount,value); ApplyAccount(value); vm.NotifyPcrSelectionChanged();
+            } catch (Exception ex) { Status="保存失败："+ex.Message; OnPropertyChanged(nameof(SelectedAccount)); }
+        }
+    }
+    partial void OnServerChanged(string value) {
+        if (!ready || switchingAccount) return;
+        var wasReady=ready; ready=false;
+        try { Username=""; Password=""; ExpectedPlayerId=""; ShowCredentials=false; credentialsDirty=true; }
+        finally { ready=wasReady; }
+        CredentialsStatus="服务器已更改，请重新填写该服务器的玩家 ID、登录 UID 与凭据。";
+    }
+    public string[] SpecialEquipmentModes { get; } = { "关闭", "自动装备" };
+    [ObservableProperty] private string specialEquipmentMode = "关闭";
+    [ObservableProperty] private bool specialEquipmentNormal = true;
+    [ObservableProperty] private bool specialEquipmentEx = true;
+    [ObservableProperty] private bool specialEquipmentBoss = true;
+    public int[] ResponseIntervals { get; } = { 300,500 };
+    [ObservableProperty] private int responseIntervalMs = 300;
+    [ObservableProperty] private bool autoDatabaseUpdate = true;
     public ObservableCollection<PcrLabyrinthGoal> Goals { get; }
     public string[] RouteModes { get; } = { "价值路线 v2", "固定模板路线" };
     public string[] ThirdChoices { get; } = { "必须遗物", "必须事件", "两者都行" };
@@ -91,59 +137,135 @@ public partial class PcrLabyrinthSettings : ObservableObject {
             new PcrLabyrinthGoal(1,"美食殿堂",this), new PcrLabyrinthGoal(2,"破晓之星",this), new PcrLabyrinthGoal(3,"咲恋救济院",this),
             new PcrLabyrinthGoal(4,"王宫骑士团",this),new PcrLabyrinthGoal(5,"拉比林斯",this) });
         Goals[0].Enabled=true;
-        saved=vm.Processor.InstanceConfiguration.GetValue(Key, "");
-        if (!string.IsNullOrEmpty(saved)) {
-            try {
-                var d=JObject.Parse(saved);
-                Difficulty=d["difficulty"]?.ToString() ?? "1"; Reroll=(bool?)d["reroll"] ?? false;
-                KeepOldRun=(bool?)d["keep_old_run"] ?? false;
-                MaxAttempts=d["max_attempts"]?.ToString() ?? "100";
-                MaxMinutes=(((int?)d["max_seconds"] ?? 1800)/60).ToString(CultureInfo.InvariantCulture);
-                loadedMaxSeconds=(int?)d["max_seconds"];loadedMaxMinutes=MaxMinutes;
-                BuyRelics=(bool?)d["buy_relics"] ?? true;RefreshShop=(bool?)d["refresh_shop"] ?? true;
-                if (d["strategy"] is JObject strategy) {
-                    PlayerWeight=strategy["player_weight"]?.ToString() ?? "70";
-                    AttributePairingBonusEnabled=(bool?)strategy["attribute_pairing_bonus_enabled"] ?? true;
-                    DuplicateRolePenalty=strategy["duplicate_role_penalty"]?.ToString() ?? "8";
-                    MixedDamagePenalty=strategy["mixed_damage_penalty"]?.ToString() ?? "15";
-                    EffectiveCharacterSystemBonus=strategy["effective_character_system_bonus"]?.ToString() ?? "8";
-                    PreferPureBossDamageSystem=(bool?)strategy["prefer_pure_boss_damage_system"] ?? true;
-                    SingleBossFallbackToMultiAfterThreeFailures=(bool?)strategy["single_boss_fallback_to_multi_after_three_failures"] ?? true;
-                    SingleBossRetryCountBeforeMulti=strategy["single_boss_retry_count_before_multi"]?.ToString() ?? "2";
-                    RerollAfterThreeBattleFailures=(bool?)strategy["reroll_after_three_battle_failures"] ?? true;
-                    BaselineLastArea=strategy["baseline_last_area"]?.ToString() ?? "3";
-                    BaselineTarget=strategy["baseline_target"]?.ToString() ?? "4";
-                    DebuffPivotMinimum=strategy["debuff_pivot_minimum"]?.ToString() ?? "12";
-                    DebuffPivotTolerance=strategy["debuff_pivot_tolerance"]?.ToString() ?? "2";
-                    if (strategy["relic_mark_priority"] is JArray priority) RelicMarkPriority=string.Join(",",priority.Values<string>());
-                    RefreshFromArea=strategy["refresh_from_area"]?.ToString() ?? "5";
-                    NormalWinRate=strategy["normal_win_rate"]?.ToString() ?? "95";
-                    ExtremeWinRate=strategy["extreme_win_rate"]?.ToString() ?? "70";
-                    if (strategy["opening_rosters"] is JObject rosters) foreach (var goal in Goals) if (rosters[goal.GuildId.ToString(CultureInfo.InvariantCulture)] is JArray slots) goal.LoadOpeningRoster(slots);
-                    BossMode=(string?)strategy["boss_mode"]=="single" ? BossModes[1] : BossModes[0];
-                    if (strategy["deployment_weights"] is JArray weights) DeploymentWeights=string.Join(",",weights.Select(x=>x.ToString(Formatting.None)));
-                    var scores=strategy["scoring_overrides"];
-                    DamageWeight=scores?["systemDamageWeight"]?.ToString() ?? "0.5";
-                    SurvivalWeight=scores?["systemSurvivalWeight"]?.ToString() ?? "0.23";
-                    FunctionWeight=scores?["systemFunctionWeight"]?.ToString() ?? "0.13";
-                    FormationWeight=scores?["systemFormationWeight"]?.ToString() ?? "0.04";
-                    CohesionWeight=scores?["systemCohesionWeight"]?.ToString() ?? "0.1";
-                    if (strategy["personal_scores"] is JObject scoresByRole) personalScores=(JObject)scoresByRole.DeepClone();
-                }
-
-                RouteMode=(string?)d["route"]?["mode"]=="template" ? RouteModes[1] : RouteModes[0];
-                ThirdChoice=(string?)d["route"]?["third_choice"] switch { "event"=>ThirdChoices[1],"either"=>ThirdChoices[2],_=>ThirdChoices[0] };
-                Allowance=d["route"]?["allowance"]?.ToString() ?? "1";
-                PerfectStart=(bool?)d["route"]?["perfect_start"] ?? true;
-                if (d["route"]?["area3_bosses"] is JArray b3) Area3BossIds=string.Join(",",b3.Values<int>());
-                if (d["route"]?["area5_bosses"] is JArray b5) Area5BossIds=string.Join(",",b5.Values<int>());
-                foreach (var g in Goals) { var row=(d["draft_goals"] ?? d["goals"])?.FirstOrDefault(x=>(int?)x["guild_id"]==g.GuildId); g.Enabled=(bool?)row?["enabled"] ?? row!=null; g.Clears=row?["clears"]?.ToString() ?? "1"; g.TargetMode=(string?)row?["mode"]=="attempts" ? g.TargetModes[1]:g.TargetModes[0]; }
-                Status="已载入黎明界设置。";
-            } catch { saved=null; Status="保存的黎明界设置无法读取，请核对后重新保存。原文件已保留。"; }
+        try {
+            accountLibrary=new PcrLabyrinthAccounts(vm.Processor.InstanceConfiguration);
+            foreach (var account in accountLibrary.Accounts) Accounts.Add(account);
+            selectedAccount=Accounts.Single(account=>account.Id==accountLibrary.SelectedId);
+            ApplyAccount(selectedAccount);
+        } catch (Exception ex) {
+            Status="保存的黎明界账号库无法读取，原内容已保留："+ex.Message;
+            CredentialsStatus="未加载账号凭据，请保留原配置并导出诊断记录。";
         }
-        LoadCredentials();
         foreach (var g in Goals) g.PropertyChanged+=(_,_)=>SaveCore(automatic:true);
         ready=true;
+    }
+    private void ApplyAccount(PcrLabyrinthAccount account) {
+        var wasReady=ready; ready=false; switchingAccount=true;
+        try {
+            saved=account.Settings.Count==0 ? null : account.Settings.ToString(Formatting.None);
+            AccountName=account.Name; Server=account.Server;
+            foreach (var goal in Goals) {
+                foreach (var slot in goal.Slots) { slot.ClearLoaded(); slot.Refresh(); }
+                goal.RosterWarning=""; goal.RosterHint="";
+            }
+            LoadSettings(account.Settings);
+            ExpectedPlayerId=Username=Password="";
+            LoadCredentials(account.Credentials);
+            ShowCredentials=false; credentialsDirty=false; DeleteAccountPending=false;
+            Status=Servers.Any(item=>item.Id==Server) ? "已载入所选账号的黎明界设置。" : "未知服务器，请重新选择服务器并填写凭据。";
+        } finally { ready=wasReady; switchingAccount=false; }
+        OnPropertyChanged(nameof(AccountSummary));
+    }
+    private void LoadSettings(JObject d) {
+        Difficulty=d["difficulty"]?.ToString() ?? "1"; Reroll=(bool?)d["reroll"] ?? false;
+        KeepOldRun=(bool?)d["keep_old_run"] ?? false;
+        MaxAttempts=d["max_attempts"]?.ToString() ?? "100";
+        MaxMinutes=(((int?)d["max_seconds"] ?? 1800)/60).ToString(CultureInfo.InvariantCulture);
+        loadedMaxSeconds=(int?)d["max_seconds"];loadedMaxMinutes=MaxMinutes;
+        BuyRelics=(bool?)d["buy_relics"] ?? true;RefreshShop=(bool?)d["refresh_shop"] ?? true;
+        var strategy=d["strategy"] as JObject ?? new JObject();
+        {
+            PlayerWeight=strategy["player_weight"]?.ToString() ?? "70";
+            AttributePairingBonusEnabled=(bool?)strategy["attribute_pairing_bonus_enabled"] ?? true;
+            DuplicateRolePenalty=strategy["duplicate_role_penalty"]?.ToString() ?? "8";
+            MixedDamagePenalty=strategy["mixed_damage_penalty"]?.ToString() ?? "15";
+            EffectiveCharacterSystemBonus=strategy["effective_character_system_bonus"]?.ToString() ?? "8";
+            PreferPureBossDamageSystem=(bool?)strategy["prefer_pure_boss_damage_system"] ?? true;
+            SingleBossFallbackToMultiAfterThreeFailures=(bool?)strategy["single_boss_fallback_to_multi_after_three_failures"] ?? true;
+            SingleBossRetryCountBeforeMulti=strategy["single_boss_retry_count_before_multi"]?.ToString() ?? "2";
+            RerollAfterThreeBattleFailures=(bool?)strategy["reroll_after_three_battle_failures"] ?? true;
+            BaselineLastArea=strategy["baseline_last_area"]?.ToString() ?? "3";
+            BaselineTarget=strategy["baseline_target"]?.ToString() ?? "4";
+            DebuffPivotMinimum=strategy["debuff_pivot_minimum"]?.ToString() ?? "12";
+            DebuffPivotTolerance=strategy["debuff_pivot_tolerance"]?.ToString() ?? "2";
+            RelicMarkPriority=strategy["relic_mark_priority"] is JArray priority ? string.Join(",",priority.Values<string>()) : "";
+            RefreshFromArea=strategy["refresh_from_area"]?.ToString() ?? "5";
+            NormalWinRate=strategy["normal_win_rate"]?.ToString() ?? "95";
+            ExtremeWinRate=strategy["extreme_win_rate"]?.ToString() ?? "70";
+            if (strategy["opening_rosters"] is JObject rosters) foreach (var goal in Goals) if (rosters[goal.GuildId.ToString(CultureInfo.InvariantCulture)] is JArray slots) goal.LoadOpeningRoster(slots);
+            BossMode=(string?)strategy["boss_mode"]=="single" ? BossModes[1] : BossModes[0];
+            DeploymentWeights=strategy["deployment_weights"] is JArray weights ? string.Join(",",weights.Select(x=>x.ToString(Formatting.None))) : "1,0.35,0.2";
+            var scores=strategy["scoring_overrides"];
+            DamageWeight=scores?["systemDamageWeight"]?.ToString() ?? "0.5";
+            SurvivalWeight=scores?["systemSurvivalWeight"]?.ToString() ?? "0.23";
+            FunctionWeight=scores?["systemFunctionWeight"]?.ToString() ?? "0.13";
+            FormationWeight=scores?["systemFormationWeight"]?.ToString() ?? "0.04";
+            CohesionWeight=scores?["systemCohesionWeight"]?.ToString() ?? "0.1";
+            personalScores=strategy["personal_scores"] is JObject scoresByRole ? (JObject)scoresByRole.DeepClone() : new JObject();
+            SpecialEquipmentMode=(string?)strategy["special_equipment_mode"]=="auto_equip" ? SpecialEquipmentModes[1] : SpecialEquipmentModes[0];
+            var equipmentBattles=strategy["special_equipment_battles"] as JArray;
+            SpecialEquipmentNormal=equipmentBattles is null || equipmentBattles.Values<string>().Contains("NORMAL");
+            SpecialEquipmentEx=equipmentBattles is null || equipmentBattles.Values<string>().Contains("EX");
+            SpecialEquipmentBoss=equipmentBattles is null || equipmentBattles.Values<string>().Contains("BOSS");
+            ResponseIntervalMs=(int?)strategy["response_interval_ms"] ?? 300;
+            AutoDatabaseUpdate=(bool?)strategy["auto_database_update"] ?? true;
+        }
+
+        RouteMode=(string?)d["route"]?["mode"]=="template" ? RouteModes[1] : RouteModes[0];
+        ThirdChoice=(string?)d["route"]?["third_choice"] switch { "event"=>ThirdChoices[1],"either"=>ThirdChoices[2],_=>ThirdChoices[0] };
+        Allowance=d["route"]?["allowance"]?.ToString() ?? "1";
+        PerfectStart=(bool?)d["route"]?["perfect_start"] ?? true;
+        Area3BossIds=d["route"]?["area3_bosses"] is JArray b3 ? string.Join(",",b3.Values<int>()) : "312505,319604";
+        Area5BossIds=d["route"]?["area5_bosses"] is JArray b5 ? string.Join(",",b5.Values<int>()) : "310103";
+        foreach (var g in Goals) { var row=(d["draft_goals"] ?? d["goals"])?.FirstOrDefault(x=>(int?)x["guild_id"]==g.GuildId); g.Enabled=(bool?)row?["enabled"] ?? (row!=null || d["draft_goals"] is null && d["goals"] is null && g.GuildId==1); g.Clears=row?["clears"]?.ToString() ?? "1"; g.TargetMode=(string?)row?["mode"]=="attempts" ? g.TargetModes[1]:g.TargetModes[0]; }
+    }
+    private bool SaveBeforeAccountChange() {
+        SaveCore(automatic:false);
+        return !credentialsDirty && !Status.StartsWith("保存失败",StringComparison.Ordinal);
+    }
+    private void PersistAccount(JObject data,string encrypted) {
+        if (accountLibrary is null || selectedAccount is null) throw new InvalidOperationException("账号库尚未成功载入，原内容不会被覆盖。");
+        var name=AccountName.Trim();
+        if (name.Length is <1 or >40 || name.Any(char.IsControl)) throw new InvalidOperationException("账号名称请输入 1–40 个可见字符。");
+        if (!Servers.Any(item=>item.Id==Server)) throw new InvalidOperationException("请选择有效的服务器。");
+        var replacement=new PcrLabyrinthAccount(selectedAccount.Id,name,Server,data,encrypted);
+        var candidate=Accounts.Select(account=>account==selectedAccount ? replacement : account).ToArray();
+        accountLibrary.Save(candidate,replacement.Id);
+        selectedAccount.Name=name; selectedAccount.Server=Server;
+        selectedAccount.Settings=(JObject)data.DeepClone(); selectedAccount.Credentials=encrypted;
+    }
+    [RelayCommand] public void AddAccount() {
+        if (!vm.CanEditPcrTarget || !SaveBeforeAccountChange()) return;
+        if (Accounts.Count>=100) { Status="账号库最多保存 100 个账号。"; return; }
+        var account=new PcrLabyrinthAccount(Guid.NewGuid().ToString("N"),$"账号 {Accounts.Count+1}","cn-bilibili",new JObject(),"");
+        try {
+            accountLibrary!.Save(Accounts.Append(account).ToArray(),account.Id);
+            Accounts.Add(account); selectedAccount=account; OnPropertyChanged(nameof(SelectedAccount)); ApplyAccount(account);
+            vm.NotifyPcrSelectionChanged();
+        } catch (Exception ex) { Status="保存失败："+ex.Message; }
+    }
+    [RelayCommand] public void DeleteAccount() {
+        if (!vm.CanEditPcrTarget || selectedAccount is null || accountLibrary is null) return;
+        if (!DeleteAccountPending) { DeleteAccountPending=true; Status="再次点击确认删除该账号及其保存的设置；其他账号保持。"; return; }
+        var removed=selectedAccount;
+        var remaining=Accounts.Where(account=>account!=removed).ToList();
+        if (remaining.Count==0) remaining.Add(new PcrLabyrinthAccount(Guid.NewGuid().ToString("N"),"账号 1","cn-bilibili",new JObject(),""));
+        try {
+            accountLibrary.Save(remaining,remaining[0].Id);
+            Accounts.Remove(removed); if (Accounts.Count==0) Accounts.Add(remaining[0]);
+            selectedAccount=remaining[0]; OnPropertyChanged(nameof(SelectedAccount)); ApplyAccount(selectedAccount);
+            vm.NotifyPcrSelectionChanged();
+        } catch (Exception ex) { Status="保存失败："+ex.Message; }
+    }
+    public JObject GetPersonalScores() => (JObject)personalScores.DeepClone();
+    public void ApplyPersonalScores(JObject values) {
+        if (!vm.CanEditPcrTarget) throw new InvalidOperationException("任务运行中不能修改个人评分。");
+        if (values.Count>1000 || values.Properties().Any(item=>!System.Text.RegularExpressions.Regex.IsMatch(item.Name,@"^[1-9][0-9]{3,5}$")
+            || item.Value.Type is not (JTokenType.Integer or JTokenType.Float) || !double.IsFinite(item.Value.Value<double>())
+            || item.Value.Value<double>() is <0 or >100)) throw new InvalidOperationException("个人评分数据无效。");
+        var previous=personalScores;
+        personalScores=(JObject)values.DeepClone(); SaveCore(automatic:true);
+        if (Status.StartsWith("保存失败",StringComparison.Ordinal)) { personalScores=previous; throw new InvalidOperationException(Status); }
     }
     private PcrLabyrinthCharacterCatalog CreateCharacterCatalog() => PcrLabyrinthCharacterCatalog.Load();
     internal PcrLabyrinthCharacterCatalog? TryCharacterCatalog() {
@@ -170,7 +292,9 @@ public partial class PcrLabyrinthSettings : ObservableObject {
     protected override void OnPropertyChanged(PropertyChangedEventArgs e) {
         base.OnPropertyChanged(e);
         if (!ready || e.PropertyName is nameof(ShowCredentials) or nameof(CredentialMask) or nameof(CredentialsVisibilityText) or nameof(CredentialsStatus)
-                or nameof(RosterStatus) or nameof(HasRosterStatus) or nameof(AccountSummary) or nameof(SaveButtonText)) return;
+                or nameof(RosterStatus) or nameof(HasRosterStatus) or nameof(AccountSummary) or nameof(SaveButtonText)
+                or nameof(SelectedAccount) or nameof(SelectedServer) or nameof(LoginLabel) or nameof(PasswordLabel) or nameof(LoginHint)
+                or nameof(IsPaused) or nameof(PausePending) or nameof(PauseLabel) or nameof(DeleteAccountPending) or nameof(DeleteAccountText)) return;
         vm.NotifyPcrSelectionChanged();
         if (e.PropertyName is nameof(ExpectedPlayerId) or nameof(Username) or nameof(Password)) {
             credentialsDirty=true;
@@ -180,9 +304,8 @@ public partial class PcrLabyrinthSettings : ObservableObject {
     }
     [RelayCommand] public void ToggleCredentials() => ShowCredentials=!ShowCredentials;
     public void HideCredentials() => ShowCredentials=false;
-    private void LoadCredentials() {
-        var encrypted=vm.Processor.InstanceConfiguration.GetValue(CredentialsKey, "");
-        if (string.IsNullOrEmpty(encrypted)) return;
+    private void LoadCredentials(string encrypted) {
+        if (string.IsNullOrEmpty(encrypted)) { CredentialsStatus="请填写所选账号的玩家 ID 和登录凭据；保存时会加密。"; return; }
         try {
             if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
             var bytes=ProtectedData.Unprotect(Convert.FromBase64String(encrypted),null,DataProtectionScope.CurrentUser);
@@ -206,7 +329,7 @@ public partial class PcrLabyrinthSettings : ObservableObject {
             string encrypted;
             try { encrypted=Convert.ToBase64String(ProtectedData.Protect(bytes,null,DataProtectionScope.CurrentUser)); }
             finally { CryptographicOperations.ZeroMemory(bytes); }
-            vm.Processor.InstanceConfiguration.SetValueAndPersist(CredentialsKey,encrypted);
+            PersistAccount(selectedAccount?.Settings ?? new JObject(),encrypted);
             credentialsDirty=false;
             CredentialsStatus="账号凭据已加密保存；重开软件自动载入。";
         } catch { CredentialsStatus="账号凭据保存失败，原有保存内容已保留；请重试。输入内容仍可用于本次运行。"; }
@@ -251,6 +374,13 @@ public partial class PcrLabyrinthSettings : ObservableObject {
         return new JArray(marks);
     }
     private JObject StrategySnapshot() {
+        if (!SpecialEquipmentModes.Contains(SpecialEquipmentMode)) throw new InvalidOperationException("特别装备模式无效。");
+        var equipmentBattles=new JArray();
+        if (SpecialEquipmentNormal) equipmentBattles.Add("NORMAL");
+        if (SpecialEquipmentEx) equipmentBattles.Add("EX");
+        if (SpecialEquipmentBoss) equipmentBattles.Add("BOSS");
+        if (SpecialEquipmentMode==SpecialEquipmentModes[1] && equipmentBattles.Count==0) throw new InvalidOperationException("请至少选择一种启用特别装备的战斗。");
+        if (!ResponseIntervals.Contains(ResponseIntervalMs)) throw new InvalidOperationException("响应间隔请选择 300 或 500 毫秒。");
         if (!BossModes.Contains(BossMode)) throw new InvalidOperationException("Boss 编组模式无效。");
         var parts=DeploymentWeights.Split(',',StringSplitOptions.TrimEntries);
         if (parts.Length!=3) throw new InvalidOperationException("招募权重请填写三队数值，用逗号分隔。");
@@ -265,6 +395,9 @@ public partial class PcrLabyrinthSettings : ObservableObject {
         if (Math.Abs(scores.Properties().Sum(x=>(double)x.Value)-1)>0.000001)
             throw new InvalidOperationException("五项队伍评分权重之和必须为 1。");
         return new JObject { ["boss_mode"]=BossMode==BossModes[0] ? "multi":"single",
+            ["special_equipment_mode"]=SpecialEquipmentMode==SpecialEquipmentModes[1] ? "auto_equip" : "off",
+            ["special_equipment_battles"]=equipmentBattles,["response_interval_ms"]=ResponseIntervalMs,
+            ["auto_database_update"]=AutoDatabaseUpdate,
             ["player_weight"]=Number(PlayerWeight,0,100,"玩家评分占比"),
             ["attribute_pairing_bonus_enabled"]=AttributePairingBonusEnabled,
             ["duplicate_role_penalty"]=Number(DuplicateRolePenalty,0,30,"重复职能扣分"),
@@ -287,6 +420,8 @@ public partial class PcrLabyrinthSettings : ObservableObject {
             ["personal_scores"]=personalScores.DeepClone() };
     }
     public JObject Snapshot() {
+        if (accountLibrary is null || selectedAccount is null) throw new InvalidOperationException("账号库尚未成功载入，原内容不会被覆盖。");
+        if (!Servers.Any(item=>item.Id==Server)) throw new InvalidOperationException("未知服务器，请重新选择服务器并填写凭据。");
         if (Goals.Any(g=>!g.TargetModes.Contains(g.TargetMode))) throw new InvalidOperationException("目标计数方式无效。");
         var goals=new JArray(Goals.Where(g=>g.Enabled).Select(g=>new JObject { ["guild_id"]=g.GuildId,["clears"]=Number(g.Clears,1,999,g.Name+"目标次数"),["mode"]=g.TargetMode==g.TargetModes[0] ? "clears":"attempts" }));
         if (goals.Count==0) throw new InvalidOperationException("请至少选择一个目标公会。");
@@ -309,8 +444,8 @@ public partial class PcrLabyrinthSettings : ObservableObject {
             data["keep_old_run"]=KeepOldRun;
             data["draft_goals"]=new JArray(Goals.Select(g=>new JObject { ["guild_id"]=g.GuildId,["enabled"]=g.Enabled,["clears"]=g.Clears,["mode"]=g.TargetMode==g.TargetModes[0] ? "clears":"attempts" }));
             var value=data.ToString(Formatting.None);
-            if (value==saved) { Status=credentialsDirty ? "任务设置已保存；账号尚未保存，请重试。" : "设置已保存，没有待保存的任务修改。"; return; }
-            vm.Processor.InstanceConfiguration.SetValueAndPersist(Key,value);
+            if (value==saved && selectedAccount?.Name==AccountName.Trim() && selectedAccount?.Server==Server) { Status=credentialsDirty ? "任务设置已保存；账号尚未保存，请重试。" : "设置已保存，没有待保存的任务修改。"; return; }
+            PersistAccount(data,selectedAccount?.Credentials ?? "");
             if (InstanceConfiguration.ReadValueFromFile(vm.Processor.InstanceId,Key)!=value) throw new InvalidOperationException("设置未写入磁盘，请重新保存。");
             saved=value; Status=credentialsDirty ? "任务设置已保存；账号尚未保存，请重试。"
                 : automatic ? "已自动保存黎明界设置。" : "黎明界设置已保存。";

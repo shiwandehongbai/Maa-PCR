@@ -11,6 +11,7 @@ from math import prod,isfinite
 from pathlib import Path
 import json
 import heapq
+import re
 
 DATA=Path(__file__).resolve().parents[3]/'assets/labyrinth'
 def clamp(x,lo=0,hi=100): return max(lo,min(hi,x))
@@ -30,6 +31,9 @@ class Context:
     def __post_init__(self):
         if type(self.defense) is not int or self.defense<0 or type(self.targets) is not int or self.targets<1 or self.enemy not in ('PHYSICAL','MAGIC','MIXED','UNKNOWN'):
             raise ValueError('invalid_role_context')
+    @property
+    def effective_enemy(self):
+        return self.enemy if self.enemy!='UNKNOWN' else getattr(self.encounter,'enemy','UNKNOWN')
 
 class Profile:
     def __init__(self,v):
@@ -64,10 +68,10 @@ class Profile:
             fallback=min(100,45+self.f('selfSustain')*.25+self.s('universalSurvival')*.2) if self.data.get('roleClass')=='掩护者' else 0
             return max(modeled,fallback)
         if p.get('requiresAllyInFront'): return 0
-        physical=z(p.get('physicalDurability'));magic=z(p.get('magicDurability'))
-        panel=physical if c.enemy=='PHYSICAL' else magic if c.enemy=='MAGIC' else (physical+magic)/2 if c.enemy=='MIXED' else min(physical,magic)
+        physical=z(p.get('physicalDurability'));magic=z(p.get('magicDurability'));enemy=c.effective_enemy
+        panel=physical if enemy=='PHYSICAL' else magic if enemy=='MAGIC' else (physical+magic)/2 if enemy=='MIXED' else min(physical,magic)
         conventional=clamp(panel*.68+self.f('reliableVanguard')*.17+self.f('selfSustain')*.1+self.s('universalSurvival')*.05)
-        evasion=z(p.get('physicalEvasion')) if c.enemy=='PHYSICAL' else z(p.get('magicEvasion')) if c.enemy=='MAGIC' else min(z(p.get('physicalEvasion')),z(p.get('magicEvasion'))) if c.enemy=='MIXED' else 0
+        evasion=z(p.get('physicalEvasion')) if enemy=='PHYSICAL' else z(p.get('magicEvasion')) if enemy=='MAGIC' else min(z(p.get('physicalEvasion')),z(p.get('magicEvasion'))) if enemy=='MIXED' else 0
         return clamp(conventional+max(z(p.get('untargetable'))*.2,z(p.get('invulnerability'))*.2,evasion*.35,z(p.get('revive'))*.12))
 
 @dataclass(frozen=True)
@@ -120,7 +124,8 @@ class Optimizer:
         has_front=frontline>=cfg('minimumReliableVanguard');has_sustain=sustain>=cfg('minimumEffectiveSustain')
         maxf=lambda k:max(p.f(k) for p in team)
         pr,mr=maxf('physicalAttackReduction'),maxf('magicAttackReduction')
-        reduction=pr if c.enemy=='PHYSICAL' else mr if c.enemy=='MAGIC' else (pr+mr)/2 if c.enemy=='MIXED' else max(pr,mr)
+        enemy=c.effective_enemy
+        reduction=pr if enemy=='PHYSICAL' else mr if enemy=='MAGIC' else (pr+mr)/2 if enemy=='MIXED' else max(pr,mr)
         survival_support=(sum(p.s('universalSurvival') for p in team)/len(team)+max(max(p.f('healing'),p.f('regeneration')) for p in team)+reduction)/3
         survival=front_for_team*.7+survival_support*.3
         scenario_n=3 if t>=3 else 2
@@ -178,6 +183,7 @@ class Optimizer:
         pos=min(p.position for p in team);gate=self.cfg('relaxedMinimumReliableVanguard' if c.relaxed else 'minimumReliableVanguard')
         return all(p.vanguard(c)>=gate for p in team if p.position==pos)
     def ranked(self,ids,c,*,required=(),battle=False,system_only=False,limit=1,cohesive=False,excluded=()):
+        from .encounters import formation_risk
         ids=tuple(dict.fromkeys(ids))
         if not ids or any(x not in self.profiles for x in ids): return ()
         if not set(required)<=set(ids): return ()
@@ -193,7 +199,8 @@ class Optimizer:
                 eligible=[p for p in team if p.position is not None and p.vanguard(c)>=gate]
                 if not eligible:return ()
                 front=min(eligible,key=lambda p:(p.position,p.id))
-                compatible=[p for p in ordered if p!=front and p.position is not None and (p.vanguard(c)>=gate or p.position>front.position)][:size-1]
+                compatible=sorted((p for p in ordered if p!=front and p.position is not None and (p.vanguard(c)>=gate or p.position>front.position)),
+                    key=lambda p:formation_risk((front,p),c))[:size-1]
                 if len(compatible)!=size-1:return ()
                 forced=[front]+compatible
             forced.extend(self.profiles[x] for x in required)
@@ -205,18 +212,25 @@ class Optimizer:
             if tuple(sorted(keys)) in excluded or not set(required)<=set(keys) or battle and not self.eligible(combo,c):continue
             if cohesive and self.damage_type(combo)=='MIXED':continue
             evaluation=self.score(keys,c)
-            item=(evaluation.system_score if system_only else evaluation.score,-ordinal,evaluation)
+            item=(-formation_risk(combo,c),evaluation.system_score if system_only else evaluation.score,-ordinal,evaluation)
             if len(ranked)<limit: heapq.heappush(ranked,item)
-            elif item[:2]>ranked[0][:2]: heapq.heapreplace(ranked,item)
-        ranked.sort(key=lambda v:v[:2],reverse=True)
-        return tuple(v[2] for v in ranked)
+            elif item[:3]>ranked[0][:3]: heapq.heapreplace(ranked,item)
+        ranked.sort(key=lambda v:v[:3],reverse=True)
+        return tuple(v[3] for v in ranked)
     def best(self,ids,c,*,required=(),battle=False,system_only=False,excluded=()):
         ids=tuple(dict.fromkeys(ids))
         if not ids or any(uid not in self.profiles for uid in ids):return None
+        isolated=getattr(c.encounter,'isolation_radius',None) is not None
         if battle and c.encounter is not None and not required and not excluded:
-            from .encounters import guide_core
+            from .encounters import guide_core,formation_risk
             required=guide_core(self,tuple(dict.fromkeys(ids)),c)
-        if battle and c.prefer_single:
+            if isolated and required:
+                core=self.ranked(ids,c,required=required,battle=True,system_only=system_only)
+                ordinary=self.ranked(ids,c,battle=True,system_only=system_only)
+                if core and (not ordinary or formation_risk([self.profiles[x] for x in core[0].members],c)<=
+                        formation_risk([self.profiles[x] for x in ordinary[0].members],c)):return core[0]
+                return ordinary[0] if ordinary else None
+        if battle and c.prefer_single and not isolated:
             found=self.ranked(ids,c,required=required,battle=True,system_only=system_only,cohesive=True,excluded=excluded)
             if found:return found[0]
         found=self.ranked(ids,c,required=required,battle=battle,system_only=system_only,excluded=excluded)
@@ -226,6 +240,8 @@ class Optimizer:
         """Known defeat selects a distinct team; EX second failure may swap in healing."""
         ids=tuple(dict.fromkeys(ids));excluded={tuple(sorted(team)) for team in failed_teams}
         recovery=replace(c,recovery=True)
+        isolated=getattr(c.encounter,'isolation_radius',None) is not None
+        isolated_retry=self.best(ids,recovery,battle=True,excluded=excluded) if isolated else None
         if c.encounter is not None and retry_number>=2 and last_failed_team and len(last_failed_team)==5:
             if set(last_failed_team)<=set(ids) and all(uid in self.profiles for uid in ids):
                 failed=[self.profiles[uid] for uid in last_failed_team]
@@ -240,8 +256,13 @@ class Optimizer:
                     for healer in healers:
                         candidate=tuple(p.id for p in failed if p!=removed)+(healer.id,)
                         plan=self.best(candidate,recovery,battle=True,excluded=excluded)
-                        if plan is not None and len(plan.members)==5:return plan
-        return self.best(ids,recovery,battle=True,excluded=excluded)
+                        if plan is not None and len(plan.members)==5:
+                            if isolated_retry is not None:
+                                from .encounters import formation_risk
+                                risk=lambda result:formation_risk([self.profiles[x] for x in result.members],c)
+                                if risk(plan)>risk(isolated_retry):return isolated_retry
+                            return plan
+        return isolated_retry if isolated else self.best(ids,recovery,battle=True,excluded=excluded)
 
     def choose_role(self,candidates,acquired,c,weights=(1,.35,.2)):
         if not candidates or len(set(candidates))!=len(candidates):return None
@@ -293,7 +314,10 @@ def strategy_value(strategy,key,default=None):
 def configured_optimizer(strategy=None):
     """Copy configuration/personal votes without changing shared catalog facts."""
     import copy
-    base=load_optimizer();config=copy.deepcopy(base.config)
+    from .database import DATABASE_SNAPSHOT
+    base=load_optimizer();snapshot=DATABASE_SNAPSHOT.get()
+    if snapshot is not None:base=snapshot.overlay_optimizer(base)
+    config=copy.deepcopy(base.config)
     overrides=strategy_value(strategy,'scoring_overrides',{})
     scores=strategy_value(strategy,'personal_scores',{})
     try:overrides,scores=dict(overrides),dict(scores)
@@ -312,6 +336,8 @@ def configured_optimizer(strategy=None):
     if not enabled:config['attributeDamageBonus']={key:0.0 for key in config['attributeDamageBonus']}
     profiles={key:Profile(copy.deepcopy(p.data)) for key,p in base.profiles.items()}
     for key,value in scores.items():
-        if key not in profiles or type(value) not in (int,float) or not isfinite(value) or not 0<=value<=100:raise ValueError('role_personal_score_invalid')
-        profiles[key].data['personalScore']=value
+        if (type(key) is not str or re.fullmatch(r'[1-9][0-9]{3,5}',key) is None
+                or type(value) not in (int,float) or not isfinite(value) or not 0<=value<=100):raise ValueError('role_personal_score_invalid')
+        # Preserve saved ratings for identities absent from this catalog.
+        if key in profiles:profiles[key].data['personalScore']=value
     return Optimizer(profiles,config)

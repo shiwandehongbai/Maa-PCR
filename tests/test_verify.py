@@ -106,7 +106,7 @@ def test_gui_rejects_stale_core_before_running(monkeypatch, tmp_path, mode):
 
 def test_gui_plan_builds_before_checks_and_uses_matching_rids(tmp_path):
     commands = verify.gui_commands("sdk", tmp_path / "gui", tmp_path)
-    assert len(commands) == 16
+    assert len(commands) == 22
     assert [name for name, _, _ in commands][0:2] == ["MFAAvalonia.Desktop-restore", "MFAAvalonia.Desktop-build"]
     for name, command, cwd in commands:
         assert cwd.is_relative_to(tmp_path)
@@ -115,12 +115,17 @@ def test_gui_plan_builds_before_checks_and_uses_matching_rids(tmp_path):
             assert "--configfile" in command
         if name.endswith("build"):
             assert "--no-restore" in command
-        if name.startswith(("PcrProfileSwitch", "PcrLabyrinthCredentials")):
+        if name.startswith(("PcrProfileSwitch", "PcrLabyrinth")):
             assert "-r" not in command
         elif not name.endswith("run"):
             assert command[command.index("-r") + 1] == "win-x64"
         if name == "PcrProfileSwitch.Tests-run":
             assert command[-3:] == [str(verify.ROOT), str(tmp_path / "fixtures/PcrProfileSwitch.Tests"), sys.executable]
+        if name in ("PcrLabyrinthAccounts.Tests-run","PcrLabyrinthRatings.Tests-run"):
+            project=name.removesuffix('-run')
+            assert command[-2:]==[str(tmp_path/'fixtures'/project),str(verify.ROOT)]
+            lock=verify.ROOT/'gui/MFAAvalonia'/project/'packages.lock.json'
+            assert json.loads(lock.read_text(encoding='utf-8'))['dependencies']['net10.0']
 
 
 def test_gui_plan_runs_each_clan_contract_in_a_separate_process_without_rebuilding(tmp_path):

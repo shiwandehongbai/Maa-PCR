@@ -40,7 +40,8 @@ def public_command(output: Path) -> list[str]:
 def gui_commands(dotnet: str, gui: Path, output: Path) -> list[tuple[str, list[str], Path]]:
     commands = []
     common = ["-p:Platform=x64", "-p:Configuration=Release", "-p:UsedAvaloniaProducts="]
-    for name in ("MFAAvalonia.Desktop", "PcrUpdate.Tests", "PcrProfileSwitch.Tests", "PcrLabyrinthCredentials.Tests"):
+    for name in ("MFAAvalonia.Desktop", "PcrUpdate.Tests", "PcrProfileSwitch.Tests", "PcrLabyrinthCredentials.Tests",
+                 "PcrLabyrinthAccounts.Tests", "PcrLabyrinthRatings.Tests"):
         project = gui / name / (name + ".csproj")
         runtime = ["-r", "win-x64"] if name in ("MFAAvalonia.Desktop", "PcrUpdate.Tests") else []
         properties = common + ([f"-p:PcrCoreDirectory={gui / 'bin/x64/Release'}",
@@ -57,9 +58,9 @@ def gui_commands(dotnet: str, gui: Path, output: Path) -> list[tuple[str, list[s
         if runtime:
             binary /= "win-x64"
         command = [dotnet, str(binary / (name + ".dll"))]
-        if name in ("PcrUpdate.Tests", "PcrLabyrinthCredentials.Tests"):
+        if name == "PcrUpdate.Tests" or name.startswith("PcrLabyrinth"):
             command.append(str(output / "fixtures" / name))
-        if name == "PcrLabyrinthCredentials.Tests":
+        if name.startswith("PcrLabyrinth"):
             command.append(str(ROOT))
         if name == "PcrProfileSwitch.Tests":
             command.extend([str(ROOT), str(output / "fixtures" / name), sys.executable])

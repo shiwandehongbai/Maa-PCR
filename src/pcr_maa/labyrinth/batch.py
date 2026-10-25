@@ -106,7 +106,10 @@ class Batch:
         return self.require_game_session(self._game_session,route)
 
     def checkpoint(self):
-        try:stopped=self.stopped()
+        try:
+            pause=getattr(self.stopped,'checkpoint',None)
+            if callable(pause):pause()
+            stopped=self.stopped()
         except BaseException:
             self.invalidate_game_session();raise
         if stopped:

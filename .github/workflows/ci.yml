@@ -84,6 +84,25 @@ jobs:
             if (-not $check.WaitForExit(600000)) { $check.Kill($true); throw "Profile check $mode timed out." }
             if ($check.ExitCode -ne 0) { throw "Profile check $mode exited $($check.ExitCode)." }
           }
+      - name: Labyrinth Parity GUI Checks
+        run: |
+          $source = [IO.Path]::GetFullPath((Get-Location).Path)
+          $core = Join-Path $source '.runtime/ci/build/player/libs'
+          $native = Join-Path $source '.runtime/ci/build/player/runtimes/win-x64/native'
+          $evidence = Join-Path $source '.runtime/ci/parity-gui-checks'
+          New-Item -ItemType Directory -Force $evidence | Out-Null
+          foreach ($project in @('PcrLabyrinthAccounts.Tests', 'PcrLabyrinthRatings.Tests')) {
+            dotnet build "gui/MFAAvalonia/$project/$project.csproj" --configuration Release -p:Platform=x64 -p:PcrCoreDirectory=$core -p:PcrNativeDirectory=$native -p:RestorePackagesWithLockFile=true -p:RestoreLockedMode=true
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $binary = Join-Path $source "gui/MFAAvalonia/$project/bin/x64/Release/net10.0"
+            $coreHash = (Get-FileHash -Algorithm SHA256 (Join-Path $core 'MFAAvalonia.Core.dll')).Hash
+            if ((Get-FileHash -Algorithm SHA256 (Join-Path $binary 'MFAAvalonia.Core.dll')).Hash -ne $coreHash) { throw 'Parity checks do not reference the current packaged Core build.' }
+            $coreHash | Set-Content -Encoding utf8 (Join-Path $evidence "$project.core.sha256")
+            $arguments = @((Join-Path $binary "$project.dll"), (Join-Path $evidence "$project/fixtures"), $source) | ForEach-Object { '"' + $_ + '"' }
+            $check = Start-Process -FilePath (Get-Command dotnet).Source -ArgumentList $arguments -WorkingDirectory $binary -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $evidence "$project.log") -RedirectStandardError (Join-Path $evidence "$project.stderr.log")
+            if (-not $check.WaitForExit(600000)) { $check.Kill($true); throw "Parity check $project timed out." }
+            if ($check.ExitCode -ne 0) { throw "Parity check $project exited $($check.ExitCode)." }
+          }
       - name: Bundled Runtime Checks
         run: |
           $env:PCR_PLAYER_PACKAGE_ROOT = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE '.runtime/ci/build/player'))
@@ -104,6 +123,7 @@ jobs:
             .runtime/ci/gui-checks.log
             .runtime/ci/credentials-checks.log
             .runtime/ci/profile-checks/
+            .runtime/ci/parity-gui-checks/
             .runtime/ci/build/*.json
             .runtime/ci/build/*.log
             .runtime/ci/build/Maa-PCR-*-win-x64.zip

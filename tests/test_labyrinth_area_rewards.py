@@ -42,6 +42,7 @@ def test_area_end_handles_late_reward_before_committing_next_area(tmp_path,monke
 
     runtime.observe=scoped_observe
     monkeypatch.setattr(scene,'time',SimpleNamespace(monotonic=lambda:clock[0]))
+    monkeypatch.setattr('pcr_maa.native.active_now',scene.time.monotonic)
     monkeypatch.setattr(autoplay,'_poll_pause',pause)
     if next_area==3:
         with pytest.raises(BatchStopped,match='^area_transition_unknown$'):runner.play(route,batch)

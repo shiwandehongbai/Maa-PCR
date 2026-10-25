@@ -26,7 +26,7 @@ class MaaOpening:
     def _wait_invitation_joined(self,batch,enter_id,invited,node=None):
         from .scene import MaaSceneRuntime
         # Transition and identity reads share one budget, capped by the Owner.
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+JOINED_CONFIRMATION_TIMEOUT_SECONDS)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+JOINED_CONFIRMATION_TIMEOUT_SECONDS)
         token=native.RUN_DEADLINE.set(deadline)
         try:
             MaaSceneRuntime(self.tasker,self.stamp,timings=self.timings,stopped=batch.stopped).wait_for(
@@ -189,6 +189,11 @@ class MaaOpening:
         try:
             clicked=batch.transaction('opening_granted_close',fields,close)
             batch.checkpoint();entry='LabyOpeningGrantPostObserved'
+            if page=='opening_empty':
+                from .scene import MaaSceneRuntime,OBSERVATION_TIMEOUT_SECONDS
+                MaaSceneRuntime(self.tasker,self.stamp,timings=self.timings,stopped=batch.stopped).wait_for(
+                    batch,{'free_role_reward'},source={'map','joined'},timeout=OBSERVATION_TIMEOUT_SECONDS,
+                    reason='opening_readback_unknown')
             hit,_=self._choice(batch,entry,['LabyDateChangedObserved','LabyDisconnect6002Observed',next_node])
             receipt=self._run(hit);batch.checkpoint()
             closed=batch.observation(self.stamp(source='maa',operation_id=clicked['operation_id'],**fields,page=page,native=receipt,input_native=clicked['input_native']),**fields)

@@ -73,6 +73,7 @@ def slow(monkeypatch):
     clock = Clock()
     monkeypatch.setattr(native, 'time', clock)
     monkeypatch.setattr(scene, 'time', clock)
+    monkeypatch.setattr('pcr_maa.native.active_now',scene.time.monotonic)
     monkeypatch.setattr(native, '_STOP_SLEEP', clock.sleep)
     monkeypatch.setattr(native, '_BLOCKED_TASKERS', [])
     monkeypatch.setattr(autoplay, '_poll_pause', lambda *args: None)
@@ -204,6 +205,7 @@ def test_character_feedback_predicate_shares_deadline_and_rejects_late_result(sl
 def test_encounter_rejects_capture_after_deadline_or_stop(slow, monkeypatch, stopped):
     from pcr_maa.labyrinth import encounters
     monkeypatch.setattr(encounters, 'time', slow)
+    monkeypatch.setattr('pcr_maa.native.active_now',encounters.time.monotonic)
     value = encounters.MaaEncounter.__new__(encounters.MaaEncounter)
     stop = [False]
 
@@ -228,6 +230,7 @@ def test_encounter_rejects_capture_after_deadline_or_stop(slow, monkeypatch, sto
 def test_startup_download_retry_never_outlives_business_deadline(slow, monkeypatch, parent, on_time):
     from pcr_maa.labyrinth import game_session
     monkeypatch.setattr(game_session, 'time', slow)
+    monkeypatch.setattr('pcr_maa.native.active_now',game_session.time.monotonic)
     adapter = game_session.MaaGameSession.__new__(game_session.MaaGameSession)
     adapter.tasker = NS(resource=NS(override_pipeline=lambda nodes: True))
     adapter.timings, adapter.opening_snapshot = Timings(), NS()

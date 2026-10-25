@@ -44,8 +44,15 @@
           "sha256": "666522d3bf9a49d89223645fb66096ede579aee6082bdd67a723728fbf2c1226"
         }
       ],
-      "local_sha256": "84e3fa5adee1b32614ac1d6687728a8ebd3bf06ed247c7c9c8a87ab74ce8e612",
-      "production_runtime": true
+      "local_sha256": "578162ec9e484905361722f4081435086f82be014a88a22adb67c5bd3a0db9a7",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthShopPolicy.kt",
+          "sha256": "f8dac2f675c70fa3bc77dd853cfd9b26b6bd8e357e22f084d5a4a7c23592e372"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/roles.py",
@@ -58,8 +65,20 @@
           "sha256": "b2a35d7ddc4795d7c4976d611933daef99a1a7f84e24dc81fc8830262be400dd"
         }
       ],
-      "local_sha256": "f50f3cf018fde4f6afc8423a349e169a70dd9143547965bd9ecf845d844868e4",
-      "production_runtime": true
+      "local_sha256": "8377af8d0fee286c2cf0c1f0ceff211fd900c76cc6e86a8493f1e85ff9d5a6a7",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEncounterFormation.kt",
+          "sha256": "f5fccad3b0721f226f73c4d7c26f007ebe78a6c73e5383baa8211fbd140a7609"
+        },
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthExEncounterStrategy.kt",
+          "sha256": "45aadd2469d8933f817b8682f349ea3746070b37993ee7f7ee7ae4cf95f6cc49"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/events.py",
@@ -100,8 +119,15 @@
           "sha256": "2fc30ccfccb03d8898a0b8771bb526aeb73109262ea820deae0a84c8f76520cf"
         }
       ],
-      "local_sha256": "a69ceeeecd1d7480f566aef9508f7cc43ac212807568cd0f2fdffb09d949a112",
-      "production_runtime": true
+      "local_sha256": "956dd5a19e32f778bf12b07aa22dfb9591f80b8d0d598d1fe29d0bd79dc13c79",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/protocol/bilibili/GameServer.kt",
+          "sha256": "b27177f7e0c647873d45ad604331ee3266c244e2206d3ed761cf6e937e486843"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/navigation.py",
@@ -204,9 +230,21 @@
           "sha256": "03f9a2f1d572fd8164e33ddf7b93f4b10b0d12dae91bfd1ee2b86470dac1cf57"
         }
       ],
-      "local_sha256": "1ad5725edfc0ae28122719998e4679d6ce2c7d0c440c2cf6d4e02503da83d1a6",
+      "local_sha256": "0b10aa111aa021e57a64439c609176654d27edec1f961d2938efa91940b540f0",
       "combined_distribution_compatibility": "not-established",
-      "production_runtime": true
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthBattleFailureRecognition.kt",
+          "sha256": "1d2ac08c08d1e16500dd323cf9860cc38c244e2e584f6789d6fb864ede1d25eb"
+        },
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/shop_execution.py",
@@ -231,9 +269,16 @@
           "sha256": "689293e2a9d7ca87d8fc19ba26b4f7939d4a628b4f19828ac6f50c2ceea41b9c"
         }
       ],
-      "local_sha256": "dd838042e22eca212dbc89fb69bd40f01132d894cad7343fe7922e7a3953d4e7",
+      "local_sha256": "e0de13ff017b7139c2a1e92dc0ec2f39b0f09a9d618c54fad308f98f6e85559a",
       "combined_distribution_compatibility": "not-established",
-      "production_runtime": true
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthShopPolicy.kt",
+          "sha256": "f8dac2f675c70fa3bc77dd853cfd9b26b6bd8e357e22f084d5a4a7c23592e372"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/event_observation.py",
@@ -250,7 +295,7 @@
           "sha256": "4da7ebd40347a815e8898b562215fa1c5c7003aa53c5ebca34b079cae8176922"
         }
       ],
-      "local_sha256": "90d600f5beefc3cd8d446da41759ae97f56aceb434ccd25d166eaf196aa81ad3",
+      "local_sha256": "9d9a39262c612594501c28f42bcd1149685c4c1778d4de00b49ccc1238be72dd",
       "combined_distribution_compatibility": "not-established",
       "production_runtime": true
     },
@@ -269,7 +314,7 @@
           "sha256": "689293e2a9d7ca87d8fc19ba26b4f7939d4a628b4f19828ac6f50c2ceea41b9c"
         }
       ],
-      "local_sha256": "851cb8c9be5f619947fb20d2d425b9d3bdd82260623d12f47900c52da1b9baf6",
+      "local_sha256": "6e8bc6b083a52d694f0d282996f984195cfa3dfe985610a3d008309be4c8bddd",
       "combined_distribution_compatibility": "not-established",
       "production_runtime": true
     },
@@ -320,9 +365,16 @@
           "sha256": "9f65df1a08613f39e93f8d6c707b4a0533db39df596623b686999a2933dff6cc"
         }
       ],
-      "local_sha256": "6b54068fefc5d891026e95aeecb890a588f1e39320b6d91c57dee44d62eb42db",
+      "local_sha256": "a1d349e8711592ef1ade35415551cab25212435446bc6ccc27e45aa76ebbe9be",
       "combined_distribution_compatibility": "not-established",
-      "production_runtime": true
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/game_port.py",
@@ -343,9 +395,16 @@
           "sha256": "e42c109c56a990a33cfac421517044c9c157c2cda7e46f70043e44ea899f9e2d"
         }
       ],
-      "local_sha256": "b1794c45326a8b11ae139d88a16807c5797c1bc5d1c0114798cf96cb6c587e13",
+      "local_sha256": "a0e2b43e6065f47972d113adc26bcc6dd1e2d7909935d5eb88910a20d1a656ce",
       "combined_distribution_compatibility": "not-established",
-      "production_runtime": true
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/opening.py",
@@ -362,7 +421,7 @@
           "sha256": "689293e2a9d7ca87d8fc19ba26b4f7939d4a628b4f19828ac6f50c2ceea41b9c"
         }
       ],
-      "local_sha256": "0455437ece654744198d05daf01efc94fbde25cd1c0d104a1681cc75e45b7750",
+      "local_sha256": "7548660bbe9a673a2f0b2fadc2dd65a8f0505da2d6b8e258d42d32c3ffe6aa57",
       "combined_distribution_compatibility": "not-established",
       "production_runtime": true
     },
@@ -417,7 +476,7 @@
           "sha256": "689293e2a9d7ca87d8fc19ba26b4f7939d4a628b4f19828ac6f50c2ceea41b9c"
         }
       ],
-      "local_sha256": "4974d742e63b2b1c4890840287d041e6ee3415c9c648e53d392eadd7daba12fa",
+      "local_sha256": "c2d3d37cce5ba3c90ba32b0db0f2f302b4d687dda3471e06ad64750a7db63fa3",
       "combined_distribution_compatibility": "not-established",
       "production_runtime": true
     },
@@ -467,9 +526,21 @@
           "sha256": "689293e2a9d7ca87d8fc19ba26b4f7939d4a628b4f19828ac6f50c2ceea41b9c"
         }
       ],
-      "local_sha256": "2b54e9a7bb811b4f77aaff557e1281063c40e76a236c45210e91cf2824156a0a",
+      "local_sha256": "5503b69a6a4a6cbd857ef3d4d3c9456cf7b277ea83aed11b8ea5abc3f5ef372a",
       "combined_distribution_compatibility": "not-established",
-      "production_runtime": true
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        },
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthSpecialEquipmentRecognition.kt",
+          "sha256": "f3f9bd5812712da260dff44fd3033b7a86e4fb26144bcddaa42b5142bc3c2024"
+        }
+      ]
     },
     {
       "local": "src/pcr_maa/labyrinth/rewards.py",
@@ -599,8 +670,184 @@
           "sha256": "689293e2a9d7ca87d8fc19ba26b4f7939d4a628b4f19828ac6f50c2ceea41b9c"
         }
       ],
-      "local_sha256": "4ed98500ba43bcc769bb8958488d09a7ac45df089f8ced0b86879c4bca098c45",
-      "production_runtime": true
+      "local_sha256": "7f3b08d227168c03d6ddca0d400b8120066c109c13b2efef059dc1098651888e",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthExEncounterStrategy.kt",
+          "sha256": "45aadd2469d8933f817b8682f349ea3746070b37993ee7f7ee7ae4cf95f6cc49"
+        },
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEncounterFormation.kt",
+          "sha256": "f5fccad3b0721f226f73c4d7c26f007ebe78a6c73e5383baa8211fbd140a7609"
+        }
+      ]
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/special_equipment.py",
+      "kind": "adapted-code",
+      "license": "CC-BY-NC-SA-4.0",
+      "author": "wbero and project contributors; MAA PCR adaptation contributors",
+      "upstream": [],
+      "local_sha256": "d0a3be5b2b1248674b987fed251b271439d197ae9568bf1599bdf94d4db6fe56",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthSpecialEquipmentRecognition.kt",
+          "sha256": "f3f9bd5812712da260dff44fd3033b7a86e4fb26144bcddaa42b5142bc3c2024"
+        },
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        }
+      ]
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/database.py",
+      "kind": "adapted-code",
+      "license": "CC-BY-NC-SA-4.0",
+      "author": "wbero and project contributors; MAA PCR adaptation contributors",
+      "upstream": [],
+      "local_sha256": "aaa90c359dd7b741efcf00ac2a24d04624da2ea5ccfa1d03eb242ca7e564e5ab",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/AndroidLabyrinthCnDatabaseRepository.kt",
+          "sha256": "064069da432ff5e5eca46cfba500c12b748cebbb4e43c4cf869cc331d59e96b3"
+        },
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthCnDatabaseUpdater.kt",
+          "sha256": "d0a4a8ae5d7854ad7f4147d3ca7a8e343b0f8028ac2bea0ebcd0a265476b69ca"
+        }
+      ]
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/diagnostics.py",
+      "kind": "adapted-code",
+      "license": "CC-BY-NC-SA-4.0",
+      "author": "wbero and project contributors; MAA PCR adaptation contributors",
+      "upstream": [],
+      "local_sha256": "ff215cfe23f4f8f6887dba8d8099d3be218fa63889f626a6e8d111591e038859",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/debug/LabyrinthRuntimeDiagnostics.kt",
+          "sha256": "4346ee5c7992ade636efcbcbed61930672b11f4e2139fd93736bd7c12daf0378"
+        }
+      ]
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/timing.py",
+      "kind": "adapted-code",
+      "license": "CC-BY-NC-SA-4.0",
+      "author": "wbero and project contributors; MAA PCR adaptation contributors",
+      "upstream": [],
+      "local_sha256": "c4dbe1bf4f14e14a281f03cf0578be8dc0b7362a2f46f76bf532ef1430841927",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/debug/LabyrinthRuntimeDiagnostics.kt",
+          "sha256": "4346ee5c7992ade636efcbcbed61930672b11f4e2139fd93736bd7c12daf0378"
+        }
+      ]
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/servers.py",
+      "kind": "adapted-code",
+      "license": "CC-BY-NC-SA-4.0",
+      "author": "wbero and project contributors; MAA PCR adaptation contributors",
+      "upstream": [],
+      "local_sha256": "fd6a35349d92b9e17a5d27782018bdaa1b27936de73aa2a455352b30492f420b",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/protocol/bilibili/GameServer.kt",
+          "sha256": "b27177f7e0c647873d45ad604331ee3266c244e2206d3ed761cf6e937e486843"
+        }
+      ]
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/session.py",
+      "kind": "adapted-code",
+      "license": "CC-BY-NC-SA-4.0",
+      "author": "wbero and project contributors; MAA PCR adaptation contributors",
+      "upstream": [],
+      "local_sha256": "46ec29d77fc5130b703aafdb88ae1a28ce3eb581790a629463e47a6f85dc6550",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/automation/session/ChannelLoginPrompts.kt",
+          "sha256": "7689bdb9315ece3b2233da5b8a3ece0dd334a5142de87f5a20ee7031685323b9"
+        }
+      ]
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/game_session.py",
+      "kind": "adapted-code",
+      "license": "CC-BY-NC-SA-4.0",
+      "author": "wbero and project contributors; MAA PCR adaptation contributors",
+      "upstream": [],
+      "local_sha256": "74e3c630c818962b08a16b383a8fdfb674206744d09ea94ea3092bc1c177232b",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/automation/session/ChannelLoginPrompts.kt",
+          "sha256": "7689bdb9315ece3b2233da5b8a3ece0dd334a5142de87f5a20ee7031685323b9"
+        },
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        }
+      ]
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/config.py",
+      "kind": "adapted-code",
+      "license": "CC-BY-NC-SA-4.0",
+      "author": "wbero and project contributors; MAA PCR adaptation contributors",
+      "upstream": [],
+      "local_sha256": "4bf6187f9660ad7658150fa7883dd60eb764d2ff95beb5bdbb685dea716a7383",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthRerollSettings.kt",
+          "sha256": "9a9da9fa23eeac3124e4990a9c4e4c930b5a7d14bf289a778839835bd88a7e65"
+        }
+      ]
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/owned_runtime.py",
+      "kind": "adapted-code",
+      "license": "CC-BY-NC-SA-4.0",
+      "author": "wbero and project contributors; MAA PCR adaptation contributors",
+      "upstream": [],
+      "local_sha256": "0fbd89392b1883351c2fae4c9d61d132352eff1f8837c8df5de4f553eb7f5259",
+      "production_runtime": true,
+      "upstream_updates": [
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt",
+          "sha256": "cea0861fc0aa5904dac7f8cebe753ac461ed3c09a95da65cd8a6a18be3440393"
+        },
+        {
+          "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthCnDatabaseUpdater.kt",
+          "sha256": "d0a4a8ae5d7854ad7f4147d3ca7a8e343b0f8028ac2bea0ebcd0a265476b69ca"
+        }
+      ]
     }
   ],
   "autopcr": "vendor/autopcr_sync/SOURCE_MANIFEST.json",
@@ -7159,13 +7406,13 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/autoplay.py",
-      "local_sha256": "6b54068fefc5d891026e95aeecb890a588f1e39320b6d91c57dee44d62eb42db",
+      "local_sha256": "a1d349e8711592ef1ade35415551cab25212435446bc6ccc27e45aa76ebbe9be",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
     {
       "local": "src/pcr_maa/labyrinth/batch.py",
-      "local_sha256": "d58591e230fa915e25a72753ff0bde26a32a4d236f0310da33079923a0cf2e3a",
+      "local_sha256": "69ac4b3f2097380ee13a0d33fdc7ef84e4efb8869ebce1cb3140b5d53a9bdcc3",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7195,13 +7442,13 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/character_recognition.py",
-      "local_sha256": "4974d742e63b2b1c4890840287d041e6ee3415c9c648e53d392eadd7daba12fa",
+      "local_sha256": "c2d3d37cce5ba3c90ba32b0db0f2f302b4d687dda3471e06ad64750a7db63fa3",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
     {
       "local": "src/pcr_maa/labyrinth/config.py",
-      "local_sha256": "7492bbc51b75b06a35e020bc0bc2c87703cd8f45fe300c043a8103a3e472a8a3",
+      "local_sha256": "4bf6187f9660ad7658150fa7883dd60eb764d2ff95beb5bdbb685dea716a7383",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7219,13 +7466,13 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/event_execution.py",
-      "local_sha256": "851cb8c9be5f619947fb20d2d425b9d3bdd82260623d12f47900c52da1b9baf6",
+      "local_sha256": "6e8bc6b083a52d694f0d282996f984195cfa3dfe985610a3d008309be4c8bddd",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
     {
       "local": "src/pcr_maa/labyrinth/event_observation.py",
-      "local_sha256": "90d600f5beefc3cd8d446da41759ae97f56aceb434ccd25d166eaf196aa81ad3",
+      "local_sha256": "9d9a39262c612594501c28f42bcd1149685c4c1778d4de00b49ccc1238be72dd",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7237,13 +7484,13 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/game_port.py",
-      "local_sha256": "b1794c45326a8b11ae139d88a16807c5797c1bc5d1c0114798cf96cb6c587e13",
+      "local_sha256": "a0e2b43e6065f47972d113adc26bcc6dd1e2d7909935d5eb88910a20d1a656ce",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
     {
       "local": "src/pcr_maa/labyrinth/game_session.py",
-      "local_sha256": "9559c39693ab4bd92d03aa97f15167229c41401036d92476c22072accd33bbc4",
+      "local_sha256": "74e3c630c818962b08a16b383a8fdfb674206744d09ea94ea3092bc1c177232b",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7291,13 +7538,13 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/opening.py",
-      "local_sha256": "0455437ece654744198d05daf01efc94fbde25cd1c0d104a1681cc75e45b7750",
+      "local_sha256": "7548660bbe9a673a2f0b2fadc2dd65a8f0505da2d6b8e258d42d32c3ffe6aa57",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
     {
       "local": "src/pcr_maa/labyrinth/owned_runtime.py",
-      "local_sha256": "18b4a0a887057569a5f007e87f451364b62b7a7b0520ace41c4e2fb8d16ab638",
+      "local_sha256": "0fbd89392b1883351c2fae4c9d61d132352eff1f8837c8df5de4f553eb7f5259",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7321,13 +7568,13 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/profile.py",
-      "local_sha256": "6e7c3c07cb70c8626f6aefa063ab8924b286514137045b9ab263ece144519fbc",
+      "local_sha256": "0f1ef3e1459c07e5dc2984e1f35b96c62564458cdaa2a5991bc3bf1e1761cafc",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
     {
       "local": "src/pcr_maa/labyrinth/protocol.py",
-      "local_sha256": "a69ceeeecd1d7480f566aef9508f7cc43ac212807568cd0f2fdffb09d949a112",
+      "local_sha256": "956dd5a19e32f778bf12b07aa22dfb9591f80b8d0d598d1fe29d0bd79dc13c79",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7357,7 +7604,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/roles.py",
-      "local_sha256": "f50f3cf018fde4f6afc8423a349e169a70dd9143547965bd9ecf845d844868e4",
+      "local_sha256": "8377af8d0fee286c2cf0c1f0ceff211fd900c76cc6e86a8493f1e85ff9d5a6a7",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7375,19 +7622,19 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/scene.py",
-      "local_sha256": "1ad5725edfc0ae28122719998e4679d6ce2c7d0c440c2cf6d4e02503da83d1a6",
+      "local_sha256": "0b10aa111aa021e57a64439c609176654d27edec1f961d2938efa91940b540f0",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
     {
       "local": "src/pcr_maa/labyrinth/session.py",
-      "local_sha256": "1e176691d6ce2d923a9f26c3af3154f403ef4b23bb598bcb0db97a7d294d39a4",
+      "local_sha256": "46ec29d77fc5130b703aafdb88ae1a28ce3eb581790a629463e47a6f85dc6550",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
     {
       "local": "src/pcr_maa/labyrinth/shop_execution.py",
-      "local_sha256": "dd838042e22eca212dbc89fb69bd40f01132d894cad7343fe7922e7a3953d4e7",
+      "local_sha256": "e0de13ff017b7139c2a1e92dc0ec2f39b0f09a9d618c54fad308f98f6e85559a",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7405,7 +7652,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/strategies.py",
-      "local_sha256": "84e3fa5adee1b32614ac1d6687728a8ebd3bf06ed247c7c9c8a87ab74ce8e612",
+      "local_sha256": "578162ec9e484905361722f4081435086f82be014a88a22adb67c5bd3a0db9a7",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7417,7 +7664,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/team_execution.py",
-      "local_sha256": "2b54e9a7bb811b4f77aaff557e1281063c40e76a236c45210e91cf2824156a0a",
+      "local_sha256": "5503b69a6a4a6cbd857ef3d4d3c9456cf7b277ea83aed11b8ea5abc3f5ef372a",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7429,7 +7676,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/timing.py",
-      "local_sha256": "6fcee5582442e89c7d22b502cd7b1b3bc7d5124c32cdaeb27a0a322d70b32935",
+      "local_sha256": "c4dbe1bf4f14e14a281f03cf0578be8dc0b7362a2f46f76bf532ef1430841927",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7477,13 +7724,13 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/encounters.py",
-      "local_sha256": "4ed98500ba43bcc769bb8958488d09a7ac45df089f8ced0b86879c4bca098c45",
+      "local_sha256": "7f3b08d227168c03d6ddca0d400b8120066c109c13b2efef059dc1098651888e",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
     {
       "local": "src/pcr_maa/labyrinth/app_version.py",
-      "local_sha256": "8dee35eba341ee7e7ff61b452c3a54f5980787e8663c5ca06bc5ccb881b64896",
+      "local_sha256": "26142870b80b8c0591b996409da44f56a99d96c6e53de46e55fb91384f437475",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -7504,6 +7751,174 @@
       "kind": "local-home-recognition-file",
       "production_runtime": true,
       "local_sha256": "a3dcd9f8424cef6770dfd79531495a04b67f88c0f9f4f9c8f101c15650ee075b"
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/database.py",
+      "local_sha256": "aaa90c359dd7b741efcf00ac2a24d04624da2ea5ccfa1d03eb242ca7e564e5ab",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/diagnostics.py",
+      "local_sha256": "ff215cfe23f4f8f6887dba8d8099d3be218fa63889f626a6e8d111591e038859",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/restart.py",
+      "local_sha256": "1e8ac091ec53ae60ae3ffebb92b07bd4cdf727498c1c94d3527a3761ef2e145d",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/servers.py",
+      "local_sha256": "fd6a35349d92b9e17a5d27782018bdaa1b27936de73aa2a455352b30492f420b",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "src/pcr_maa/labyrinth/special_equipment.py",
+      "local_sha256": "d0a3be5b2b1248674b987fed251b271439d197ae9568bf1599bdf94d4db6fe56",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "src/pcr_maa/native.py",
+      "local_sha256": "2b14d1d078936e2bc3a374b3fd0ecd6973718097fd18df5b7d4d2f79e952253b",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "scripts/start-labyrinth-owned-agent.py",
+      "local_sha256": "0ba025fe8cebda63afa0a17665a8257dd3c027e54465083a3d970ddf90468656",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthAccounts.cs",
+      "local_sha256": "cf93e63929e6c60588029e259b7928e510d0c1c9b7beb81918e8a735c96993bc",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthCaptchaMessage.cs",
+      "local_sha256": "96b2a06a2df029d0541fc1e94313624b96a6c2769260a8f2713772aa9fa14fa1",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthCharacters.cs",
+      "local_sha256": "5a53dc8345f21fd4023cd6c417f6b7a39348ab2931057a38e734480c02ccf8a9",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthOwner.cs",
+      "local_sha256": "817eb194daab106fb6a7ace69e0e20bbca9252f25e6b27de1c1e1a7813258519",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthRatings.cs",
+      "local_sha256": "f9db0ec0ca7d6930bfdf98a130d88eff8d2af4b151f9ecbf3cd89a7319cdb459",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthRatingsView.axaml.cs",
+      "local_sha256": "29d8c690caa44a0f7526210470f7c5b23efb73a548294e87a894ee59ca8bd2b0",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthRoster.cs",
+      "local_sha256": "316cd601cac263a564c06109fabc94066886f4846e5de905e27f1f1fc5c4f7b3",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthSettings.cs",
+      "local_sha256": "9d0da2fc96222e3618937ede3071c35c1e0bf34f356b8def78badfad93017b28",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthView.axaml.cs",
+      "local_sha256": "f566ba29686bbe7d80d650ebe5643f6f3aef49ab7e62ce729ab0eaf28f752517",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthRatingsView.axaml",
+      "local_sha256": "0b8024b5ed281e7fdca7627ef3e9c780b0d8a6073f8666ecbee29f7e5b57e389",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthView.axaml",
+      "local_sha256": "c4d3f7b7bd4f227315d9663e1634104477a2895a2f14b5d7ba144bf471ebd61f",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLogFiles.cs",
+      "local_sha256": "481e077ffe3d251fb160a6bc78b271fcb929d57f78294490e1545e844267953d",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
+      "local": "assets/resource/image/labyrinth/special_equipment/PROVENANCE.json",
+      "local_sha256": "9fed24df65b84c249f348cf47e8983c76e2f6010a55b04b4c51dd88747cf2b05",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": true
+    },
+    {
+      "local": "assets/resource/image/labyrinth/special_equipment/special_equipment_auto_button.png",
+      "local_sha256": "0814804e61b3781bcf1016efa83166d2252ebb7e0a4de95fa8f60951591ee920",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": true
+    },
+    {
+      "local": "assets/resource/image/labyrinth/special_equipment/special_equipment_auto_dialog_anchor.png",
+      "local_sha256": "94fe8acdefb1028c1c7b96a62e255a4244ad4e7c5d4422b6210049e388f7e69b",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": true
+    },
+    {
+      "local": "assets/resource/image/labyrinth/special_equipment/special_equipment_auto_dialog_confirm_button.png",
+      "local_sha256": "d4206c72423f5a60d62f023a28999016f9f23ee6aba64717c9e7b03a20778b6e",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": true
+    },
+    {
+      "local": "assets/resource/image/labyrinth/special_equipment/special_equipment_battle_team_button.png",
+      "local_sha256": "98ab70f1aabadcd66b797500da3a72d7246d8fa700b3d6bc1f05e75b317b5c67",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": true
+    },
+    {
+      "local": "assets/resource/image/labyrinth/special_equipment/special_equipment_dialog_anchor.png",
+      "local_sha256": "61ded0a2ebb72096d003a8238f983bb8540f5b0d38e384eb724d5f78083a61f0",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": true
+    },
+    {
+      "local": "assets/resource/image/labyrinth/special_equipment/special_equipment_dialog_title.png",
+      "local_sha256": "698538fddc16e34adc096eb84faf7cdef258db897f70991ec6c87ba3abe1ed74",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": true
+    },
+    {
+      "local": "assets/resource/image/labyrinth/special_equipment/special_equipment_equip_confirm_disabled.png",
+      "local_sha256": "9fb02ffe273cb18ec21703596573b15f087bd918d76739acd52cdf4ea331899e",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": true
+    },
+    {
+      "local": "assets/resource/image/labyrinth/special_equipment/special_equipment_equip_confirm_enabled.png",
+      "local_sha256": "23d0648ea651f890dbfb7c87d48012006003ebf5e2a1a074c62cae4304454006",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": true
     }
   ],
   "redistribution_permission_established": false,
@@ -7517,7 +7932,9 @@
     "history_sha256": "6b0cce9d25a4b0ce1600bd40699df01bd2efa411bb7cd4594d9998d57c5abfc4",
     "history_preserved_as_original_bytes": true,
     "coverage": "docs/LABYRINTH_UPSTREAM_COVERAGE.md",
-    "coverage_sha256": "ef0b0030d649f5c343e8b8ffbd4f592a3d98e6f6feb1863b5fe3d8dc6a210434"
+    "coverage_sha256": "ef0b0030d649f5c343e8b8ffbd4f592a3d98e6f6feb1863b5fe3d8dc6a210434",
+    "parity": "docs/LABYRINTH_UPSTREAM_PARITY.md",
+    "parity_sha256": "78a83b030f506be8e3323c0a33df0563d076b0c5e7439b66a8e3d09fcf3faaaf"
   },
   "baseline": {
     "feature_development_revision": 24,
@@ -7532,5 +7949,24 @@
     "daily_source_inventory_sha256": "d8943313ccb551014d3449eb5d3e45c92a1b21d2856fa805f93c1dab1d68daed",
     "final_revision": 38
   },
-  "acceptance_basis": "user_approved_reused_clears"
+  "acceptance_basis": "user_approved_reused_clears",
+  "parity_updates": {
+    "upstream_commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+    "groups": [
+      "G01",
+      "G02",
+      "G03",
+      "G04",
+      "G05",
+      "G06",
+      "G07",
+      "G08",
+      "G09",
+      "G10",
+      "G11"
+    ],
+    "scope": "local-source-and-offline-validation",
+    "released": false,
+    "live_game_verified": false
+  }
 }

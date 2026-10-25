@@ -129,9 +129,11 @@ def test_preview_wrong_or_unknown_never_retries(tmp_path,kind,payload,reason,mon
     if kind=='unknown':
         import pcr_maa.labyrinth.autoplay as module
         clock=[0.0];monkeypatch.setattr(module,'time',SimpleNamespace(monotonic=lambda:clock[0]))
+        monkeypatch.setattr('pcr_maa.native.active_now',module.time.monotonic)
         monkeypatch.setattr(module,'_poll_pause',lambda *args:clock.__setitem__(0,clock[0]+.5))
         from pcr_maa.labyrinth import scene as scene_module
         monkeypatch.setattr(scene_module,'time',module.time)
+        monkeypatch.setattr('pcr_maa.native.active_now',scene_module.time.monotonic)
     with pytest.raises(BatchStopped,match=reason):runner.play(route,batch)
     assert len(navigator.previews)==1 and not runtime.inputs
     assert batch.journal.events()[-1]['state']=='settled'
@@ -145,9 +147,11 @@ def test_unknown_after_confirmation_keeps_known_ack_without_replay(tmp_path,monk
         [('map',dict(area=1)),('move_confirmation',dict(node_type=4)),('unknown',{})])
     import pcr_maa.labyrinth.autoplay as module
     clock=[0.0];monkeypatch.setattr(module,'time',SimpleNamespace(monotonic=lambda:clock[0]))
+    monkeypatch.setattr('pcr_maa.native.active_now',module.time.monotonic)
     monkeypatch.setattr(module,'_poll_pause',lambda *args:clock.__setitem__(0,clock[0]+.5))
     from pcr_maa.labyrinth import scene as scene_module
     monkeypatch.setattr(scene_module,'time',module.time)
+    monkeypatch.setattr('pcr_maa.native.active_now',scene_module.time.monotonic)
     with pytest.raises(BatchStopped,match='autoplay_readback_unknown'):runner.play(route,batch)
     assert runtime.inputs==['confirm_move'] and len(navigator.previews)==1
     assert batch.journal.events()[-1]['operation']=='node_move_confirm'
@@ -304,6 +308,7 @@ def test_automatic_area_transition_waits_old_map_and_black_without_input(tmp_pat
         ('battle_victory',{}),('final_clear',{}),('home',{})]
     runner,batch,runtime,nav,_=make(tmp_path,route,pages)
     clock=[0.0];monkeypatch.setattr(scenes,'time',SimpleNamespace(monotonic=lambda:clock[0]))
+    monkeypatch.setattr('pcr_maa.native.active_now',scenes.time.monotonic)
     runtime.tasker=runner.tasker
     runtime.wait_for=lambda *args,**kwargs:MaaSceneRuntime.wait_for(runtime,*args,**kwargs)
     def pause(*args):
@@ -330,6 +335,7 @@ def test_reward_close_observation_reuses_pure_wait_before_automatic_area(tmp_pat
         ('battle_victory',{}),('final_clear',{}),('home',{})]
     runner,batch,runtime,nav,_=make(tmp_path,route,pages)
     clock=[0.0];monkeypatch.setattr(scenes,'time',SimpleNamespace(monotonic=lambda:clock[0]))
+    monkeypatch.setattr('pcr_maa.native.active_now',scenes.time.monotonic)
     def pause(*args):clock[0]+=.5;runtime.advance()
     monkeypatch.setattr(autoplay,'_poll_pause',pause)
     result=runner.play(route,batch)

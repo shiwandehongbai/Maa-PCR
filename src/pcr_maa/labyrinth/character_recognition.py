@@ -1641,7 +1641,7 @@ class MaaCharacters:
         node=self.namespace+suffix;resource=self.tasker.resource;original=resource.get_node_data(node)
 
         if suffix=='FilterStable':
-            params=dict(params,freeze_timeout_ms=max(0,int(min(2500,(native.RUN_DEADLINE.get()-time.monotonic())*1000))))
+            params=dict(params,freeze_timeout_ms=max(0,int(min(2500,(native.RUN_DEADLINE.get()-native.active_now())*1000))))
         changes=dict(custom_recognition_param=params)
 
         if suffix=='ScrollOnce':
@@ -1715,21 +1715,21 @@ class MaaCharacters:
 
         from .. import native
 
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+timeout)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+timeout)
 
         while True:
 
-            if time.monotonic()>=deadline:raise BatchStopped('character_feedback_unknown')
+            if native.active_now()>=deadline:raise BatchStopped('character_feedback_unknown')
 
             token=native.RUN_DEADLINE.set(deadline)
 
             try:
                 observation,receipt=self.read(batch,page,roster=roster,stable=False,**({'members_only':True} if members_only else {}))
                 batch.checkpoint()
-                if time.monotonic()>=deadline:raise BatchStopped('character_feedback_unknown')
+                if native.active_now()>=deadline:raise BatchStopped('character_feedback_unknown')
                 accepted=observation['stable'] and predicate(observation)
                 batch.checkpoint()
-                if time.monotonic()>=deadline:raise BatchStopped('character_feedback_unknown')
+                if native.active_now()>=deadline:raise BatchStopped('character_feedback_unknown')
                 if accepted:return observation,receipt
             finally:native.RUN_DEADLINE.reset(token)
 
@@ -1741,7 +1741,7 @@ class MaaCharacters:
 
         from .. import native
 
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+timeout)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+timeout)
         timeout_reason='character_stability_unknown' if stable else 'character_readback_unknown'
         last_error=None
 
@@ -1749,7 +1749,7 @@ class MaaCharacters:
 
             batch.checkpoint()
 
-            if time.monotonic()>=deadline:raise BatchStopped(timeout_reason) from last_error
+            if native.active_now()>=deadline:raise BatchStopped(timeout_reason) from last_error
 
             token=native.RUN_DEADLINE.set(deadline)
 
@@ -1777,7 +1777,7 @@ class MaaCharacters:
 
             batch.checkpoint()
 
-            if time.monotonic()>=deadline:raise BatchStopped(timeout_reason) from last_error
+            if native.active_now()>=deadline:raise BatchStopped(timeout_reason) from last_error
 
             if not stable or observation['stable']:return observation,receipt
 
@@ -1834,7 +1834,7 @@ class CharacterNavigation:
                 input_action_verified=True,client_page_verified=False)
         import time
         from .. import native
-        token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),time.monotonic()+12)) if filter is not None else None
+        token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),native.active_now()+12)) if filter is not None else None
         try:
             clicked=batch.transaction(kind,fields,send)
             if filter is not None:

@@ -61,6 +61,17 @@ def test_ci_runs_all_profile_contract_modes_from_one_build_with_bounded_evidence
     assert '.runtime/ci/profile-checks/' in steps['Publish Build Evidence']
 
 
+def test_ci_runs_account_and_rating_windows_against_packaged_core_with_timeout():
+    text=(ROOT/'.github/workflows/ci.yml').read_text(encoding='utf-8')
+    checks=text.split('      - name: Labyrinth Parity GUI Checks\n',1)[1].split('      - name: Bundled Runtime Checks',1)[0]
+    assert "@('PcrLabyrinthAccounts.Tests', 'PcrLabyrinthRatings.Tests')" in checks
+    assert '-p:PcrCoreDirectory=$core' in checks and '-p:RestoreLockedMode=true' in checks
+    assert checks.count('Get-FileHash -Algorithm SHA256')==2
+    assert '-WorkingDirectory $binary -WindowStyle Hidden -PassThru' in checks
+    assert '$check.WaitForExit(600000)' in checks and '$check.Kill($true)' in checks
+    assert 'parity-gui-checks/' in text
+
+
 @pytest.mark.parametrize('name,folder,evidence,candidate_step', [
     ('ci.yml', 'ci', 'Publish Build Evidence', 'Build Portable Candidate'),
     ('release.yml', 'release', 'Publish Runtime Test Evidence', 'Promote Accepted CI Artifact'),
