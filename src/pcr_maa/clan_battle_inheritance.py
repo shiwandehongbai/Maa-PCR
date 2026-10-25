@@ -140,6 +140,11 @@ class BattleInheritance:
         self.journal.append(dict(intent, state='settled', restored=True, restore_evidence=state))
         return state
 
+    def recover(self):
+        with self.journal.locked():
+            pending = self._pending()
+            return self._restore(pending) if pending is not None else None
+
     def prepare(self):
         with self.journal.locked():
             pending = self._pending()

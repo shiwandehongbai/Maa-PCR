@@ -30,8 +30,10 @@ internal static class ClanUiFlowChecks
             "first_open_defaults_to_simulation_without_writing_mode");
         Check(view.ExecutionConfirmationForStart == null, "empty_selection_cannot_start");
         var calibration = Field<TextBlock>(view, "calibrationSummary").Text ?? "";
-        Check(new[] { "模拟战", "秒数轴", "正式三刀", "补偿刀", "不可用", "缺失" }.All(calibration.Contains),
-            "missing_bundle_lists_each_unavailable_capability_and_reason");
+        Check(new[] { "模拟战", "不可用", "缺失" }.All(calibration.Contains)
+            && !calibration.Contains("正式三刀") && !calibration.Contains("补偿刀"),
+            "missing_bundle_shows_current_mode_reason_only");
+        Check(Field<TextBlock>(view, "calibrationDetails").Text!.Contains("补偿刀"), "other_capabilities_remain_in_details");
         Check(view.ExecutionSummaryText.Contains("已击败的 BOSS 仍可选择模拟战"), "simulation_explains_defeated_boss_availability");
 
         selector.SelectedIndex = 1;
@@ -40,7 +42,9 @@ internal static class ClanUiFlowChecks
         Check(view.ExecutionSummaryText.Contains("对应校准可用") && (Field<TextBlock>(view, "calibrationSummary").Text ?? "").Contains("不可用"),
             "formal_mode_does_not_claim_capability_from_mode_selection");
         Check(PcrClanDailyExecution.Read(modePath, out _).Mode == PcrClanDailyExecution.FormalDaily
-            && view.ExecutionConfirmationForStart == null, "formal_selection_saves_without_start_confirmation");
+            && view.BattleSpeed == 2 && view.ExecutionConfirmationForStart == null, "formal_selection_saves_fixed_two_without_start_confirmation");
+        Check(!Field<ComboBox>(view, "battleSpeed").IsVisible && Field<TextBlock>(view, "formalSpeed").IsVisible,
+            "formal_speed_is_fixed_instead_of_an_editable_selector");
         var reopened = new PcrClanGuideView(root, state, config);
         Check(reopened.ExecutionMode == PcrClanDailyExecution.FormalDaily && Field<StackPanel>(reopened, "formalControls").IsVisible,
             "reopen_displays_saved_formal_mode");
@@ -71,8 +75,16 @@ internal static class ClanUiFlowChecks
             reads++; return Task.FromResult(Array.Empty<byte>());
         });
         accountPage.ShowAccountPage();
-        Check(Field<TabControl>(accountPage, "tabs").SelectedIndex == 1 && reads == 0,
-            "account_navigation_does_not_start_protocol_read");
+        Check(Field<TabControl>(accountPage, "tabs").SelectedIndex == 1 && reads == 0
+            && !accountPage.GetLogicalDescendants().OfType<TabControl>().Any()
+            && !Field<StackPanel>(accountPage, "guideActions").IsVisible,
+            "account_navigation_hides_guide_editor_without_protocol_read");
+        Check(!accountPage.GetLogicalDescendants().OfType<Expander>().Single(x => (string?)x.Header == "高级资料").IsExpanded
+            && !Field<Button>(accountPage, "stopAccount").IsVisible, "account_secondary_actions_start_collapsed");
+        accountPage.ShowGuidePage();
+        Check(accountPage.GetLogicalDescendants().OfType<TabControl>().Count() == 1
+            && Field<StackPanel>(accountPage, "guideActions").IsVisible && reads == 0,
+            "return_to_guide_keeps_original_editor_without_login");
         Check(Files(root).SequenceEqual(beforeRefresh), "account_navigation_does_not_save_or_duplicate_cache");
 
         var imagePath = Path.Combine(root, "synthetic-source.png");
@@ -101,7 +113,7 @@ internal static class ClanUiFlowChecks
         var save = (WrapPanel)Button(view, "核对五人和操作并保存").Parent!;
         var roster = flow.Children.OfType<Grid>().Single();
         var reference = flow.Children.OfType<Expander>().Single(item => (string?)item.Header == "作业名称与参考伤害");
-        var daily = flow.Children.OfType<Expander>().Single(item => item.Content is PcrClanDailyPlanView);
+        var daily = Field<Expander>(view, "dailyDetails");
         Check(flow.Children.IndexOf(roster) < flow.Children.IndexOf(save)
             && flow.Children.IndexOf(save) < flow.Children.IndexOf(reference)
             && flow.Children.IndexOf(save) < flow.Children.IndexOf(daily), "save_follows_roster_before_optional_details");

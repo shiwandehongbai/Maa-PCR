@@ -154,6 +154,36 @@ class ClanBattleCharacters(GuideTrialCharacters):
             state['battle_speed'] = page.get('battle_speed')
         return self.AnalyzeResult(box=target, detail=state)
 
+    def read_paused_controls(self, context, image, *, prefix, remaining_seconds, speeds=(1, 2, 4)):
+        for i in range(5):
+            if not self.page.hit(context, image, prefix+'EmptyTp'+str(i)):
+                return None
+            tp = cv2.cvtColor(image[385:392, 363+116*i:452+116*i], cv2.COLOR_BGR2HSV)
+            if ((tp[:,:,0] >= 80) & (tp[:,:,0] <= 120) & (tp[:,:,1] >= 100) & (tp[:,:,2] >= 130)).any():
+                return None
+        members = self.read_paused(image)
+        ids = [row['unit_id'] if row else None for row in members]
+        if len(set(ids)) != 5 or set(ids) != set(self.team):
+            return None
+        sets, evidence = [], []
+        for i in range(5):
+            hsv = cv2.cvtColor(image[286:346, 358+116*i:363+116*i], cv2.COLOR_BGR2HSV)
+            cyan = float(((hsv[:,:,0]>=75)&(hsv[:,:,0]<=105)&(hsv[:,:,1]>=70)&(hsv[:,:,2]>=100)).mean())
+            red = float((((hsv[:,:,0]<=15)|(hsv[:,:,0]>=170))&(hsv[:,:,1]>=70)&(hsv[:,:,2]>=100)).mean())
+            badge = self.page.hit(context, image, prefix+'Set'+str(i))
+            sets.append(True if badge and cyan >= .6 else False if not badge and cyan < .2 and red >= .6 else None)
+            evidence.append(dict(badge=badge, cyan_border=cyan, red_border=red))
+        auto = [value for value, label in ((True, 'on'), (False, 'off'))
+                if self.page.hit(context, image, prefix+'_auto_'+label)]
+        speeds = [speed for speed in speeds if self.page.hit(context, image, prefix+'Speed'+str(speed))]
+        if any(value is None for value in sets) or len(auto) != 1 or len(speeds) != 1:
+            return None
+        state = dict(unit_ids=ids, sets=sets, auto=auto[0], battle_speed=speeds[0], paused=True,
+            remaining_seconds=remaining_seconds, zero_damage_verified=True, zero_tp_verified=True,
+            same_frame=True, source='maa', portrait_evidence=members, slot_evidence=evidence,
+            frame_pixel_sha256=hashlib.sha256(image.tobytes()).hexdigest())
+        return state
+
     def opening_control(self, context, argv, params):
         spec = self.calibration.get('auto_battle')
         mode = params['mode']
@@ -168,33 +198,9 @@ class ClanBattleCharacters(GuideTrialCharacters):
         seconds = [second for second in (90, 89) if self.page.hit(context, argv.image, 'CBOpeningClock'+str(second))]
         if len(seconds) != 1:
             return None
-        for i in range(5):
-            if not self.page.hit(context, argv.image, 'CBOpeningEmptyTp'+str(i)):
-                return None
-            tp = cv2.cvtColor(argv.image[385:392, 363+116*i:452+116*i], cv2.COLOR_BGR2HSV)
-            if ((tp[:,:,0] >= 80) & (tp[:,:,0] <= 120) & (tp[:,:,1] >= 100) & (tp[:,:,2] >= 130)).any():
-                return None
-        members = self.read_paused(argv.image)
-        ids = [row['unit_id'] if row else None for row in members]
-        if len(set(ids)) != 5 or set(ids) != set(self.team):
+        state = self.read_paused_controls(context, argv.image, prefix='CBOpening', remaining_seconds=seconds[0])
+        if state is None:
             return None
-        sets, evidence = [], []
-        for i in range(5):
-            hsv = cv2.cvtColor(argv.image[286:346, 358+116*i:363+116*i], cv2.COLOR_BGR2HSV)
-            cyan = float(((hsv[:,:,0]>=75)&(hsv[:,:,0]<=105)&(hsv[:,:,1]>=70)&(hsv[:,:,2]>=100)).mean())
-            red = float((((hsv[:,:,0]<=15)|(hsv[:,:,0]>=170))&(hsv[:,:,1]>=70)&(hsv[:,:,2]>=100)).mean())
-            badge = self.page.hit(context, argv.image, 'CBOpeningSet'+str(i))
-            sets.append(True if badge and cyan >= .6 else False if not badge and cyan < .2 and red >= .6 else None)
-            evidence.append(dict(badge=badge, cyan_border=cyan, red_border=red))
-        auto = [value for value, label in ((True, 'on'), (False, 'off'))
-                if self.page.hit(context, argv.image, 'CBOpening_auto_'+label)]
-        speeds = [speed for speed in (1, 2, 4) if self.page.hit(context, argv.image, 'CBOpeningSpeed'+str(speed))]
-        if any(value is None for value in sets) or len(auto) != 1 or len(speeds) != 1:
-            return None
-        state = dict(unit_ids=ids, sets=sets, auto=auto[0], battle_speed=speeds[0], paused=True,
-            remaining_seconds=seconds[0], zero_damage_verified=True, zero_tp_verified=True,
-            same_frame=True, source='maa', portrait_evidence=members, slot_evidence=evidence,
-            frame_pixel_sha256=hashlib.sha256(argv.image.tobytes()).hexdigest())
         if mode != 'opening_read' and not all(key in params for key in ('unit_ids', 'sets', 'auto', 'battle_speed')):
             return None
         if 'battle_speed' in params and type(params['battle_speed']) is not int:
@@ -212,7 +218,7 @@ class ClanBattleCharacters(GuideTrialCharacters):
             slot = params.get('slot')
             if (type(slot) is not int or not 0 <= slot < 5 or type(params.get('previous')) is not bool
                     or type(params.get('desired')) is not bool or params['previous'] is params['desired']
-                    or sets[slot] is not params['previous']):
+                    or state['sets'][slot] is not params['previous']):
                 return None
             target = [403+116*slot, 311, 6, 6]
         elif mode == 'opening_speed':

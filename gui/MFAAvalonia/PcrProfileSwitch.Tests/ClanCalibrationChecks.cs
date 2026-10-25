@@ -45,6 +45,8 @@ internal static class ClanCalibrationChecks
         {
             var template = Dependency("assets/resource/image/clan-synthetic/first.png", "synthetic template one");
             _ = Dependency("assets/resource/image/clan-synthetic/second.png", "synthetic template two");
+            JObject Node() => new() { ["recognition"] = "TemplateMatch", ["roi"] = new JArray(1, 1, 8, 8),
+                ["template"] = "clan-synthetic/first.png", ["sha256"] = template["sha256"]!.DeepClone() };
             var profile = new JObject
             {
                 ["version"] = version, ["calibration_id"] = "synthetic-capabilities", ["server"] = "cn-bilibili",
@@ -62,6 +64,19 @@ internal static class ClanCalibrationChecks
                         ["samples"] = new JArray(Sample("execution"))
                     }
                 }
+            };
+            if (version == 2) profile["daily"]!["execution"]!["opening"] = new JObject
+            {
+                ["battle_speed"] = 2, ["opening_guards"] = new JArray(Enumerable.Range(0, 3).Select(_ => Node())),
+                ["paused_guards"] = new JArray(Enumerable.Range(0, 3).Select(_ => Node())), ["clock"] = new JArray(1, 1, 8, 8),
+                ["auto_on"] = Node(), ["auto_off"] = Node(), ["speed"] = new JObject { ["1"] = Node(), ["2"] = Node() },
+                ["speed_two"] = Node(), ["set_badge"] = Node(), ["empty_tp"] = Node(),
+                ["targets"] = new JObject { ["pause"] = new JArray(1, 1, 8, 8), ["auto"] = new JArray(1, 1, 8, 8),
+                    ["speed"] = new JArray(1, 1, 8, 8), ["resume"] = new JArray(1, 1, 8, 8),
+                    ["sets"] = new JArray(Enumerable.Range(0, 5).Select(_ => new JArray(1, 1, 8, 8))) },
+                ["inheritance"] = new JObject { ["battle_selected"] = Node(), ["radio_on"] = Node(), ["radio_off"] = Node(),
+                    ["samples"] = new JArray(Sample("inheritance")) },
+                ["samples"] = new JArray(Sample("battle"), Sample("paused"), Sample("battle_two"))
             };
             var measured = new JObject
             {
@@ -122,7 +137,15 @@ internal static class ClanCalibrationChecks
         Unavailable(Read(null), "missing_account_content_version");
 
         var full = Load(Index(2, Profile(), "simulation", "timed", "formal", "carryover"));
-        foreach (var capability in new[] { "simulation", "formal", "carryover" }) { full.Require(Plan(timed: true), capability); count++; }
+        full.Require(Plan(timed: true), "simulation"); count++;
+        foreach (var capability in new[] { "formal", "carryover" })
+        {
+            full.Require(Plan(), capability, 2); count++;
+            Reject(() => full.Require(Plan(timed: true), capability, 2), "formal_axis_rejected_" + capability, "daily_auto_only");
+            foreach (var speed in new[] { 1, 4 })
+                Reject(() => full.Require(Plan(), capability, speed), "formal_fixed_two_" + capability + speed, "daily_speed_invalid");
+        }
+        Check(full.FormalOpening, "formal_opening_is_separately_validated");
         Check(full.Summary.Contains("模拟战：已校准") && full.Summary.Contains("秒数轴：测量资料齐全，开始前核对时限")
             && full.Summary.Contains("正式三刀：已校准") && full.Summary.Contains("补偿刀：已校准"), "summary_describes_all_capabilities");
         var empty = Load(Index(2, Profile()));
@@ -136,7 +159,7 @@ internal static class ClanCalibrationChecks
         {
             var borrowed = Plan(); borrowed["support_mode"] = support;
             Reject(() => ownOnly.Require(borrowed, "simulation"), "uncalibrated_support_" + support, "clan_battle_support_mode_uncalibrated");
-            Reject(() => ownOnly.Require(borrowed, "formal"), "uncalibrated_formal_support_" + support, "clan_battle_support_mode_uncalibrated");
+            Reject(() => ownOnly.Require(borrowed, "formal", 2), "uncalibrated_formal_support_" + support, "clan_battle_support_mode_uncalibrated");
         }
         var missingSupport = Plan(); missingSupport.Remove("support_mode");
         Reject(() => ownOnly.Require(missingSupport, "simulation"), "missing_support_scope_stops", "clan_battle_support_mode_uncalibrated");
@@ -257,6 +280,44 @@ internal static class ClanCalibrationChecks
             Unavailable(Load(Index(2, profile, "formal", "carryover")), "formal_structure_" + change.Name);
         }
 
+        foreach (var change in new (string Name, Action<JObject> Change)[]
+        {
+            ("missing", value => ((JObject)value["daily"]!["execution"]!).Remove("opening")),
+            ("speed", value => value["daily"]!["execution"]!["opening"]!["battle_speed"] = 4),
+            ("speed_type", value => value["daily"]!["execution"]!["opening"]!["battle_speed"] = 2.0),
+            ("simulation_speed_cycle", value => value["daily"]!["execution"]!["opening"]!["speed"]!["4"] = value["daily"]!["execution"]!["opening"]!["speed"]!["2"]!.DeepClone()),
+            ("inheritance", value => ((JObject)value["daily"]!["execution"]!["opening"]!).Remove("inheritance")),
+            ("clock_bounds", value => value["daily"]!["execution"]!["opening"]!["clock"] = new JArray(long.MaxValue, 1, long.MaxValue, 8)),
+            ("set_slots", value => ((JArray)value["daily"]!["execution"]!["opening"]!["targets"]!["sets"]!).RemoveAt(0)),
+            ("opening_anchor", value => value["daily"]!["execution"]!["opening"]!["opening_guards"]![0]!["roi"] = new JArray(-1, 1, 8, 8)),
+            ("unanchored_ocr", value => value["daily"]!["execution"]!["opening"]!["auto_on"] = new JObject { ["recognition"] = "OCR", ["roi"] = new JArray(1, 1, 8, 8), ["expected"] = "AUTO" }),
+            ("sample_page", value => value["daily"]!["execution"]!["opening"]!["samples"]![0]!["page"] = "simulation"),
+            ("sample_scalar", value => value["daily"]!["execution"]!["opening"]!["samples"]![0] = true),
+            ("duplicate_sample", value => ((JArray)value["daily"]!["execution"]!["opening"]!["samples"]!).Add(value["daily"]!["execution"]!["opening"]!["samples"]![0]!.DeepClone()))
+        })
+        {
+            var profile = Profile(); change.Change(profile);
+            Unavailable(Load(Index(2, profile, "formal", "carryover")), "formal_opening_" + change.Name);
+        }
+        var shortOpening = Profile(); shortOpening["daily"]!["execution"]!["opening"]!["start_seconds"] = new JArray(90, 15);
+        Check(Load(Index(2, shortOpening, "formal", "carryover")).FormalOpening, "explicit_short_opening_seconds_are_verified");
+        foreach (var invalid in new JToken[] { new JArray(), new JArray(90, 90), new JArray(90, true),
+            new JArray(90, 0), new JArray(90, 91), new JArray(15), new JArray(90, 15.0), new JValue(90), JValue.CreateNull() })
+        {
+            var profile = Profile(); profile["daily"]!["execution"]!["opening"]!["start_seconds"] = invalid;
+            Unavailable(Load(Index(2, profile, "formal", "carryover")), "formal_opening_start_seconds_" + invalid.ToString(Formatting.None));
+        }
+        foreach (var section in new[] { "opening", "inheritance" })
+        {
+            var profile = Profile(); var opening = profile["daily"]!["execution"]!["opening"]!;
+            var samples = (JArray)(section == "opening" ? opening["samples"]! : opening["inheritance"]!["samples"]!);
+            var samplePath = Path.Combine(root, (string)samples[0]!["path"]!);
+            Load(Index(2, profile, "formal", "carryover")); File.AppendAllText(samplePath, "changed", new UTF8Encoding(false));
+            Unavailable(Read(), "changed_formal_" + section + "_sample");
+        }
+        var simulationOnly = Profile(); ((JObject)simulationOnly["daily"]!["execution"]!).Remove("opening");
+        Check(Load(Index(2, simulationOnly, "simulation")).Supports("simulation"), "missing_formal_opening_preserves_simulation");
+
         var legacy = Load(Index(1, Profile(1)));
         Check(legacy.Version == 1 && legacy.Supports("simulation") && !legacy.Supports("formal"), "v1_is_simulation_only");
         Check(legacy.Summary.Contains("仅全程 AUTO、无切换"), "legacy_summary_explains_simulation_limit");
@@ -320,7 +381,8 @@ internal static class ClanCalibrationChecks
         foreach (var speed in new[] { 1, 2, 4 }) { autoCalibration.Require(Plan(false), "simulation", speed); count++; }
         Reject(() => autoCalibration.Require(Plan(), "simulation", 3), "invalid_speed", "speed_invalid");
         Reject(() => autoCalibration.Require(Plan(timed: true), "simulation", 4), "axis_cannot_accelerate", "auto_speed_uncalibrated");
-        Reject(() => autoCalibration.Require(Plan(), "formal", 4), "formal_cannot_accelerate", "auto_speed_uncalibrated");
+        Reject(() => autoCalibration.Require(Plan(), "formal", 4), "formal_four_rejected", "daily_speed_invalid");
+        Reject(() => autoCalibration.Require(Plan(), "formal", 2), "simulation_opening_does_not_enable_formal", "daily_opening_calibration_missing");
         Reject(() => new PcrClanCalibration(2, new HashSet<string> { "simulation" }, null).Require(Plan(), "simulation", 4), "old_profile_no_fast_speed", "auto_speed_uncalibrated");
         var shippedEntry = JObject.Parse(File.ReadAllText(bundledIndex))["entries"]!.OfType<JObject>().FirstOrDefault();
         if (shippedEntry != null)

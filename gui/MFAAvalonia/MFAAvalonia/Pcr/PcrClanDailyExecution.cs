@@ -39,7 +39,7 @@ public static class PcrClanDailyExecution
     private static void Validate(PcrClanDailyExecutionDocument document)
     {
         if (document.Version != 1 || document.Mode is not (Simulation or FormalDaily)
-            || document.BattleSpeed is not (1 or 2 or 4) || document.Mode == FormalDaily && document.BattleSpeed != 1
+            || document.BattleSpeed is not (1 or 2 or 4) || document.Mode == FormalDaily && document.BattleSpeed is not (1 or 2)
             || document.ConfirmedFor != null && (document.Mode != FormalDaily || document.ConfirmedFor.Length != 64 || document.ConfirmedFor.Any(c => !"0123456789abcdef".Contains(c))))
             throw new InvalidDataException("会战模式或三目标确认无效。");
     }
@@ -75,6 +75,7 @@ public static class PcrClanDailyExecution
     {
         var statePath = PathFor(configDirectory); var state = Read(statePath, out var before);
         if (state.Mode != FormalDaily || state.ConfirmedFor == null) throw new InvalidOperationException("请单独核对并保存正式三目标，单队确认不能代替三目标确认。");
+        if (state.BattleSpeed != 2) throw new InvalidOperationException("正式作业固定 2 倍速，请重新预览并核对保存。[clan_battle_daily_speed_confirmation_required]");
         var request = BuildPlan(PcrClanDailyPlan.PathFor(configDirectory), Path.Combine(configDirectory, "agent-guide-review.json"), configDirectory, repository, now);
         if (state.ConfirmedFor != (string?)request["confirmed_for"] || PcrClanGuide.Stamp(statePath) != before)
             throw new InvalidOperationException("正式三目标或模式已变化，请重新预览并核对保存。");
@@ -101,7 +102,7 @@ public static class PcrClanDailyExecution
             || plans.Properties().Any(p => p.Value is not JObject)) throw new InvalidDataException("正式校准核对需要完整三目标。");
         foreach (var plan in plans.Properties().Select(p => (JObject)p.Value))
         {
-            try { PcrClanCalibration.Read(repository, (string?)plan["content_version"]).Require(plan, "formal"); }
+            try { PcrClanCalibration.Read(repository, (string?)plan["content_version"]).Require(plan, "formal", 2); }
             catch (InvalidOperationException ex) { throw new InvalidOperationException("正式三刀不可用：" + ex.Message + " [production_daily_adapter_unavailable]", ex); }
         }
     }

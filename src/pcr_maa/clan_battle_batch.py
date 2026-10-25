@@ -295,7 +295,14 @@ def _history(events, request, binding):
             raise ValueError('daily_ledger_observation_mismatch')
         if index == 0 and (before['reset_verified'] is not True or not _evidence(before['reset_evidence'])):
             raise ValueError('daily_actual_reset_readback_required')
-        chosen = choose_action(request, binding, before, regular, grants, consumed)
+        held = intent['ready']['evidence'].get('held_carryovers', {})
+        if (type(held) is not dict or any(type(stock) is not str or not stock.isascii() or not stock.isdigit()
+                or str(int(stock)) != stock or int(stock) not in set(grants) - consumed
+                or reason not in ('carryover_capability_not_calibrated', 'carryover_opening_start_time_uncalibrated')
+                for stock, reason in held.items())):
+            raise ValueError('daily_ledger_carryover_hold_invalid')
+        blocked = {int(stock): reason for stock, reason in held.items()}
+        chosen = choose_action(request, binding, before, regular, grants, consumed, blocked_carryovers=blocked)
         if chosen.get('action') != intent['action']:
             raise ValueError('daily_ledger_action_mismatch')
         if previous_after is not None and _timestamp(before['observed_at']) < _timestamp(previous_after['observed_at']):
@@ -346,7 +353,7 @@ def _check_counts(observation, regular, grants, consumed):
         raise ValueError('daily_carryover_inventory_history_mismatch')
 
 
-def choose_action(request, binding, observation, regular, grants, consumed):
+def choose_action(request, binding, observation, regular, grants, consumed, *, blocked_carryovers=None):
     """Pure bound candidate selection; this does not authorize any input."""
     _check_counts(observation, regular, grants, consumed)
     held, held_regular = [], []
@@ -363,6 +370,8 @@ def choose_action(request, binding, observation, regular, grants, consumed):
             reason = 'same_boss_new_appearance_not_observed'
         elif job['switches'] and grant['time'] != 90:
             reason = 'carryover_axis_start_time_incompatible'
+        elif (blocked_carryovers or {}).get(stock):
+            reason = blocked_carryovers[stock]
         if reason:
             held.append(dict(stock_index=stock, slot=slot, reason=reason))
             continue
@@ -438,7 +447,10 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                 if not events and not regular and (observation['reset_verified'] is not True
                         or not _evidence(observation['reset_evidence'])):
                     raise ValueError('daily_actual_reset_readback_required')
-                chosen = choose_action(request, binding, observation, regular, grants, consumed)
+                blocker = getattr(port, 'blocked_carryovers', None)
+                blocked = (blocker(request, {stock: grant for stock, grant in grants.items() if stock not in consumed})
+                    if callable(blocker) else {})
+                chosen = choose_action(request, binding, observation, regular, grants, consumed, blocked_carryovers=blocked)
                 report['remaining_count'] = observation['remaining_count']
                 report['cp'] = observation['cp']
                 report['held_carryovers'] = chosen['held_carryovers']
@@ -461,7 +473,7 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                 fresh_now = current if not callable(getattr(port, 'now', None)) else _now(port.now())
                 fresh = _observation(fresh, binding, fresh_now)
                 if (_timestamp(fresh['observed_at']) < stamp
-                        or choose_action(request, binding, fresh, regular, grants, consumed).get('action') != action):
+                        or choose_action(request, binding, fresh, regular, grants, consumed, blocked_carryovers=blocked).get('action') != action):
                     raise ValueError('daily_target_changed_before_input')
                 # Inventory/CP observation can leave formation. Enter it again and
                 # compare the actual target, members and support owner before reserving input.
@@ -470,6 +482,8 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                 if any(final_ready[key] != ready[key] for key in READY_KEYS - {'evidence'}):
                     raise ValueError('daily_team_changed_before_input')
                 ready = final_ready
+                if blocked:
+                    ready['evidence']['held_carryovers'] = {str(stock): reason for stock, reason in blocked.items()}
                 port.checkpoint()
                 validate_daily_request(request)
                 final_now = fresh_now if not callable(getattr(port, 'now', None)) else _now(port.now())
@@ -509,6 +523,9 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                 last_observed = _timestamp(result['after']['observed_at'])
                 if result['return_verified'] is not True:
                     raise ValueError('daily_return_unverified')
+                after_settlement = getattr(port, 'after_settlement', None)
+                if callable(after_settlement):
+                    after_settlement(deepcopy(intent), deepcopy(result))
             raise ValueError('daily_batch_action_bound_exceeded')
     except Exception as exc:
         report['error'] = str(exc) or type(exc).__name__

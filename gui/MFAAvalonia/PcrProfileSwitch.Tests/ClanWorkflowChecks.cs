@@ -181,6 +181,16 @@ internal static class ClanWorkflowChecks
         Throws(() => view.LoadDailySlot(1), "stale_daily_window");
         view.Reload(); Require(Daily(view).SlotTexts[1].Contains("尚未设置") && Daily(view).StatusText.Contains("2/3"), "parent_reload_refreshes_child_summary");
         File.WriteAllBytes(dailyPath, allSlots); view.Reload(); daily = Daily(view); daily.ReviewThree();
+        Require(view.HasCurrentConfirmation, "account_refresh_starts_with_saved_team");
+        var beforeAccountJob=view.Capture().Job.DeepClone(); var beforeAccountGuide=File.ReadAllBytes(fixture.Guide);
+        var nextAccount=PcrClanGuide.ReadJson(fixture.Snapshot); nextAccount["observed_at"]=DateTimeOffset.Now.AddMinutes(-1).ToString("O");
+        File.WriteAllText(fixture.Snapshot,nextAccount.ToString(),new UTF8Encoding(false));
+        view.UseAccountSnapshot(new PcrGuideSnapshot((string)nextAccount["account_id"]!, (string)nextAccount["server"]!,
+            (string)nextAccount["content_version"]!, (string)nextAccount["observed_at"]!, PcrClanGuide.Stamp(fixture.Snapshot)!,"synthetic-refreshed.json"));
+        Require(JToken.DeepEquals(view.Capture().Job,beforeAccountJob) && !view.HasCurrentConfirmation
+            && view.ExecutionConfirmationForStart==null && File.ReadAllBytes(fixture.Guide).SequenceEqual(beforeAccountGuide)
+            && File.ReadAllBytes(dailyPath).SequenceEqual(allSlots), "account_refresh_preserves_edits_and_slots_but_requires_reconfirmation");
+        File.WriteAllBytes(fixture.Snapshot,cache); view.Reload(); daily=Daily(view); daily.ReviewThree();
         CheckImageLifecycle(sourceRoot, fixture, view, Require);
         Require(File.ReadAllBytes(Path.Combine(fixture.Config, "guide-review.json")).SequenceEqual(legacy) && File.ReadAllBytes(fixture.Snapshot).SequenceEqual(cache), "fixture_shared_sources_unchanged");
         Require(fixture.OriginalHashes.All(p => PcrClanGuide.Stamp(p.Key) == p.Value), "all_original_21_job_sources_unchanged");

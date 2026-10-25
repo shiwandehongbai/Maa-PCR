@@ -56,7 +56,9 @@ public partial class TaskQueueView : UserControl
     {
         if (guideReviewWindow != null)
         {
-            if (accountPage && guideReviewWindow.Content is MFAAvalonia.Pcr.PcrGuideReviewView existing) existing.ShowAccountPage();
+            if (guideReviewWindow.Content is MFAAvalonia.Pcr.PcrGuideReviewView existing)
+            { if (accountPage) existing.ShowAccountPage(); else existing.ShowGuidePage(); }
+            guideReviewWindow.Title = accountPage ? "Maa PCR · 账号资料" : "Maa PCR · 攻略检查";
             guideReviewWindow.Activate(); return;
         }
         if (DataContext is not TaskQueueViewModel vm) return;
@@ -64,9 +66,15 @@ public partial class TaskQueueView : UserControl
             (input, token) => MFAAvalonia.Pcr.PcrGuideSyncOwner.ReadAsync(vm, input, token),
             MFAAvalonia.Pcr.PcrGuideSyncOwner.ConfiguredAccountId);
         if (accountPage) review.ShowAccountPage();
+        review.AccountAccepted += snapshot =>
+        {
+            _pcrClanGuide?.UseAccountSnapshot(snapshot);
+            guideReviewWindow?.Close();
+        };
         guideReviewWindow = new SukiWindow
         {
-            Title = "Maa PCR · 攻略检查", Width = 960, Height = 760, MinWidth = 720, MinHeight = 520,
+            Title = accountPage ? "Maa PCR · 账号资料" : "Maa PCR · 攻略检查",
+            Width = accountPage ? 760 : 960, Height = accountPage ? 560 : 760, MinWidth = 640, MinHeight = 460,
             Content = review
         };
         guideReviewWindow.Closed += (_, _) => { guideReviewWindow = null; _pcrClanGuide?.RefreshAccounts(); };

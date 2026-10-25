@@ -143,6 +143,11 @@ def load_calibration(plan, *, root=None, capability='simulation'):
             if type(daily['execution']) is not dict:
                 raise ValueError('clan_battle_daily_execution_calibration_missing')
             sample_sections.append(daily['execution'])
+            if 'opening' in daily['execution']:
+                opening = daily['execution']['opening']
+                if type(opening) is not dict or type(opening.get('inheritance')) is not dict:
+                    raise ValueError('clan_battle_daily_opening_calibration_missing')
+                sample_sections.extend((opening, opening['inheritance']))
     for section in sample_sections:
         samples = section.get('samples')
         if type(samples) is not list or not samples:
@@ -185,7 +190,7 @@ def load_calibration(plan, *, root=None, capability='simulation'):
     if 'daily' in calibration or capability in ('formal', 'carryover'):
         from .clan_battle_daily_native import daily_pipeline, require_daily_execution
         if capability in ('formal', 'carryover') or calibration['daily'].get('version') == 2:
-            require_daily_execution(calibration, plan)
+            require_daily_execution(calibration, plan, require_scope=capability in ('formal', 'carryover'))
         else:
             daily_pipeline(calibration, plan)
     if 'timed' in capabilities and timing_capability(calibration).get('validated') is not True:

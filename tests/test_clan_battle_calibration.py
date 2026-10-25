@@ -154,7 +154,7 @@ def v2_bundle(bundle, monkeypatch):
     index['version'] = profile['version'] = 2
     entry['capabilities'] = ['simulation']
     # This fixture isolates loader authority from the independently tested page schema.
-    monkeypatch.setattr('pcr_maa.clan_battle_native.calibration_pipeline', lambda *_: {})
+    monkeypatch.setattr('pcr_maa.clan_battle_native.calibration_pipeline', lambda *_, **kwargs: {})
     save()
     return bundle
 
@@ -162,7 +162,7 @@ def v2_bundle(bundle, monkeypatch):
 @pytest.mark.parametrize('capability', ['simulation', 'formal', 'carryover'])
 def test_v2_battle_capabilities_are_granted_independently(v2_bundle, plan, capability, monkeypatch):
     root, profile, entry, _, save = v2_bundle
-    monkeypatch.setattr('pcr_maa.clan_battle_daily_native.require_daily_execution', lambda *_: {})
+    monkeypatch.setattr('pcr_maa.clan_battle_daily_native.require_daily_execution', lambda *_, **kwargs: {})
     entry['capabilities'] = ['formal', 'carryover'] if capability == 'carryover' else [capability]
     save()
     assert module.load_calibration(plan, root=root, capability=capability)['version'] == 2
@@ -351,9 +351,15 @@ def daily_bundle(v2_bundle, profile):
 def daily_execution_bundle(daily_bundle, executable):
     root, bundled, _, _, save = daily_bundle
     bundled['daily'] = deepcopy(executable['daily'])
-    for section in (bundled['daily'], bundled['daily']['execution']):
+    opening = bundled['daily']['execution']['opening']
+    for section in (bundled['daily'], bundled['daily']['execution'], opening, opening['inheritance']):
         for sample in section['samples']:
             sample.update(path=bundled['samples'][0]['path'], sha256=bundled['samples'][0]['sha256'])
+    for key in ('battle_selected', 'radio_on', 'radio_off'):
+        marker = opening['inheritance'][key]
+        target = root / 'assets/resource/image' / marker['template']
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((native.ROOT / 'assets/resource/image' / marker['template']).read_bytes())
     save()
     return daily_bundle
 

@@ -175,6 +175,21 @@ def executable(profile):
         samples=[dict(value['samples'][0], page=page) for page in daily.EXECUTION_FIELDS])
     daily_spec['execution']['formation_mode'] = dict(regular=deepcopy(label), carryover=deepcopy(label),
         stock_index=[600, 550, 100, 30], time=[720, 550, 100, 30])
+    from pathlib import Path
+    from pcr_maa import native
+    index = json.loads((native.ROOT / 'assets/resource/clan-battle-calibrations/index.json').read_text(encoding='utf-8'))
+    shipped = json.loads((native.ROOT / index['entries'][0]['profile_path']).read_text(encoding='utf-8'))
+    inheritance = deepcopy(shipped['auto_battle']['inheritance'])
+    for sample in inheritance['samples']:
+        sample['path'] = str(native.ROOT / sample['path'])
+    daily_spec['execution']['opening'] = dict(battle_speed=2,
+        opening_guards=[deepcopy(label) for _ in range(3)], paused_guards=[deepcopy(label) for _ in range(3)],
+        clock=[500, 200, 100, 40], auto_on=deepcopy(label), auto_off=deepcopy(label),
+        speed={str(n):deepcopy(label) for n in (1,2)}, speed_two=deepcopy(label),
+        set_badge=deepcopy(label), empty_tp=deepcopy(label),
+        targets=dict(pause=[1200,30,6,6], auto=[634,473,6,6], speed=[830,473,6,6],
+            resume=[442,574,6,6], sets=[[403+116*i,311,6,6] for i in range(5)]),
+        inheritance=inheritance, samples=[dict(value['samples'][0],page=page) for page in ('battle','paused','battle_two')])
     return value
 
 
@@ -182,8 +197,10 @@ def test_complete_execution_profile_adds_only_guarded_single_inputs(executable, 
     nodes = daily.require_daily_execution(executable, plan)
     assert nodes['CBAction_open_formal']['custom_recognition_param'] == dict(page='boss_detail', action='open_formal')
     assert nodes['CBAction_characters_next']['action'] == 'Swipe'
-    assert all(node['recognition'] == 'Custom' and node['max_hit'] == 1
-        for node in nodes.values() if node['action'] in ('Click', 'Swipe'))
+    assert all(node['max_hit'] == 1 for node in nodes.values() if node['action'] in ('Click', 'Swipe'))
+    assert nodes['CBDailyPauseOpening']['recognition'] == 'And'
+    assert 'CBDailyOpeningBinding' in nodes['CBDailyPauseOpening']['all_of']
+    assert 'CBPauseOpening' not in nodes
 
 
 @pytest.mark.parametrize('field', ['pages', 'actions', 'samples', 'boss_slots', 'used_units', 'carry_slots'])
@@ -348,6 +365,7 @@ def test_native_observe_uses_actual_round_identity_and_only_verified_refresh_app
         for number in range(1, 6)]
     monkeypatch.setattr(port, 'now', lambda: clock[0])
     monkeypatch.setattr(port, 'enter_lobby', lambda: None)
+    monkeypatch.setattr(port, 'recover_inheritance', lambda: None)
     monkeypatch.setattr(port, 'run', lambda *args, **kwargs: {})
     monkeypatch.setattr(port, 'wait', lambda names, **kwargs: names[0])
     monkeypatch.setattr(port, 'inventory', lambda: ([], {'stock_empty': True}))
@@ -376,8 +394,11 @@ def test_native_prepare_uses_formal_target_and_distinct_regular_or_stock_entry(p
     action = dict(kind=kind, slot=1, boss=plan['boss'], round=5, phase='B', instance_id='five',
         stock_index=None if kind == 'regular' else 2, start_seconds=90 if kind == 'regular' else 34)
     port.pending, port.support_unit_id = None, None
+    port.tasker = NS(resource=Registry())
+    monkeypatch.setattr(port, 'prepare_inheritance', lambda: None)
     port.last_bosses = {plan['boss']: deepcopy(action)}
-    port.account_receipt, port.calibration = {'account': plan['account_id']}, {'calibration_id': 'offline'}
+    port.account_receipt, port.calibration = {'account': plan['account_id']}, {
+        'calibration_id': 'offline', 'daily':{'execution':{'opening':{'start_seconds':[90,34]}}}}
     port.page = NS(bound=None, require_team=lambda reading: None)
     calls = []
     monkeypatch.setattr(port, 'enter_lobby', lambda: calls.append('lobby'))
@@ -435,7 +456,7 @@ def test_formal_slot_excludes_simulation_opening_without_changing_shared_calibra
     port = daily.NativeClanDailyAdapter(NS(resource=resource), tmp_path,
         request={'slot_plans': {'1': plan}}, calibrations={plan['confirmed_for']: executable})
     port.configure_slot(plan, capability=capability)
-    assert resource.nodes['CBStart']['next'] == []
+    assert resource.nodes['CBStart']['next'] == ['CBDailyPauseOpening']
     assert 'CBPauseOpening' not in resource.nodes and 'auto_battle' not in port.calibration
     assert executable == original and port.calibrations[plan['confirmed_for']] == original
     assert loaded == (['carryover'] if capability == 'carryover' else [])
@@ -499,6 +520,7 @@ def test_daily_adapter_registers_and_dispatches_through_owner_scope(registry, ex
 @pytest.fixture
 def native_protocol(tmp_path, daily_request, executable, monkeypatch):
     from pcr_maa import clan_battle, clan_battle_calibration
+    executable['daily']['execution']['opening']['start_seconds'] = [90,34]
     class Protocol(daily.NativeClanDailyAdapter):
         def __init__(self):
             self.state = Port(daily_request)
@@ -511,6 +533,8 @@ def native_protocol(tmp_path, daily_request, executable, monkeypatch):
             self.timing_capability = self.state.timing_capability
             self.calls = []
         def checkpoint(self): pass
+        def after_settlement(self, intent, result): pass
+        def configure_opening(self, job, initial): return self.finished['settings_evidence']
         def now(self): return self.state.now()
         def prepare(self, action, job, binding):
             self.action, self.plan, self.start_seconds = action, job, action['start_seconds']

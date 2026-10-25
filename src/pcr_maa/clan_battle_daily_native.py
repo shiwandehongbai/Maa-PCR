@@ -46,6 +46,96 @@ DESTINATIONS = dict(open_clan='lobby', open_boss='boss_detail', open_formal='tar
     select_carry='formation', return_to_lobby='lobby')
 
 
+
+def formal_opening_pipeline(calibration, plan, *, require_scope=True):
+    """Formal controls have their own guards, clocks and 1/2-speed cycle."""
+    from .clan_battle_inheritance import inheritance_pipeline
+    spec = calibration.get('daily', {}).get('execution', {}).get('opening')
+    keys = {'battle_speed', 'opening_guards', 'paused_guards', 'clock', 'auto_on', 'auto_off',
+        'speed', 'speed_two', 'set_badge', 'empty_tp', 'targets', 'inheritance', 'samples'}
+    if type(spec) is not dict or set(spec) - {'start_seconds'} != keys:
+        raise ValueError('clan_battle_daily_opening_calibration_missing')
+    if type(spec['battle_speed']) is not int or spec['battle_speed'] != 2:
+        raise ValueError('clan_battle_daily_speed_invalid')
+    seconds = spec.get('start_seconds', [90])
+    if (type(seconds) is not list or not seconds or any(type(n) is not int or not 1 <= n <= 90 for n in seconds)
+            or len(set(seconds)) != len(seconds) or 90 not in seconds):
+        raise ValueError('clan_battle_daily_start_time_calibration_invalid')
+    if require_scope and plan.get('support_mode') != 'none':
+        raise RuntimeError('clan_battle_support_mode_uncalibrated')
+    if require_scope and plan.get('switches') != []:
+        raise RuntimeError('clan_battle_daily_opening_axis_unsupported')
+    nodes = {}
+    for group in ('opening_guards', 'paused_guards'):
+        if type(spec[group]) is not list or len(spec[group]) != 3:
+            raise ValueError('clan_battle_daily_opening_calibration_missing')
+        for index, marker in enumerate(spec[group]):
+            nodes[f'CBFormalOpening_{group}_{index}'] = _node(marker)
+    _roi(spec['clock'])
+    nodes['CBFormalOpeningClock'] = _node({'roi': spec['clock']}, expected=PATTERNS['remaining_seconds'])
+    nodes['CBDailyOpeningStartClock'] = _node({'roi': calibration['daily']['execution']['pages']['battle']['fields']['remaining_seconds']},
+        expected=PATTERNS['remaining_seconds'])
+    if type(spec['speed']) is not dict or set(spec['speed']) != {'1', '2'}:
+        raise ValueError('clan_battle_daily_speed_invalid')
+    for speed, marker in spec['speed'].items():
+        nodes['CBFormalOpeningSpeed' + speed] = _node(marker, expected='^' + speed + '倍速$')
+    for name in ('auto_on', 'auto_off'):
+        nodes['CBFormalOpening_' + name] = _node(spec[name])
+    nodes['CBDailyTwoSpeed'] = _node(spec['speed_two'])
+    for index in range(5):
+        for key, name in (('set_badge', 'Set'), ('empty_tp', 'EmptyTp')):
+            marker = deepcopy(spec[key])
+            marker['roi'] = _roi(marker['roi']).copy()
+            marker['roi'][0] += 116 * index
+            nodes[f'CBFormalOpening{name}{index}'] = _node(marker)
+    targets = spec['targets']
+    if (type(targets) is not dict or set(targets) != {'pause', 'auto', 'speed', 'resume', 'sets'}
+            or type(targets['sets']) is not list or len(targets['sets']) != 5):
+        raise ValueError('clan_battle_daily_opening_targets_invalid')
+    for target in [*(targets[key] for key in ('pause', 'auto', 'speed', 'resume')), *targets['sets']]:
+        _roi(target)
+    samples = spec['samples']
+    if (type(samples) is not list or len(samples) != 3
+            or {row.get('page') for row in samples if type(row) is dict} != {'battle', 'paused', 'battle_two'}):
+        raise ValueError('clan_battle_daily_opening_samples_missing')
+    for sample in samples:
+        if type(sample) is not dict or set(sample) != {'page', 'path', 'sha256'}:
+            raise ValueError('clan_battle_daily_opening_sample_invalid')
+        path = Path(sample['path'])
+        if (not path.is_absolute() or not path.is_file()
+                or hashlib.sha256(path.read_bytes()).hexdigest() != sample['sha256']):
+            raise ValueError('clan_battle_daily_opening_sample_changed')
+    nodes.update(inheritance_pipeline(spec['inheritance']))
+    inheritance_samples = spec['inheritance']['samples']
+    if type(inheritance_samples) is not list or not inheritance_samples:
+        raise ValueError('clan_battle_inheritance_samples_missing')
+    for sample in inheritance_samples:
+        if type(sample) is not dict or set(sample) != {'page', 'path', 'sha256'}:
+            raise ValueError('clan_battle_inheritance_sample_invalid')
+        path = Path(sample['path'])
+        if (not path.is_absolute() or not path.is_file()
+                or hashlib.sha256(path.read_bytes()).hexdigest() != sample['sha256']):
+            raise ValueError('clan_battle_inheritance_sample_changed')
+    # Character callbacks are already held by the real Owner resource and route to the current slot.
+    for name, mode, click in (('CBOpeningRead', 'opening_read', False),
+            ('CBOpeningConfirmed', 'opening_read', False), ('CBOpeningAuto', 'opening_auto', True),
+            ('CBOpeningSet', 'opening_set', True), ('CBOpeningSpeed', 'opening_speed', True),
+            ('CBResumeOpening', 'opening_resume', True), ('CBDailyOpeningBinding', 'formal_pause', False)):
+        nodes[name] = dict(recognition='Custom', custom_recognition='ClanBattleCharacters',
+            custom_recognition_param=dict(mode=mode), action='Click' if click else 'DoNothing', target=True,
+            next=['CBOpeningConfirmed'] if name in ('CBOpeningAuto', 'CBOpeningSet', 'CBOpeningSpeed') else [],
+            timeout=15000, pre_delay=0, post_delay=300 if click else 0,
+            on_error=['LabyDisconnect6002Observed'])
+        if click:
+            nodes[name]['max_hit'] = 1
+    nodes['CBDailyPauseOpening'] = dict(recognition='And',
+        all_of=[*[f'CBFormalOpening_opening_guards_{i}' for i in range(3)],
+            'CBDailyOpeningStartClock', 'CBDailyOpeningBinding'], action='Click', target=targets['pause'],
+        max_hit=1, next=['CBOpeningRead'], timeout=15000, rate_limit=1, pre_delay=0, post_delay=300,
+        on_error=['LabyDisconnect6002Observed'])
+    return nodes
+
+
 def validate_daily_calibration(calibration):
     daily = calibration.get('daily')
     if (calibration.get('version') != 2 or type(daily) is not dict
@@ -190,11 +280,11 @@ class NativeClanDailyPages(NativeGuideTrial):
         return _detail(receipt), receipt
 
 
-def require_daily_execution(calibration, plan):
+def require_daily_execution(calibration, plan, *, require_scope=True):
     """A read-only daily profile never qualifies as an executable formal profile."""
     daily = validate_daily_calibration(calibration)
     execution = daily.get('execution')
-    keys = {'pages', 'actions', 'used_units', 'carry_slots', 'boss_slots', 'formation_owner', 'formation_mode', 'speed_one', 'samples'}
+    keys = {'pages', 'actions', 'used_units', 'carry_slots', 'boss_slots', 'formation_owner', 'formation_mode', 'speed_one', 'samples', 'opening'}
     if daily['version'] != 2 or type(execution) is not dict or set(execution) != keys:
         raise ValueError('clan_battle_daily_execution_calibration_missing')
     if type(execution['pages']) is not dict or set(execution['pages']) != set(EXECUTION_FIELDS):
@@ -275,6 +365,7 @@ def require_daily_execution(calibration, plan):
     nodes['CBDailyFormationStock'] = _node({'roi': mode['stock_index']}, expected=r'^[0-9]{1,6}$')
     nodes['CBDailyFormationTime'] = _node({'roi': mode['time']}, expected=r'^(?:[1-9]|[1-8][0-9]|90)$')
     nodes['CBDailyOneSpeed'] = _node(execution['speed_one'])
+    nodes.update(formal_opening_pipeline(calibration, plan, require_scope=require_scope))
     return nodes
 
 
@@ -362,7 +453,9 @@ class ClanBattleDailyExecutionPage(ClanBattleDailyPage):
                         raise RuntimeError('clan_battle_daily_selected_carry_changed')
                 value['support_owner_viewer_id'] = None
             if page == 'battle':
-                value['battle_speed'] = 1 if self.hit(context, image, 'CBDailyOneSpeed') else None
+                speeds = [speed for speed, node in ((1, 'CBDailyOneSpeed'), (2, 'CBDailyTwoSpeed'))
+                    if self.hit(context, image, node)]
+                value['battle_speed'] = speeds[0] if len(speeds) == 1 else None
         self.current, self.expected = page, None
         return value
 
@@ -411,6 +504,7 @@ class ClanBattleDailyExecutionPage(ClanBattleDailyPage):
                     or team['support_unit_id'] != ready['support_unit']
                     or team['support_owner_viewer_id'] != ready['support_owner_viewer_id']):
                 raise RuntimeError('clan_battle_daily_final_team_changed')
+            self.expected = 'battle'
         return spec['target']
 
     def analyze(self, context, argv):
@@ -435,6 +529,67 @@ class _DailyTeamReader(ClanBattleCharacters):
         return reading
 
 
+    def opening_control(self, context, argv, params):
+        port = self.page.port
+        pending = port.opening_binding()
+        spec = self.calibration['daily']['execution']['opening']
+        if (self.page.hit(context, argv.image, 'LabyDisconnect6002Observed')
+                or not all(self.page.hit(context, argv.image, f'CBFormalOpening_paused_guards_{i}') for i in range(3))):
+            return None
+        clock = self.page.word(context, argv.image, 'CBFormalOpeningClock').replace('：', ':')
+        minute, second = map(int, clock.split(':'))
+        if minute * 60 + second != pending['action']['start_seconds']:
+            return None
+        state = self.read_paused_controls(context, argv.image, prefix='CBFormalOpening',
+            remaining_seconds=pending['action']['start_seconds'], speeds=(1, 2))
+        if state is None:
+            return None
+        state.update(formal=True, intent_id=pending['intent_id'])
+        mode = params['mode']
+        if mode != 'opening_read' and not all(key in params for key in ('unit_ids', 'sets', 'auto', 'battle_speed')):
+            return None
+        if 'battle_speed' in params and type(params['battle_speed']) is not int:
+            return None
+        if any(key in params and state[key] != params[key] for key in ('unit_ids', 'sets', 'auto', 'battle_speed')):
+            return None
+        target = [0, 0, 1, 1]
+        if mode in ('opening_set', 'opening_auto'):
+            slot = params.get('slot')
+            if mode == 'opening_set' and (type(slot) is not int or not 0 <= slot < 5):
+                return None
+            previous = state['auto'] if mode == 'opening_auto' else state['sets'][slot]
+            if (type(params.get('previous')) is not bool or type(params.get('desired')) is not bool
+                    or params['previous'] is params['desired'] or previous is not params['previous']):
+                return None
+            target = spec['targets']['auto'] if mode == 'opening_auto' else spec['targets']['sets'][slot]
+        elif mode == 'opening_speed':
+            if state['battle_speed'] != 1:
+                return None
+            target = spec['targets']['speed']
+        elif mode == 'opening_resume':
+            if state['battle_speed'] != 2:
+                return None
+            target = spec['targets']['resume']
+        elif mode != 'opening_read':
+            return None
+        if context.tasker.stopping:
+            return None
+        self.page.current, self.page.expected = 'battle', None
+        return self.AnalyzeResult(box=target, detail=state)
+
+    def analyze(self, context, argv):
+        try:
+            params = json.loads(argv.custom_recognition_param)
+            if params == {'mode': 'formal_pause'}:
+                if context.tasker.stopping or argv.image is None or argv.image.shape != (720, 1280, 3):
+                    return None
+                pending = self.page.port.opening_binding()
+                return self.AnalyzeResult(box=[0, 0, 1, 1], detail={'intent_id': pending['intent_id']})
+            return super().analyze(context, argv)
+        except Exception:
+            return None
+
+
 class _DailyCharacters(CustomRecognition):
     """One registered callback stays owned while the reviewed slot changes."""
     def __init__(self, port):
@@ -443,6 +598,15 @@ class _DailyCharacters(CustomRecognition):
 
     def analyze(self, context, argv):
         return self.port.characters.analyze(context, argv)
+
+
+class _DailyInheritance(CustomRecognition):
+    def __init__(self, port):
+        super().__init__()
+        self.port = port
+
+    def analyze(self, context, argv):
+        return self.port.inheritance_page.analyze(context, argv)
 
 
 class NativeClanDailyAdapter(NativeClanBattle):
@@ -457,11 +621,15 @@ class NativeClanDailyAdapter(NativeClanBattle):
         catalogue_plan = dict(self.plan, unit_ids=self.all_units)
         self.catalogue = ClanBattleCharacters(catalogue_plan, self.calibration, self.page)
         self.callback = _DailyCharacters(self)
+        self.inheritance_callback = _DailyInheritance(self)
+        self.inheritance_recovered = False
         owner = getattr(tasker, '_resource_holder', None) or tasker.resource
         if not owner.register_custom_recognition('ClanBattleDailyPage', self.page):
             raise RuntimeError('clan_battle_callback_registration_failed:ClanBattleDailyPage')
         if not owner.register_custom_recognition('ClanBattleCharacters', self.callback):
             raise RuntimeError('clan_battle_callback_registration_failed:ClanBattleCharacters')
+        if not owner.register_custom_recognition('ClanBattleInheritance', self.inheritance_callback):
+            raise RuntimeError('clan_battle_callback_registration_failed:ClanBattleInheritance')
 
     @staticmethod
     def now():
@@ -476,10 +644,11 @@ class NativeClanDailyAdapter(NativeClanBattle):
         calibration = (load_calibration(plan, capability='carryover') if capability == 'carryover'
             else self.calibrations[plan['confirmed_for']])
         calibration = deepcopy(calibration)
-        # Paused opening controls and inheritance are qualified only for simulation.
+        # Formal opening is independent of the simulation guards and speed cycle.
         calibration.pop('auto_battle', None)
         nodes = calibration_pipeline(calibration, plan)
         nodes.update(require_daily_execution(calibration, plan))
+        nodes['CBStart'].update(next=['CBDailyPauseOpening'], timeout=30000, rate_limit=1)
         self.plan, self.calibration, self.snapshot = plan, calibration, load_snapshot(plan)
         self.support_unit_id = support_requirement(plan, self.snapshot)
         if self.page is None:
@@ -487,6 +656,10 @@ class NativeClanDailyAdapter(NativeClanBattle):
         else:
             self.page.calibration, self.page.plan = calibration, plan
         self.characters = _DailyTeamReader(plan, calibration, self.page)
+        from .clan_battle_inheritance import InheritancePage
+        self.inheritance_page = InheritancePage(calibration['daily']['execution']['opening']['inheritance'], self.page)
+        self.battle_speed, self.opening_paused, self.last_controls = 2, False, None
+        self.formal_opening = True
         self.timing_capability = timing_capability(calibration)
         self.directory.mkdir(parents=True, exist_ok=True)
         if (not self.tasker.resource.override_pipeline(game_session_pipeline(int(plan['account_id'])))
@@ -517,10 +690,118 @@ class NativeClanDailyAdapter(NativeClanBattle):
                 self.page.expected = DESTINATIONS[action]
         return receipt
 
+    def opening_binding(self, *, pausing=False):
+        from .clan_battle_batch import _timestamp
+        from .game_day import current_game_day
+        pending, now = self.pending, self.now()
+        opening = self.calibration.get('daily', {}).get('execution', {}).get('opening', {})
+        if (type(opening.get('battle_speed')) is not int or opening['battle_speed'] != 2
+                or self.action['start_seconds'] not in opening.get('start_seconds', [90])):
+            raise RuntimeError('clan_battle_daily_start_time_uncalibrated')
+        if (pending is None or self.action != pending['action'] or not self.started
+                or self.battle_start not in ('unknown', 'sent')
+                or pending['slot_confirmed_for'] != self.plan['confirmed_for']
+                or current_game_day(now) != pending['game_day']
+                or (now - _timestamp(pending['observed_at'])).total_seconds() < 0
+                or pausing and (now - _timestamp(pending['observed_at'])).total_seconds() > 60
+                or not self.page.bound or self.page.bound.get('formal') is not True
+                or any(self.page.bound.get(key) != self.action[key] for key in ('boss', 'phase', 'round', 'instance_id'))
+                or not (self.page.current == 'battle' or self.page.current == 'formation' and self.page.expected == 'battle')):
+            raise RuntimeError('clan_battle_daily_opening_binding_changed')
+        return pending
+
+    def configure_opening(self, job, initial):
+        from .clan_battle import execute_switches
+        settings = execute_switches(self, job, initial=initial)
+        state = self.read_battle_settings()
+        if any(state.get(key) != settings['opening_evidence'].get(key) for key in ('auto', 'sets', 'unit_ids', 'battle_speed')):
+            raise RuntimeError('clan_battle_switch_state_changed')
+        expected = {key: deepcopy(state[key]) for key in ('auto', 'sets', 'unit_ids', 'battle_speed')}
+        if state['battle_speed'] == 1:
+            if not self.tasker.resource.override_pipeline({
+                    'CBOpeningSpeed': dict(custom_recognition_param=dict(mode='opening_speed', **expected)),
+                    'CBOpeningConfirmed': dict(custom_recognition_param=dict(mode='opening_read', **dict(expected, battle_speed=2)))}):
+                raise RuntimeError('clan_battle_switch_pipeline_rejected')
+            state = self.read_battle_settings(self.run('CBOpeningSpeed', click=True))
+            if any(state.get(key) != value for key, value in dict(expected, battle_speed=2).items()):
+                raise RuntimeError('clan_battle_speed_readback_unknown')
+            settings['actions'].append(dict(control='speed', previous=1, target=2))
+        if type(state.get('battle_speed')) is not int or state['battle_speed'] != 2:
+            raise RuntimeError('clan_battle_daily_speed_invalid')
+        settings['opening_evidence'] = deepcopy(state)
+        expected = {key: deepcopy(state[key]) for key in ('auto', 'sets', 'unit_ids', 'battle_speed')}
+        if not self.tasker.resource.override_pipeline({
+                'CBResumeOpening': dict(custom_recognition_param=dict(mode='opening_resume', **expected)),
+                'CBSettingsConfirmed': dict(custom_recognition_param=dict(mode='battle_read', **expected))}):
+            raise RuntimeError('clan_battle_switch_pipeline_rejected')
+        self.run('CBResumeOpening', click=True)
+        self.opening_paused = False
+        self.wait(['CBSettingsConfirmed'], seconds=15)
+        settings['observation'] = self.read_battle_settings(self.last_receipt)
+        settings['battle_speed'] = 2
+        return settings
+
+    def inheritance_menu(self):
+        self.enter_lobby()
+        self.run('CBAction_back_to_adventure', click=True)
+        self.wait(['CBPage_adventure'], seconds=10)
+        self.run('LabyClientOpenMainMenuOnce', click=True)
+        self.wait(['LabyClientMainMenuObserved'], seconds=10)
+        self._verify_account(self.plan)
+        self.open_inheritance()
+
+    def inheritance_lobby(self):
+        self.close_inheritance()
+        self.run('LabyClientMenuToAdventureOnce', click=True)
+        self.wait(['CBPage_adventure'], seconds=10)
+        self.run('CBAction_open_clan', click=True)
+        self.wait(['CBPage_lobby'], seconds=10)
+
+    def inheritance_manager(self):
+        if self.inheritance is None:
+            from .clan_battle_inheritance import BattleInheritance
+            from .preset_execution import Journal
+            from .native import ROOT
+            self.inheritance = BattleInheritance(self, Journal(ROOT / '.runtime/clan-battle-daily-work/inheritance'))
+        return self.inheritance
+
+    def recover_inheritance(self):
+        if self.inheritance_recovered:
+            return
+        manager = self.inheritance_manager()
+        # Validate the journal/account before navigating or restoring a pending global setting.
+        with manager.journal.locked():
+            pending = manager._pending()
+        if pending is not None:
+            self.inheritance_menu()
+            manager.recover()
+            self.inheritance_lobby()
+        self.inheritance_recovered = True
+
+    def prepare_inheritance(self):
+        manager = self.inheritance_manager()
+        if manager.evidence is not None:
+            return
+        self.inheritance_menu()
+        manager.prepare()
+        self.inheritance_lobby()
+
+    def after_settlement(self, intent, result):
+        self.checkpoint()
+        if self.inheritance is None or self.inheritance.evidence is None:
+            raise RuntimeError('clan_battle_inheritance_prepare_unverified')
+        self.inheritance_menu()
+        self.inheritance.restore()
+        self.inheritance_lobby()
+        self.inheritance = None
+
     def enter_lobby(self):
         names = ['CBPage_lobby', 'CBPage_boss_detail', 'CBPage_formation', 'CBPage_support',
-            'CBPage_adventure', 'LabyClientGameHomeObserved']
+            'CBPage_adventure', 'LabyClientGameHomeObserved', 'LabyClientMainMenuObserved', 'CBInheritanceSettingsObserved']
         hit = self.wait(names, seconds=10)
+        if hit == 'CBInheritanceSettingsObserved':
+            self.close_inheritance()
+            hit = 'LabyClientMainMenuObserved'
         if hit == 'CBPage_support':
             self.run('CBAction_support_back', click=True)
             self.wait(['CBPage_formation'], seconds=10)
@@ -542,8 +823,9 @@ class NativeClanDailyAdapter(NativeClanBattle):
             if hit == 'CBPage_lobby':
                 self.run('CBAction_back_to_adventure', click=True)
                 self.wait(['CBPage_adventure'], seconds=10)
-            self.run('LabyClientOpenMainMenuOnce', click=True)
-            self.wait(['LabyClientMainMenuObserved'], seconds=10)
+            if hit != 'LabyClientMainMenuObserved':
+                self.run('LabyClientOpenMainMenuOnce', click=True)
+                self.wait(['LabyClientMainMenuObserved'], seconds=10)
             self.run('LabyClientOpenProfileOnce', click=True)
             self.wait([PROFILE_NODE], seconds=10)
             self.account_receipt = self.run(PROFILE_NODE)
@@ -552,6 +834,10 @@ class NativeClanDailyAdapter(NativeClanBattle):
                 raise RuntimeError('clan_battle_account_mismatch')
             self.run('LabyClientProfileBackOnce', click=True)
             self.wait(['LabyClientMainMenuObserved'], seconds=10)
+            self.run('LabyClientMenuToAdventureOnce', click=True)
+            self.wait(['CBPage_adventure'], seconds=10)
+            hit = 'CBPage_adventure'
+        if hit == 'LabyClientMainMenuObserved':
             self.run('LabyClientMenuToAdventureOnce', click=True)
             self.wait(['CBPage_adventure'], seconds=10)
             hit = 'CBPage_adventure'
@@ -572,6 +858,7 @@ class NativeClanDailyAdapter(NativeClanBattle):
     def observe(self, binding):
         from .clan_battle_batch import _hash
         self.enter_lobby()
+        self.recover_inheritance()
         self.run('CBAction_open_used', click=True)
         self.wait(['CBPage_used_units'], seconds=10)
         used, used_receipt = self.read_page('used_units')
@@ -600,12 +887,35 @@ class NativeClanDailyAdapter(NativeClanBattle):
             carry_stock_indices=[row['stock_index'] for row in self.stocks], bosses=bosses,
             reset_verified=True, reset_evidence=dict(personal_record=used_receipt, inventory=stock_receipt, account=self.account_receipt))
 
+    def blocked_carryovers(self, request, grants):
+        from .clan_battle_calibration import load_calibration
+        blocked = {}
+        for stock, grant in grants.items():
+            job = request['slot_plans'][str(grant['source_slot'])]
+            try:
+                calibration = load_calibration(job, capability='carryover')
+            except RuntimeError as exc:
+                if str(exc) != 'clan_battle_calibration_capability_missing:carryover':
+                    raise
+                blocked[stock] = 'carryover_capability_not_calibrated'
+                continue
+            seconds = calibration['daily']['execution']['opening'].get('start_seconds', [90])
+            if grant['time'] not in seconds:
+                blocked[stock] = 'carryover_opening_start_time_uncalibrated'
+        return blocked
+
     def prepare(self, action, job, binding):
         if self.pending is not None:
             raise RuntimeError('clan_battle_daily_previous_input_unresolved')
         self.enter_lobby()
         self.configure_slot(job, capability='carryover' if action['kind'] == 'carryover' else 'formal')
         self.action, self.start_seconds = deepcopy(action), action['start_seconds']
+        if self.start_seconds not in self.calibration['daily']['execution']['opening'].get('start_seconds', [90]):
+            raise RuntimeError('clan_battle_daily_start_time_uncalibrated')
+        clock = dict(expected=f'^{self.start_seconds // 60}[:：]{self.start_seconds % 60:02d}$')
+        if not self.tasker.resource.override_pipeline({'CBFormalOpeningClock': clock, 'CBDailyOpeningStartClock': clock}):
+            raise RuntimeError('clan_battle_daily_pipeline_rejected')
+        self.prepare_inheritance()
         actual = self.last_bosses.get(action['boss'])
         if not actual or any(actual[key] != action[key] for key in ('boss', 'round', 'phase', 'instance_id')):
             raise RuntimeError('clan_battle_daily_target_changed')
@@ -632,7 +942,7 @@ class NativeClanDailyAdapter(NativeClanBattle):
             evidence=dict(account=self.account_receipt, formation=team, mode='formal', calibration_id=self.calibration['calibration_id']))
 
     def execute(self, intent, job):
-        from .clan_battle import execute_switches, require_timing
+        from .clan_battle import require_timing
         from .clan_battle_batch import BINDING_KEYS
         from .game_day import current_game_day
         from .supported_daily import _atomic_json
@@ -651,9 +961,8 @@ class NativeClanDailyAdapter(NativeClanBattle):
             raise RuntimeError('clan_battle_daily_team_changed_before_start')
         self.pending, self.started = deepcopy(intent), False
         start = self.run('CBStart', click=True)
-        if self.wait(['CBReadSettings', 'CBPage_result'], seconds=30) != 'CBReadSettings':
-            raise RuntimeError('clan_battle_settings_not_observed')
-        settings = execute_switches(self, job, initial=self.last_receipt)
+        self.opening_paused = True
+        settings = self.configure_opening(job, start)
         self.wait(['CBPage_result'], seconds=180)
         result, result_receipt = self.read_page('result')
         # Preserve known damage before any return/navigation, even if consumption remains unresolved.

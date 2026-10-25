@@ -72,6 +72,13 @@ internal static class ClanFormalChecks
         finally { File.WriteAllBytes(legacyPath, legacyBytes); File.Delete(invalidPath); }
         Check(PcrClanDailyExecution.CreatePlan(config, sourceRoot, DateTimeOffset.Now)["confirmed_for"]!.ToString() == request["confirmed_for"]!.ToString(), "display_catalog_restore_keeps_valid_batch");
         var stateBytes = File.ReadAllBytes(modePath); var state = PcrClanDailyExecution.Read(modePath, out var stateStamp);
+        Check(state.BattleSpeed == 2, "formal_confirmation_explicitly_saves_two_speed");
+        var oldFormal = JObject.Parse(Encoding.UTF8.GetString(stateBytes)); oldFormal["battle_speed"] = 1;
+        File.WriteAllText(modePath, oldFormal.ToString(), new UTF8Encoding(false)); var oldFormalBytes = File.ReadAllBytes(modePath);
+        Check(PcrClanDailyExecution.Read(modePath, out _).BattleSpeed == 1, "legacy_formal_one_speed_is_readable");
+        Reject(() => PcrClanDailyExecution.CreatePlan(config, sourceRoot, DateTimeOffset.Now), "legacy_formal_requires_two_speed_reconfirmation", "daily_speed_confirmation_required");
+        Check(File.ReadAllBytes(modePath).SequenceEqual(oldFormalBytes), "legacy_formal_rejection_does_not_rewrite_saved_mode");
+        File.WriteAllBytes(modePath, stateBytes);
         PcrClanDailyExecution.Save(new() { Mode = PcrClanDailyExecution.Simulation }, modePath, stateStamp); var newer = File.ReadAllBytes(modePath);
         Reject(() => PcrClanDailyExecution.Save(state, modePath, stateStamp), "concurrent_mode_save"); Check(File.ReadAllBytes(modePath).SequenceEqual(newer), "concurrent_mode_writer_preserved");
         File.WriteAllBytes(modePath, stateBytes); reopened.Reload();

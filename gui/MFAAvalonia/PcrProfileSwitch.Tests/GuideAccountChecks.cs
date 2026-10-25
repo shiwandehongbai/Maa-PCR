@@ -4,6 +4,12 @@ using System.Linq;
 using System.Text;
 using System.Reflection;
 using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.LogicalTree;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using MFAAvalonia.Pcr;
 using Newtonsoft.Json.Linq;
 
@@ -60,6 +66,20 @@ internal static class GuideAccountChecks
         var view=new PcrGuideReviewView(viewPath,(_,_)=>{reads++;return Task.FromResult(Bytes(data));},()=>"123");
         view.Display(new PcrGuideInput { Catalog=catalog }); view.ReadSnapshot();
         Check(reads==1&&view.Capture().Snapshot!=null,"read_without_guide_identity_or_team");
+        var accepted=0; view.AccountAccepted += saved => { Check(saved.AccountId=="123", "accepted_identity"); accepted++; };
+        var stampBeforeUse=store.Stamp(catalog,"123"); var observedBeforeUse=view.Capture().Snapshot!.ObservedAt;
+        view.ShowAccountPage();
+        Check(reads==1 && view.GetLogicalDescendants().OfType<TabControl>().Count()==0, "account_open_is_local_single_page");
+        view.UseAccountAndReturn();
+        Check(accepted==1 && reads==1 && store.Stamp(catalog,"123")==stampBeforeUse
+            && view.Capture().Snapshot!.ObservedAt==observedBeforeUse && !view.Capture().SnapshotConfirmed,
+            "using_cached_account_returns_without_login_or_team_confirmation");
+        Check(new PcrGuideStore(viewPath).Load().Input.Catalog?.ContentVersion==catalog.ContentVersion,
+            "account_return_keeps_original_catalog_document");
+        RenderAccount(view, root, "account-summary", 760, 560, 96);
+        RenderAccount(view, root, "account-summary-narrow", 640, 520, 144);
+        var advanced=view.GetLogicalDescendants().OfType<Expander>().Single(x=>(string?)x.Header=="高级资料");
+        advanced.IsExpanded=true; RenderAccount(view,root,"account-advanced",760,760,96); advanced.IsExpanded=false;
         foreach(var offset in new[]{0,2,4})
         {
             view.ApplyTeamTable("角色\t等级\tRank\n"+string.Join("\n",ids.Skip(offset).Take(5).Select(id=>$"{id}\t365\t38")));
@@ -75,5 +95,18 @@ internal static class GuideAccountChecks
         var bytes=(byte[])read.Invoke(null,new object[]{message.ToString()})!;
         Check(message.ToString().Length>262144 && PcrGuideData.AccountSnapshot(bytes,largeCatalog,"123",now)["units"]!.Count()==2000,"large_owner_response");
         Console.WriteLine($"Guide account checks passed: {count}; data synthetic; protocol logins=0");
+    }
+    private static void RenderAccount(PcrGuideReviewView view, string root, string label, int width, int height, int dpi)
+    {
+        var host=new Window { Content=view, Width=width, Height=height, ShowInTaskbar=false, ShowActivated=false, Opacity=0 };
+        view.Background=Brushes.White; host.Show();
+        try
+        {
+            view.Width=width; view.Height=height; view.Measure(new Size(width,height)); view.Arrange(new Rect(0,0,width,height));
+            view.UpdateLayout(); Dispatcher.UIThread.RunJobs();
+            using var bitmap=new RenderTargetBitmap(new PixelSize(width*dpi/96,height*dpi/96),new Vector(dpi,dpi));
+            bitmap.Render(view); bitmap.Save(Path.Combine(root,label+".png"));
+        }
+        finally { host.Content=null; host.Close(); }
     }
 }

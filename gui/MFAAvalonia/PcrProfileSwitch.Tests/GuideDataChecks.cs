@@ -333,7 +333,12 @@ internal static class GuideDataChecks
         Require(PcrGuideReview.Fingerprint(failedView.Capture()) == beforeSync && !failedView.StatusText.Contains("private-synthetic-value"), "sync_failure_preserves_and_sanitizes");
         var pending = new TaskCompletionSource<byte[]>();
         var staleView = new PcrGuideReviewView(path, (_, _) => pending.Task);
-        staleView.ReadSnapshot(); staleView.ClearAccount(); pending.SetResult(Bytes(snapshotBytes)); Dispatcher.UIThread.RunJobs();
+        staleView.ShowAccountPage(); staleView.ReadSnapshot();
+        var stopReading=(Button)typeof(PcrGuideReviewView).GetField("stopAccount",BindingFlags.NonPublic|BindingFlags.Instance)!.GetValue(staleView)!;
+        var useAccount=(Button)typeof(PcrGuideReviewView).GetField("acceptAccount",BindingFlags.NonPublic|BindingFlags.Instance)!.GetValue(staleView)!;
+        Require(stopReading.IsVisible && !useAccount.IsEnabled, "account_refresh_shows_stop_and_blocks_return");
+        staleView.ClearAccount(); pending.SetResult(Bytes(snapshotBytes)); Dispatcher.UIThread.RunJobs();
+        Require(!stopReading.IsVisible, "account_refresh_finished_hides_stop");
         Require(staleView.Capture().Snapshot == null && staleView.StatusText.Contains("已改变"), "sync_changed_input_discards_result");
         var picker = (ComboBox)typeof(PcrGuideReviewView).GetField("rolePicker", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(view)!;
         var grid = (DataGrid)typeof(PcrGuideReviewView).GetField("conditions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(view)!;

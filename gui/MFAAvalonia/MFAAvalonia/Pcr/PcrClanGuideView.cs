@@ -41,6 +41,12 @@ public sealed class PcrClanGuideView : UserControl
     private readonly ComboBox battleSpeed = new() { ItemsSource = new[] { new Choice("1", "1 倍速"), new Choice("2", "2 倍速"), new Choice("4", "4 倍速") }, MinWidth = 120 };
     private readonly TextBlock executionSummary = Note("");
     private readonly TextBlock calibrationSummary = Note("");
+    private readonly TextBlock calibrationDetails = Note("");
+    private readonly TextBlock speedLabel = Note("模拟战倍速");
+    private readonly TextBlock formalSpeed = new() { Text = "固定 2 倍速", IsVisible = false };
+    private readonly Expander workSelection = new() { Header = "选择或更换作业", IsExpanded = true };
+    private readonly Expander dailyDetails = new() { Header = "一天三刀目标" };
+    private Button stopFetch = null!;
     private readonly StackPanel formalControls = new() { Spacing = 6, IsVisible = false };
     private readonly TextBlock selectionSummary = Note("尚未选定作业。");
     private readonly Expander sourceDetails = new() { Header = "作业原图与来源", IsExpanded = false };
@@ -60,8 +66,8 @@ public sealed class PcrClanGuideView : UserControl
     private readonly TextBox video = new() { Watermark = "粘贴 B 站公会战作业视频链接", MinWidth = 300 };
     private readonly ComboBox page = new() { PlaceholderText = "分 P / 阶段", MinWidth = 180 };
     private readonly ComboBox package = new() { PlaceholderText = "套餐", MinWidth = 180 };
-    private readonly ComboBox teams = new() { PlaceholderText = "选择队伍", MinWidth = 320 };
-    private readonly ComboBox accounts = new() { PlaceholderText = "选择原账号缓存", MinWidth = 320 };
+    private readonly ComboBox teams = new() { PlaceholderText = "选择队伍", MinWidth = 320, MaxWidth = 600 };
+    private readonly ComboBox accounts = new() { PlaceholderText = "选择原账号缓存", MinWidth = 320, MaxWidth = 540 };
     private readonly Dictionary<string, TextBox> fields = new();
     private readonly Member[] members = Enumerable.Range(0, 5).Select(_ => new Member()).ToArray();
     private readonly ComboBox auto = Toggle(false);
@@ -105,20 +111,25 @@ public sealed class PcrClanGuideView : UserControl
         guide.Children.Add(new TextBlock { Text = "公会战", FontSize = 22, FontWeight = FontWeight.SemiBold });
         Avalonia.Automation.AutomationProperties.SetName(executionMode, "会战执行模式");
         Avalonia.Automation.AutomationProperties.SetName(battleSpeed, "模拟战倍速");
-        guide.Children.Add(Buttons(Note("执行模式"), executionMode, Note("模拟战倍速"), battleSpeed));
+        guide.Children.Add(Buttons(Note("执行模式"), executionMode, speedLabel, battleSpeed, formalSpeed));
         guide.Children.Add(executionSummary);
         guide.Children.Add(calibrationSummary);
-        guide.Children.Add(selectionSummary);
-        guide.Children.Add(Buttons(accounts, Button("选用最新账号资料", UseLatestAccount), Button("账号资料与刷新", () => AccountRefreshRequested?.Invoke(this, EventArgs.Empty))));
+        guide.Children.Add(new TextBlock { Text = "账号", FontSize = 16, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
+        guide.Children.Add(Buttons(accounts, Button("账号资料与刷新", () => AccountRefreshRequested?.Invoke(this, EventArgs.Empty))));
         guide.Children.Add(accountNote);
-        formalControls.Children.Add(Note("先核对三个目标。保存不会开始战斗；开始任务时另行核对随包校准、实际次数与补偿状态。"));
+        guide.Children.Add(new Expander { Header = "更多账号操作", Content = Buttons(Button("选用最新账号资料", UseLatestAccount)) });
+        formalControls.Children.Add(Note("保存不会开始战斗；开始时仍会核对实际次数与补偿。"));
         formalControls.Children.Add(Buttons(Button("预览正式三目标（不执行）", PreviewDaily), Button("核对并保存正式三目标", ConfirmDaily)));
-        guide.Children.Add(formalControls);
-        guide.Children.Add(new TextBlock { Text = "选作业", FontSize = 16, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
-        guide.Children.Add(video);
-        guide.Children.Add(Buttons(Button("获取视频作业", async () => await FetchVideo()), Button("导入已获取的作业包", PickBundle), Button("停止获取", () => fetchCancel?.Cancel())));
-        guide.Children.Add(Buttons(page, package, teams));
-        var source = new StackPanel { Spacing = 8 }; source.Children.Add(imageNote); source.Children.Add(image); source.Children.Add(preview);
+        guide.Children.Add(new TextBlock { Text = "作业", FontSize = 16, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
+        guide.Children.Add(selectionSummary);
+        var chooseWork = new StackPanel { Spacing = 8 };
+        chooseWork.Children.Add(video);
+        stopFetch = Button("停止获取", () => fetchCancel?.Cancel()); stopFetch.IsVisible = false;
+        chooseWork.Children.Add(Buttons(Button("获取视频作业", async () => await FetchVideo()), Button("导入已获取的作业包", PickBundle), stopFetch));
+        chooseWork.Children.Add(Buttons(page, package, teams));
+        workSelection.Content = chooseWork; guide.Children.Add(workSelection);
+        var source = new StackPanel { Spacing = 8 }; source.Children.Add(imageNote); source.Children.Add(image); source.Children.Add(preview); source.Children.Add(calibrationDetails);
+        sourceDetails.Header = "作业原图、来源与校准";
         sourceDetails.Content = source; guide.Children.Add(sourceDetails);
         var target = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*"), RowDefinitions = new RowDefinitions("Auto,Auto"), ColumnSpacing = 12, RowSpacing = 8 };
         var reference = new StackPanel { Spacing = 8 };
@@ -130,7 +141,7 @@ public sealed class PcrClanGuideView : UserControl
             if (index < 6) { Grid.SetRow(panel, index / 3); Grid.SetColumn(panel, index % 3); target.Children.Add(panel); }
             else reference.Children.Add(panel);
         }
-        guide.Children.Add(new Expander { Header = "目标 BOSS 与周目", IsExpanded = true, Content = target });
+        guide.Children.Add(new Expander { Header = "目标 BOSS 与周目", Content = target });
         guide.Children.Add(new TextBlock { Text = "核对阵容", FontSize = 16, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
         guide.Children.Add(Note("五人按作业顺序填写。角色使用原角色目录中的完整名称或编号；星级优先作业明确值，未注明时留空使用原账号的战斗星级。"));
         var roster = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto"), ColumnSpacing = 10, RowSpacing = 6 };
@@ -146,16 +157,17 @@ public sealed class PcrClanGuideView : UserControl
         }
         guide.Children.Add(roster);
         guide.Children.Add(Buttons(Note("开场 AUTO"), auto, Note("支援"), support)); guide.Children.Add(supportRole);
-        guide.Children.Add(Note("缺谁借谁：五人齐全用本人，缺一人借该角色；缺多名或支援不匹配时停止。指定支援只借本队所选角色，不替换角色。"));
+        guide.Children.Add(new Expander { Header = "支援说明", Content = Note("缺谁借谁：五人齐全用本人，缺一人借该角色；缺多名或支援不匹配时停止。指定支援只借本队所选角色，不替换角色。当前全自有校准不开放借人。") });
         var timing = new StackPanel { Spacing = 6 }; timing.Children.Add(Note("每行：剩余秒数 | AUTO（不变 / 开 / 关）| SET（完整角色名或编号=开/关，用分号分隔）。秒数严格递减。未解析的原轴须填写支持的秒数，或明确写“无切换”；空白不代替未知。错过秒数、读回未知或断线即停，不补点。")); timing.Children.Add(switches);
-        guide.Children.Add(timingStatus);
+        timing.Children.Add(timingStatus);
         guide.Children.Add(new Expander { Header = "战中 SET / AUTO 秒数轴", Content = timing });
         guide.Children.Add(Buttons(Button("核对五人和操作并保存", ConfirmAndSave), Button("暂存草稿", SaveDraft), Button("放弃编辑并重开", Reload)));
         guide.Children.Add(status);
         guide.Children.Add(new Expander { Header = "作业名称与参考伤害", Content = reference });
         dailyPlan = new PcrClanDailyPlanView(this.repository, PcrClanDailyPlan.PathFor(this.configDirectory), this.configDirectory,
             this.statePath, Capture, () => HasCurrentConfirmation, LoadReviewed);
-        guide.Children.Add(new Expander { Header = "一天三刀目标", Content = dailyPlan });
+        var dailySection = new StackPanel { Spacing = 8 }; dailySection.Children.Add(dailyPlan); dailySection.Children.Add(formalControls);
+        dailyDetails.Content = dailySection; guide.Children.Add(dailyDetails);
         Content = new ScrollViewer { Content = guide, Margin = new Thickness(16), HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
         page.SelectionChanged += (_, _) => { if (!displaying) Guard(PopulatePackages); };
         package.SelectionChanged += (_, _) => { if (!displaying) Guard(PopulateTeams); };
@@ -236,7 +248,7 @@ public sealed class PcrClanGuideView : UserControl
     { try { action(); } catch (Exception ex) { document.ConfirmedFor = null; status.Text = "作业不可用，尚未确认：" + ex.Message; } }
     private void Watch(TextBox box) => box.PropertyChanged += (_, e) => { if (e.Property == TextBox.TextProperty) Invalidate(); };
     private void Invalidate()
-    { if (displaying) return; document.ConfirmedFor = null; UpdateSelectionSummary(); status.Text = "内容已修改，请对照原图后一次确认保存。"; }
+    { if (displaying) return; document.ConfirmedFor = null; execution.ConfirmedFor = null; UpdateSelectionSummary(); status.Text = "内容已修改，请对照原图后一次确认保存。"; }
     private void UpdateSelectionSummary()
     {
         string Value(string key) => fields[key].Text?.Trim() is { Length: > 0 } text ? text : "待填写";
@@ -331,6 +343,7 @@ public sealed class PcrClanGuideView : UserControl
         try
         {
             document = JsonConvert.DeserializeObject<PcrClanGuideDocument>(JsonConvert.SerializeObject(value))!; LoadCatalog();
+            workSelection.IsExpanded = string.IsNullOrEmpty(document.SelectedJobId);
             var job = document.Job;
             foreach (var pair in fields) pair.Value.Text = job[pair.Key]?.Type == JTokenType.Null ? "" : job[pair.Key]?.ToString() ?? "";
             var ids = job["unit_ids"] as JArray; var stars = job["stars"] as JArray;
@@ -430,13 +443,29 @@ public sealed class PcrClanGuideView : UserControl
         finally { displaying = before; }
         DescribeAccount();
     }
+    public void UseAccountSnapshot(PcrGuideSnapshot snapshot)
+    {
+        var path = PcrClanGuide.SnapshotPaths(configDirectory).SingleOrDefault(p =>
+            PcrClanGuide.Stamp(p)?.Equals(snapshot.Sha256, StringComparison.OrdinalIgnoreCase) == true)
+            ?? throw new InvalidDataException("所选账号缓存已改变，请重新读取。");
+        var next = JsonConvert.DeserializeObject<PcrClanGuideDocument>(JsonConvert.SerializeObject(document))!;
+        next.SnapshotPath = path; next.SnapshotSha256 = PcrClanGuide.Stamp(path)!;
+        var data = PcrClanGuide.Snapshot(next, configDirectory, repository, DateTimeOffset.Now, out _);
+        if ((string?)data["account_id"] != snapshot.AccountId || (string?)data["server"] != snapshot.Server
+            || (string?)data["content_version"] != snapshot.ContentVersion)
+            throw new InvalidDataException("所选资料与账号身份不一致。");
+        if (document.SnapshotPath == path && document.SnapshotSha256 == next.SnapshotSha256) { RefreshAccounts(); return; }
+        document.SnapshotPath = next.SnapshotPath; document.SnapshotSha256 = next.SnapshotSha256;
+        LoadCatalog(); Invalidate(); RefreshAccounts(); ExecutionModeChanged?.Invoke(this, EventArgs.Empty);
+        status.Text = "已使用账号资料，编辑内容保留；请重新核对作业和三刀。";
+    }
     public void UseLatestAccount()
     {
         RefreshAccounts();
         if (accounts.SelectedItem is not Choice choice) { status.Text = "请先选择账号资料。"; return; }
         var stamp = PcrClanGuide.Stamp(choice.Value) ?? throw new IOException("所选账号资料不存在，请重新读取。");
         if (document.SnapshotSha256 == stamp) return;
-        document.SnapshotSha256 = stamp; LoadCatalog(); Invalidate(); DescribeAccount();
+        document.SnapshotSha256 = stamp; LoadCatalog(); Invalidate(); DescribeAccount(); ExecutionModeChanged?.Invoke(this, EventArgs.Empty);
         status.Text = "已选用最新账号资料，编辑内容保留；请重新核对五人和操作并保存。";
     }
     private void DescribeAccount()
@@ -460,9 +489,18 @@ public sealed class PcrClanGuideView : UserControl
         }
         catch (Exception) { /* Invalid account data is explained by the account panel. */ }
         var calibration = PcrClanCalibration.Read(repository, version);
-        calibrationSummary.Text = "当前账号的随包校准：" + calibration.Summary + " " + calibration.AutoBattleSummary;
-        if (calibration.OwnUnitsOnly && (support.SelectedItem as Choice)?.Value is "qsjs" or "specified")
-            calibrationSummary.Text += " 当前队伍选择了支援，开始任务前会停止，请先改用已核对的全自有队伍。";
+        calibrationDetails.Text = calibration.Summary + Environment.NewLine + calibration.AutoBattleSummary;
+        var formal = execution.Mode == PcrClanDailyExecution.FormalDaily;
+        var capability = formal ? "formal" : "simulation";
+        var label = formal ? "正式三刀" : "模拟战";
+        var reason = calibration.Error ?? (!calibration.Supports(capability) ? "缺少对应页面校准和真实验收。" : null);
+        if (reason == null && calibration.OwnUnitsOnly && (support.SelectedItem as Choice)?.Value is "qsjs" or "specified")
+            reason = "当前校准仅支持全自有队伍。";
+        if (reason == null && formal && !calibration.FormalOpening) reason = "缺少正式开场校准。";
+        if (reason == null && formal && execution.BattleSpeed != 2) reason = "旧正式配置需重新确认并保存为 2 倍速。";
+        if (reason == null && !formal && execution.BattleSpeed != 1 && calibration.AutoBattleSpeeds?.Contains(execution.BattleSpeed) != true)
+            reason = $"缺少 {execution.BattleSpeed} 倍速校准。";
+        calibrationSummary.Text = reason == null ? label + "校准可用；开始前仍会核对实际页面。" : label + "不可用：" + reason;
     }
     private void Persist(bool confirm)
     {
@@ -488,7 +526,7 @@ public sealed class PcrClanGuideView : UserControl
         try
         {
             if (!executionLoaded) throw new InvalidOperationException("会战模式未成功读取，禁止覆盖。请重新打开。");
-            var value = new PcrClanDailyExecutionDocument { Mode = mode, BattleSpeed = mode == PcrClanDailyExecution.FormalDaily ? 1 : execution.BattleSpeed };
+            var value = new PcrClanDailyExecutionDocument { Mode = mode, BattleSpeed = mode == PcrClanDailyExecution.FormalDaily ? 2 : execution.BattleSpeed };
             executionHash = PcrClanDailyExecution.Save(value, PcrClanDailyExecution.PathFor(configDirectory), executionHash, ReadSavedModeStamp); execution = value;
         }
         catch
@@ -522,12 +560,16 @@ public sealed class PcrClanGuideView : UserControl
             executionMode.SelectedItem = executionLoaded ? ((IEnumerable<Choice>)executionMode.ItemsSource!).Single(c => c.Value == execution.Mode) : null;
             battleSpeed.SelectedItem = executionLoaded ? ((IEnumerable<Choice>)battleSpeed.ItemsSource!).Single(c => c.Value == execution.BattleSpeed.ToString(CultureInfo.InvariantCulture)) : null;
             battleSpeed.IsEnabled = executionLoaded && execution.Mode == PcrClanDailyExecution.Simulation;
+            battleSpeed.IsVisible = speedLabel.IsVisible = !executionLoaded || execution.Mode == PcrClanDailyExecution.Simulation;
+            formalSpeed.IsVisible = executionLoaded && execution.Mode == PcrClanDailyExecution.FormalDaily;
         }
         finally { displaying = before; }
         formalControls.IsVisible = executionLoaded && execution.Mode == PcrClanDailyExecution.FormalDaily;
+        dailyDetails.IsExpanded = formalControls.IsVisible;
         executionSummary.Text = !executionLoaded ? "会战模式保存未完成，执行确认已取消；编辑内容保留，请重新打开后核对实际保存的模式。"
-            : execution.Mode == PcrClanDailyExecution.Simulation ? $"当前为单次模拟，{execution.BattleSpeed} 倍速。程序核对开场准备条件，暂停设置五人 SET／AUTO 和倍速后继续；含战中切换的秒数轴仅支持 1 倍速。战斗继承的处理方式见校准说明。已击败的 BOSS 仍可选择模拟战。"
-            : "当前为正式三刀。请预览完整三目标后单独核对保存；只有对应校准可用时才能开始。";
+            : execution.Mode == PcrClanDailyExecution.Simulation ? $"单次模拟，{execution.BattleSpeed} 倍速；开场按作业设置 SET／AUTO。已击败的 BOSS 仍可选择模拟战。"
+            : "正式三刀固定 2 倍速。请在三刀目标中预览并核对保存；只有对应校准可用时才能开始。"
+                + (execution.BattleSpeed != 2 ? " 旧 1 倍配置尚未重新确认。" : "");
         UpdateCalibrationSummary();
     }
     public void PreviewDaily()
@@ -543,7 +585,7 @@ public sealed class PcrClanGuideView : UserControl
         if (!executionLoaded || execution.Mode != PcrClanDailyExecution.FormalDaily) throw new InvalidOperationException("请先选择正式三刀模式；单次模拟确认不适用于三目标。");
         if (!HasCurrentConfirmation) throw new InvalidOperationException("当前编辑尚未核对保存，请先保存或放弃编辑后重开。");
         var request = PcrClanDailyExecution.BuildPlan(PcrClanDailyPlan.PathFor(configDirectory), statePath, configDirectory, repository, DateTimeOffset.Now);
-        var value = new PcrClanDailyExecutionDocument { Mode = execution.Mode, ConfirmedFor = (string?)request["confirmed_for"] };
+        var value = new PcrClanDailyExecutionDocument { Mode = execution.Mode, BattleSpeed = 2, ConfirmedFor = (string?)request["confirmed_for"] };
         try
         {
             executionHash = PcrClanDailyExecution.Save(value, PcrClanDailyExecution.PathFor(configDirectory), executionHash, ReadSavedModeStamp); execution = value;
@@ -611,7 +653,7 @@ public sealed class PcrClanGuideView : UserControl
         if (fetchCancel != null) { status.Text = "正在获取，可先停止当前获取。"; return; }
         var url = video.Text?.Trim() ?? "";
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.Host != "www.bilibili.com" || uri.UserInfo != "") { status.Text = "请粘贴 B 站 HTTPS 视频链接。"; return; }
-        using var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(5)); fetchCancel = cancel;
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(5)); fetchCancel = cancel; stopFetch.IsVisible = true;
         status.Text = "正在获取视频原图与分 P 作业，取得后仍需核对五人和操作。";
         var output = Path.Combine(repository, ".runtime", "clan-guide-sources", Guid.NewGuid().ToString("N"));
         using var child = new Process(); var started = false;
@@ -631,6 +673,6 @@ public sealed class PcrClanGuideView : UserControl
         }
         catch (OperationCanceledException) { if (started && !child.HasExited) child.Kill(true); status.Text = "获取已停止，已保存的作业未改变。"; }
         catch (Exception ex) { status.Text = "获取未完成：" + ex.Message; }
-        finally { fetchCancel = null; }
+        finally { fetchCancel = null; stopFetch.IsVisible = false; }
     }
 }

@@ -290,12 +290,15 @@ def execute_switches(port, plan, initial=None):
     desired, auto, actions, switch_evidence = dict(plan['set_by_unit']), plan['auto'], [], []
     state = _controls(port.read_battle_settings(initial), plan)
     calibration = getattr(port, 'calibration', None)
+    formal_opening = (calibration.get('daily', {}).get('execution', {}).get('opening')
+        if type(calibration) is dict and getattr(port, 'formal_opening', False) is True else None)
     paused = (getattr(port, 'opening_paused', False) is True and not plan['switches']
-        and type(calibration) is dict and bool(calibration.get('auto_battle')) and state.get('paused') is True)
+        and type(calibration) is dict and bool(calibration.get('auto_battle') or formal_opening) and state.get('paused') is True)
     opening_second = state.get('remaining_seconds')
-    if getattr(port, 'opening_paused', False) and (not paused or type(opening_second) is not int or opening_second not in (90, 89)
+    allowed_seconds = (getattr(port, 'start_seconds', None),) if formal_opening else (90, 89)
+    if getattr(port, 'opening_paused', False) and (not paused or type(opening_second) is not int or opening_second not in allowed_seconds
             or state.get('zero_damage_verified') is not True or state.get('zero_tp_verified') is not True
-            or type(state.get('battle_speed')) is not int or state['battle_speed'] not in (1, 2, 4)):
+            or type(state.get('battle_speed')) is not int or state['battle_speed'] not in ((1, 2) if formal_opening else (1, 2, 4))):
         raise RuntimeError('clan_battle_opening_not_verified')
     opening_speed = state.get('battle_speed')
     if type(calibration) is dict and calibration.get('version') == 2:

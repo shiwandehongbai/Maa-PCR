@@ -10,7 +10,7 @@ using Newtonsoft.Json.Linq;
 
 namespace MFAAvalonia.Pcr;
 
-public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabilities, string? Error, bool OwnUnitsOnly = false, bool AccountStars = false, IReadOnlySet<int>? AutoBattleSpeeds = null, bool ManageInheritance = false)
+public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabilities, string? Error, bool OwnUnitsOnly = false, bool AccountStars = false, IReadOnlySet<int>? AutoBattleSpeeds = null, bool ManageInheritance = false, bool FormalOpening = false)
 {
     public const string IndexPath = "assets/resource/clan-battle-calibrations/index.json";
     // Kept with the reviewed Python calibration loader when the bundled index changes.
@@ -83,7 +83,7 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
             VerifyDependencies(root, profile, capabilities, ownUnitsOnly);
             return new(version == 1 ? 1 : (int)profile["version"]!, capabilities, null, ownUnitsOnly, starSource != null,
                 profile["auto_battle"] is JObject autoBattle ? autoBattle["speeds"]!.Values<int>().ToHashSet() : null,
-                profile["auto_battle"]?["inheritance"] is JObject);
+                profile["auto_battle"]?["inheritance"] is JObject, profile["daily"]?["execution"]?["opening"] is JObject);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException
             or InvalidCastException or FormatException or OverflowException or Newtonsoft.Json.JsonException)
@@ -97,12 +97,23 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
             + " [clan_battle_calibration_capability_missing:" + capability + "]");
         if (Version == 1 && ((bool?)plan["auto"] != true || plan["switches"] is not JArray { Count: 0 }))
             throw new InvalidOperationException("此校准只支持全程 AUTO、无战中切换。[clan_battle_calibration_auto_only]");
+        if (capability is "formal" or "carryover")
+        {
+            if ((string?)plan["support_mode"] != "none")
+                throw new InvalidOperationException("正式作业只支持全自有队伍。[clan_battle_support_mode_uncalibrated]");
+            if (plan["switches"] is not JArray { Count: 0 })
+                throw new InvalidOperationException("正式作业暂不支持战中切换。[clan_battle_daily_auto_only]");
+            if (battleSpeed != 2)
+                throw new InvalidOperationException("正式作业固定使用已校准的 2 倍速。[clan_battle_daily_speed_invalid]");
+            if (!FormalOpening)
+                throw new InvalidOperationException("正式开场及继承校准缺失。[clan_battle_daily_opening_calibration_missing]");
+        }
         if (plan["switches"] is JArray { Count: > 0 } && !Supports("timed"))
             throw new InvalidOperationException("当前内容版本缺少秒数轴校准。[clan_battle_calibration_capability_missing:timed]");
         if (OwnUnitsOnly && (string?)plan["support_mode"] != "none")
             throw new InvalidOperationException("仅全自有队伍可用；借人身份尚未校准。[clan_battle_support_mode_uncalibrated]");
         if (battleSpeed is not (1 or 2 or 4)) throw new InvalidOperationException("会战倍速无效。[clan_battle_speed_invalid]");
-        if (battleSpeed != 1 && (capability != "simulation" || plan["switches"] is not JArray { Count: 0 }
+        if (capability is not ("formal" or "carryover") && battleSpeed != 1 && (capability != "simulation" || plan["switches"] is not JArray { Count: 0 }
                 || AutoBattleSpeeds?.Contains(battleSpeed) != true))
             throw new InvalidOperationException("此作业或内容版本尚未校准所选倍速；秒数轴只支持 1 倍速。[clan_battle_auto_speed_uncalibrated]");
         if (AccountStars) RequireAccountStars(plan);
@@ -206,12 +217,44 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
             {
                 if (daily["execution"] is not JObject execution) throw new InvalidDataException("正式执行校准缺失。[clan_battle_daily_execution_calibration_missing]");
                 sections.Add(execution);
+                if (execution.ContainsKey("opening"))
+                {
+                    if (execution["opening"] is not JObject opening
+                        || !Keys(opening, new[] { "battle_speed", "opening_guards", "paused_guards", "clock", "auto_on", "auto_off", "speed", "speed_two", "set_badge", "empty_tp", "targets", "inheritance", "samples" }
+                            .Concat(opening.ContainsKey("start_seconds") ? new[] { "start_seconds" } : Array.Empty<string>()).ToArray())
+                        || opening.ContainsKey("start_seconds") && (opening["start_seconds"] is not JArray { Count: > 0 } seconds
+                            || seconds.Any(value => value.Type != JTokenType.Integer || (long)value is < 1 or > 90)
+                            || seconds.Values<int>().Distinct().Count() != seconds.Count || !seconds.Values<int>().Contains(90))
+                        || opening["battle_speed"]?.Type != JTokenType.Integer || (int?)opening["battle_speed"] != 2
+                        || opening["opening_guards"] is not JArray { Count: 3 } || opening["paused_guards"] is not JArray { Count: 3 }
+                        || !Roi(opening["clock"]) || opening["speed"] is not JObject speed || !Keys(speed, "1", "2")
+                        || opening["targets"] is not JObject targets || !Keys(targets, "pause", "auto", "speed", "resume", "sets")
+                        || new[] { "pause", "auto", "speed", "resume" }.Any(key => !Roi(targets[key]))
+                        || targets["sets"] is not JArray { Count: 5 } setTargets || setTargets.Any(value => !Roi(value))
+                        || opening["samples"] is not JArray { Count: 3 } openingSamples
+                        || openingSamples.Any(value => value is not JObject sample || sample["page"]?.Type != JTokenType.String)
+                        || !openingSamples.Select(value => (string?)value["page"]).ToHashSet().SetEquals(new[] { "battle", "paused", "battle_two" }))
+                        throw new InvalidDataException("正式开场校准无效。[clan_battle_daily_opening_calibration_missing]");
+                    if (opening["inheritance"] is not JObject inheritance || !Keys(inheritance, "battle_selected", "radio_on", "radio_off", "samples")
+                        || new[] { "battle_selected", "radio_on", "radio_off" }.Any(key => inheritance[key] is not JObject marker
+                            || (string?)marker["recognition"] != "TemplateMatch" || !OpeningNode(marker)))
+                        throw new InvalidDataException("正式继承校准无效。[clan_battle_inheritance_calibration_invalid]");
+                    foreach (var marker in ((JArray)opening["opening_guards"]!).Concat((JArray)opening["paused_guards"]!)
+                        .Concat(speed.Properties().Select(value => value.Value))
+                        .Concat(new[] { opening["auto_on"]!, opening["auto_off"]!, opening["speed_two"]!, opening["set_badge"]!, opening["empty_tp"]! }))
+                        if (!OpeningNode(marker)) throw new InvalidDataException("正式开场锚点无效。[clan_battle_daily_opening_calibration_missing]");
+                    sections.Add(opening); sections.Add(inheritance);
+                }
             }
         }
         if (capabilities.Contains("formal") || capabilities.Contains("carryover"))
         {
             if (profile["daily"] is not JObject daily || daily["version"]?.Type != JTokenType.Integer || (int?)daily["version"] != 2
-                || daily["execution"] is not JObject execution || !Keys(execution, "pages", "actions", "used_units", "carry_slots", "boss_slots", "formation_owner", "formation_mode", "speed_one", "samples"))
+                || daily["execution"] is not JObject execution)
+                throw new InvalidDataException("正式执行校准字段不完整。[clan_battle_daily_execution_calibration_missing]");
+            if (execution["opening"] is not JObject)
+                throw new InvalidDataException("正式开场及继承校准缺失。[clan_battle_daily_opening_calibration_missing]");
+            if (!Keys(execution, "pages", "actions", "used_units", "carry_slots", "boss_slots", "formation_owner", "formation_mode", "speed_one", "opening", "samples"))
                 throw new InvalidDataException("正式执行校准字段不完整。[clan_battle_daily_execution_calibration_missing]");
         }
         foreach (var section in sections)
@@ -251,6 +294,13 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
                 throw new InvalidDataException("秒数轴测量字段或绑定不完整。[clan_battle_timing_not_calibrated]");
         }
     }
+    private static bool Roi(JToken? value) => value is JArray { Count: 4 } roi && roi.All(item => item.Type == JTokenType.Integer)
+        && (long)roi[0] is >= 0 and < 1280 && (long)roi[1] is >= 0 and < 720
+        && (long)roi[2] is > 0 and <= 1280 && (long)roi[3] is > 0 and <= 720
+        && (long)roi[0] + (long)roi[2] <= 1280 && (long)roi[1] + (long)roi[3] <= 720;
+    private static bool OpeningNode(JToken? value) => value is JObject node && Roi(node["roi"])
+        && ((string?)node["recognition"] == "TemplateMatch" || (string?)node["recognition"] == "OCR"
+            && node["expected"]?.Type == JTokenType.String && ((string)node["expected"]!).StartsWith('^') && ((string)node["expected"]!).EndsWith('$'));
     private static string Local(string root, string relative)
     {
         if (string.IsNullOrWhiteSpace(relative) || relative.Contains('\\') || relative.Contains(':') || Path.IsPathRooted(relative)

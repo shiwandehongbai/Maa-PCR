@@ -19,6 +19,7 @@ namespace MFAAvalonia.Pcr;
 public sealed class PcrGuideReviewView : UserControl
 {
     private readonly PcrGuideStore store;
+    private readonly string accountDirectory;
     private readonly PcrGuideAccountStore accounts;
     private readonly PcrGuideLibrary library;
     private readonly ComboBox savedTeams = new() { MinWidth = 320, MaxWidth = 760, PlaceholderText = "选择已保存队伍" };
@@ -33,6 +34,16 @@ public sealed class PcrGuideReviewView : UserControl
     private readonly DataGrid conditions = new() { AutoGenerateColumns = false, MinHeight = 180, MaxHeight = 320, FontSize = 14 };
     private readonly DataGrid facts = new() { AutoGenerateColumns = false, MinHeight = 180, MaxHeight = 400, FontSize = 14 };
     private readonly TabControl tabs = new();
+    private readonly Grid body = new();
+    private readonly TextBlock heading = Note("攻略检查 · 不执行培养或战斗；只有点击协议读取时才会登录账号。");
+    private readonly TextBlock accountOverview = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly StackPanel guideActions = new() { Spacing = 6 };
+    private ScrollViewer accountScroll = null!;
+    private TabItem accountTab = null!;
+    private Button refreshAccount = null!;
+    private Button stopAccount = null!;
+    private Button acceptAccount = null!;
+    private bool accountOnly;
     private readonly ComboBox rolePicker = new() { MinWidth = 260, MaxWidth = 480, PlaceholderText = "选择完整角色名称" };
     private readonly TextBox roleSearch = new() { Watermark = "按完整名称或编号搜索" };
     private readonly TextBlock catalogStatus = new() { TextWrapping = TextWrapping.Wrap };
@@ -60,14 +71,37 @@ public sealed class PcrGuideReviewView : UserControl
     public string ReportText => report.Text ?? "";
     public string MinimumText => minimum.Text ?? "";
     public string StatusText => status.Text ?? "";
-    public void ShowAccountPage() => tabs.SelectedIndex = 1;
+    public event Action<PcrGuideSnapshot>? AccountAccepted;
+    public void ShowAccountPage()
+    {
+        if (accountOnly) return;
+        accountOnly = true;
+        tabs.SelectedIndex = 1;
+        accountTab.Content = null;
+        body.Children.Clear(); body.Children.Add(accountScroll);
+        guideActions.IsVisible = false;
+        heading.Text = "账号资料";
+        heading.FontSize = 22; heading.FontWeight = FontWeight.SemiBold;
+        try { Display(Reuse(Capture()), currentReport); status.Text = ""; }
+        catch (Exception ex) { status.Text = "本机资料未复用：" + ex.Message; }
+    }
+    public void ShowGuidePage()
+    {
+        if (!accountOnly) return;
+        accountOnly = false;
+        body.Children.Clear(); accountTab.Content = accountScroll; body.Children.Add(tabs);
+        guideActions.IsVisible = true;
+        heading.Text = "攻略检查 · 不执行培养或战斗；只有点击协议读取时才会登录账号。";
+        heading.FontSize = FontSize; heading.FontWeight = FontWeight.Normal;
+    }
     public string TeamSummaryText => teamSummary.Text ?? "";
     public IReadOnlyList<PcrGuideLibraryEntry> SavedTeams => library.Entries;
 
     public PcrGuideReviewView(string path, Func<PcrGuideInput, CancellationToken, Task<byte[]>>? readSnapshot = null, Func<string?>? configuredAccount = null)
     {
         store = new(path);
-        accounts = new(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        accountDirectory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        accounts = new(accountDirectory);
         library = new(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, "guide-library"));
         this.configuredAccount = configuredAccount;
         this.readSnapshot = readSnapshot;
@@ -129,41 +163,49 @@ public sealed class PcrGuideReviewView : UserControl
         details.Children.Add(Buttons(Button("载入国服待补样例", () => LoadExample()), Button("载入日服文字样例", () => LoadExample(true))));
         guide.Children.Add(new Expander { Header = "来源与练度明细（可选）", Content = details });
 
-        var account = new StackPanel { Spacing = 8 };
-        account.Children.Add(teamSummary);
-        account.Children.Add(Note("只填与此作业相关的资料。这里的账号标签独立于日常执行选集；切换游戏账号后请更新。没有资料就留空，缺一行不代表未持有。"));
-        account.Children.Add(Buttons(Button("导入账号快照", () => PickData(true)), Button("清空账号资料", ClearAccount)));
-        account.Children.Add(Note("协议读取复用黎明界账号，一次保存全部持有角色、五种属性等级和各职能槽位；换队只读本机资料。登录可能使模拟器断线，仅在空闲且未战斗时刷新，结束后可重新登录游戏。"));
-        account.Children.Add(Buttons(Button("读取全部持有角色", ReadSnapshot), Button("复用本机账号资料", ReuseAccount), Button("停止读取", () => syncCancel?.Cancel())));
-        account.Children.Add(snapshotStatus); account.Children.Add(snapshotConfirmed);
-        account.Children.Add(Note("属性等级的形态栏可填“火”“水”等；留空时只对应本队唯一属性。职能强化须填“攻击型/槽1”等具体范围。作者仅写“3-2”时保留待确认，不套用到所有职能。旧快照缺项保持未知，复用不更新采集时间。"));
-        AddPair(account, "TargetServer", "本次目标区服", "TargetStage", "本次目标关卡");
-        AddField(account, "TargetVersion", "本次游戏版本");
-        AddPair(account, "AccountLabel", "账号标签（无需账号密码）", "AccountObservedOn", "实际观察日期");
-        AddPair(account, "AccountServer", "资料所属区服", "AccountVersion", "资料观察时版本");
-        account.Children.Add(Note("持有填“是”或“否”；其他字段填实际值。依据可写“角色页截图日期 / 文件名”等本机定位；每项核实后勾选确认。手动填写不读取登录信息。"));
+        var account = new StackPanel { Spacing = 12 };
+        account.Children.Add(accountOverview);
+        refreshAccount = Button("刷新资料", ReadSnapshot);
+        stopAccount = Button("停止读取", () => syncCancel?.Cancel()); stopAccount.IsVisible = false;
+        acceptAccount = Button("使用资料并返回", UseAccountAndReturn);
+        account.Children.Add(Buttons(refreshAccount, acceptAccount, stopAccount));
+        account.Children.Add(Note("刷新会登录已配置账号，可能使游戏断线。请在游戏空闲时刷新；资料保留原采集时间，有效期 24 小时。"));
+        var accountDetails = new StackPanel { Spacing = 8 };
+        accountDetails.Children.Add(Buttons(Button("导入账号快照", () => PickData(true)), Button("清空账号资料", ClearAccount),
+            Button("复用本机账号资料", ReuseAccount)));
+        accountDetails.Children.Add(snapshotStatus); accountDetails.Children.Add(snapshotConfirmed);
+        accountDetails.Children.Add(teamSummary);
+        accountDetails.Children.Add(Note("以下为可选的手填资料。缺项保持未知，旧快照缺项不会由复用补造。"));
+        AddPair(accountDetails, "TargetServer", "本次目标区服", "TargetStage", "本次目标关卡");
+        AddField(accountDetails, "TargetVersion", "本次游戏版本");
+        AddPair(accountDetails, "AccountLabel", "账号标签（无需账号密码）", "AccountObservedOn", "实际观察日期");
+        AddPair(accountDetails, "AccountServer", "资料所属区服", "AccountVersion", "资料观察时版本");
+        accountDetails.Children.Add(Note("属性等级填写具体属性；职能强化填写具体职能和槽位。持有填“是”或“否”，其他字段填实际值，每项核实后勾选确认。"));
         Columns(facts, ("角色 / 账号", "Character", 110), ("形态", "Form", 90), ("字段", "Field", 100),
             ("实际值", "Value", 85), ("账号依据", "Source", 230));
         facts.Columns.Add(new DataGridCheckBoxColumn { Header = "已确认", Binding = new Binding("Confirmed") { Mode = BindingMode.TwoWay } });
-        account.Children.Add(facts);
-        account.Children.Add(Buttons(Button("从条件建立待核对项", AddFactsFromConditions),
+        accountDetails.Children.Add(facts);
+        accountDetails.Children.Add(Buttons(Button("从条件建立待核对项", AddFactsFromConditions),
             Button("增加资料", () => { factRows.Add(new()); Invalidate(); }),
             Button("删除选中资料", () => { if (facts.SelectedItem is PcrGuideFact f) { factRows.Remove(f); Invalidate(); } })));
-        account.Children.Add(Note("导入只替换本面板的账号资料，保存前可放弃重开。仅接受规范化快照 v1，不读取账号密码；超过 24 小时需刷新。版本使用 content_version，不自动等同应用版本。解放星级不代替战斗选用星级。"));
+        accountDetails.Children.Add(Note("仅接受规范化快照 v1，不读取账号密码。content_version 不等同应用版本；解放星级不代替战斗选用星级。手填资料不替代会战执行所需的原始缓存。"));
+        account.Children.Add(new Expander { Header = "高级资料", Content = accountDetails });
 
+        accountScroll = Scroll(account);
+        accountTab = new TabItem { Header = "2 · 本队账号资料", Content = accountScroll };
         tabs.ItemsSource = new[] {
             new TabItem { Header = "1 · 五人与开场", Content = Scroll(guide) },
-            new TabItem { Header = "2 · 本队账号资料", Content = Scroll(account) },
+            accountTab,
             new TabItem { Header = "3 · 核对结果", Content = report },
             new TabItem { Header = "4 · 补齐参考（可选）", Content = minimum }
         };
         var footer = new StackPanel { Spacing = 6 };
-        footer.Children.Add(Buttons(Button("确认五人和开场设置并保存", ConfirmTeamAndSave),
+        guideActions.Children.Add(Buttons(Button("确认五人和开场设置并保存", ConfirmTeamAndSave),
             Button("暂存草稿", Save), Button("查看详细对照", Check), Button("放弃编辑并重开", Reload)));
-        footer.Children.Add(status);
+        footer.Children.Add(guideActions); footer.Children.Add(status);
         var layout = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(16), RowSpacing = 10 };
-        layout.Children.Add(Note("攻略检查 · 不执行培养或战斗；只有点击协议读取时才会登录账号。"));
-        Grid.SetRow(tabs, 1); layout.Children.Add(tabs);
+        layout.Children.Add(heading);
+        body.Children.Add(tabs); Grid.SetRow(body, 1); layout.Children.Add(body);
         Grid.SetRow(footer, 2); layout.Children.Add(footer);
         Content = layout;
         conditions.CellEditEnded += (_, e) =>
@@ -278,6 +320,7 @@ public sealed class PcrGuideReviewView : UserControl
             openingSets=input.OpeningSets == null ? null : new(input.OpeningSets); openingConfirmed.IsChecked=input.OpeningConfirmed;
             catalogStatus.Text = catalog == null ? "尚未导入静态角色表。" : $"已载入 {catalog.Units.Count} 个角色；内容版本 {catalog.ContentVersion}。静态表不能证明本人持有。";
             snapshotStatus.Text = accounts.Describe(input, DateTimeOffset.Now);
+            ShowAccountSummary(input);
             FilterRoles();
             conditionRows = new(input.Conditions); factRows = new(input.Facts);
             ShowIdentity();
@@ -408,7 +451,51 @@ public sealed class PcrGuideReviewView : UserControl
         var input = PcrGuideData.Import(current, bytes, fileName, now);
         accounts.Save(bytes, catalog, accountId, now, expectedHash);
         Display(input); Invalidate();
-        status.Text = "账号快照已保存；换队可复用。请核对账号、来源和原采集时间后确认，再检查并保存。";
+        status.Text = "账号快照已保存，可直接使用资料并返回；作业和三刀仍须另行核对。";
+    }
+    private void ShowAccountSummary(PcrGuideInput input)
+    {
+        if (input.Snapshot is not { } saved)
+            accountOverview.Text = "账号：" + (configuredAccount?.Invoke() ?? "未配置") + " · 国服 B 站\n尚无可复用资料，请先刷新或在高级资料中导入快照。";
+        else
+        {
+            var count = "未核验";
+            try
+            {
+                if (input.Catalog != null && accounts.Stamp(input.Catalog, saved.AccountId) == saved.Sha256)
+                {
+                    var path = PcrClanGuide.SnapshotPaths(accountDirectory).Single(p =>
+                        PcrClanGuide.Hash(PcrGuideData.ReadLocal(p)).Equals(saved.Sha256, StringComparison.OrdinalIgnoreCase));
+                    var data = PcrGuideData.AccountSnapshot(PcrGuideData.ReadLocal(path), input.Catalog, saved.AccountId, DateTimeOffset.Now);
+                    count = data["units"]!.Count().ToString() + " 人";
+                }
+            }
+            catch (Exception) { /* The detailed status retains the reason an unmatched cache cannot be reused. */ }
+            var observed = PcrGuideData.Observation(saved.ObservedAt);
+            accountOverview.Text = $"账号 {saved.AccountId} · 国服 B 站 · 角色 {count}\n采集于 {observed.ToOffset(TimeSpan.FromHours(8)):yyyy-MM-dd HH:mm} · 内容版本 {saved.ContentVersion}"
+                + (DateTimeOffset.Now - observed > TimeSpan.FromHours(24) ? "\n资料已过期，请刷新后使用。" : "");
+        }
+        SetAccountBusy();
+    }
+    private void SetAccountBusy()
+    {
+        refreshAccount.IsEnabled = syncCancel == null;
+        stopAccount.IsVisible = syncCancel != null;
+        acceptAccount.IsEnabled = syncCancel == null && snapshot != null;
+    }
+    public void UseAccountAndReturn()
+    {
+        if (syncCancel != null) throw new InvalidOperationException("请等待刷新结束，或先停止读取。");
+        var input = Reuse(Capture());
+        var saved = input.Snapshot ?? throw new InvalidOperationException("尚无账号资料，请先刷新。");
+        if (input.Catalog == null || accounts.Stamp(input.Catalog, saved.AccountId) != saved.Sha256
+            || DateTimeOffset.Now - PcrGuideData.Observation(saved.ObservedAt) > TimeSpan.FromHours(24))
+            throw new InvalidOperationException("账号缓存无效或已过期，请先刷新。");
+        Display(input, currentReport);
+        // Retain the versioned catalog in its existing document; this does not confirm a guide or team.
+        store.Save(new() { Input = input, Report = currentReport });
+        dirty = false; status.Text = "账号资料已保存；回到公会战后仍须核对作业和三刀。";
+        AccountAccepted?.Invoke(saved);
     }
     private PcrGuideInput Reuse(PcrGuideInput input) => accounts.Reuse(input, configuredAccount?.Invoke() ?? input.Snapshot?.AccountId, DateTimeOffset.Now);
     public void ReuseAccount()
@@ -599,9 +686,9 @@ public sealed class PcrGuideReviewView : UserControl
     public async void ReadSnapshot()
     {
         if (syncCancel != null) return;
-        if (readSnapshot == null) { status.Text = "请从应用内攻略检查入口读取账号。"; return; }
+        if (readSnapshot == null) { status.Text = "请从应用内账号资料入口刷新。"; return; }
         using var cancel = new CancellationTokenSource();
-        syncCancel = cancel;
+        syncCancel = cancel; SetAccountBusy();
         status.Text = "正在登录并读取全部持有角色；可随时停止。模拟器可能提示连接中断。";
         try
         {
@@ -619,7 +706,7 @@ public sealed class PcrGuideReviewView : UserControl
         catch (OperationCanceledException) { status.Text = "读取已停止或超时，原资料保持。"; }
         catch (Exception ex)
         { status.Text = ex is InvalidOperationException or InvalidDataException ? ex.Message : "账号读取未完成，原资料保持；请核对账号和运行组件。"; }
-        finally { syncCancel = null; }
+        finally { syncCancel = null; SetAccountBusy(); }
     }
     private async void PickData(bool account)
     {
