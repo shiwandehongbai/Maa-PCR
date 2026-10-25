@@ -1,15 +1,150 @@
 {
   "schema_version": 1,
-  "status": "pending",
+  "status": "passed",
   "revision": 67,
   "expected_version": "v0.1.20",
+  "verified_at_utc": "2026-10-25T12:39:03.849456+00:00",
   "base_release_manifest_sha256": "68f18726b9828d6b1040b067b8b23325c6553d1a198c5466d2a2631d82d9c58b",
-  "offline_tests_passed": false,
-  "isolated_update_passed": false,
-  "gui_verified": false,
-  "clean_build_verified": false,
+  "accepted_owned_payload_sha256": "8c2dc8a73893a9bd38fc381eae5b712f2193a625360b9af12ae0b4bfefb06290",
+  "accepted_ci_artifact": {
+    "repository": "shiwandehongbai/Maa-PCR",
+    "run_id": 40189247303,
+    "run_attempt": 1,
+    "artifact_id": 12597822431,
+    "source_commit": "862a1a00a956f19c965a0130d191f22867c4621d",
+    "runtime_archive": {
+      "name": "Maa-PCR-v0.1.20-win-x64.zip",
+      "size": 310905360,
+      "sha256": "7b351677ed2e65babeebda1397148f409383f4f1fd105766e20701c5015926d8"
+    }
+  },
+  "accepted_staging_manifest_sha256": "f0b6f8179ec4cad0ba837618bcaf206da2138a62a5618fe0fb9c15eb1a3d4461",
+  "offline_tests_passed": true,
+  "isolated_update_passed": true,
+  "gui_verified": true,
+  "clean_build_verified": true,
+  "public_tests": {
+    "passed": 5116,
+    "skipped": 393,
+    "failed": 0,
+    "errors": 0
+  },
+  "public_console_summary": "2026-10-25T11:55:07.7767397Z ======= 5116 passed, 393 skipped, 159 deselected in 1333.03s (0:22:13) ========",
+  "required_regressions": {
+    "test_labyrinth_opening_clipped_cards": 23,
+    "test_labyrinth_opening_transition": 10,
+    "test_page_wait_deadlines": 4,
+    "test_labyrinth_revive_parity": 13,
+    "test_labyrinth_shop_parity": 14,
+    "test_labyrinth_ghost_parity": 15,
+    "test_labyrinth_equipment_parity": 41,
+    "test_labyrinth_database_parity": 32,
+    "test_labyrinth_diagnostics_parity": 13,
+    "test_labyrinth_channels_parity": 52,
+    "test_labyrinth_parity_integration": 20,
+    "test_labyrinth_pause_parity": 23
+  },
+  "required_skipped": 0,
+  "bundled_runtime_tests_passed": 3,
+  "gui_core_sha256": "f17a85d1be6f5b56265a5e10722d9f2f8829029b3a43fc224976b35ca49f96b1",
+  "packaged_gui_assertions": {
+    "default": {
+      "clan guide": 68,
+      "guide review": 84,
+      "guide data": 126,
+      "guide draft": 45,
+      "capture performance": 26,
+      "channel config": 99,
+      "log export/retention": 166,
+      "alpha owner": 45,
+      "Agent profile": 22,
+      "Agent shutdown": 56,
+      "module drag behavior": 116,
+      "alpha async": 368,
+      "live view": 44,
+      "preview connection": 118,
+      "run feedback": 15,
+      "profile switch": 275
+    },
+    "clan-daily-only": {
+      "clan daily plan": 53
+    },
+    "clan-workflow-only": {
+      "clan workflow": 56
+    },
+    "clan-formal-only": {
+      "clan workflow": 56,
+      "clan formal configuration": 61
+    },
+    "clan-postsave-only": {
+      "clan workflow": 56,
+      "clan post-save ACL": 13
+    },
+    "profile-registration-only": {
+      "profile registration": 48
+    }
+  },
+  "packaged_account_checks": 41,
+  "packaged_rating_checks": 28,
+  "packaged_credential_checks": 105,
+  "local_exact_payload_gui_cases": 11,
+  "source_alignment": {
+    "schema_version": 1,
+    "passed": true,
+    "verified_at": "2026-10-25T12:39:03.794323+00:00",
+    "revision": 67,
+    "source_inventory_sha256": "8a6a0c06563e5eb3c11f6a927a7e6f854fce58d222c396f505c5fa02b1956479",
+    "source_payload_count": 2577,
+    "source_payload_bytes": 136946659,
+    "staged_player_manifest_sha256": "f0b6f8179ec4cad0ba837618bcaf206da2138a62a5618fe0fb9c15eb1a3d4461",
+    "owned_program_source_alignment_count": 1402,
+    "gui_build_input_source_alignment_count": 921,
+    "sealed_runtime_manifest_snapshot_present_and_matching": true,
+    "source_privacy_and_extra_file_checks_passed": true,
+    "no_archive_or_publication_performed": true,
+    "scope": "owned source bytes, exact public inventory and optional sealed runtime manifest",
+    "deterministic_dependency_rebuild_claimed": false,
+    "formal_legal_opinion": false
+  },
+  "isolated_update_routes": [
+    {
+      "base_revision": 66,
+      "archive_kind": "delta",
+      "preserved_synthetic_files": 10
+    },
+    {
+      "base_revision": 66,
+      "archive_kind": "full",
+      "preserved_synthetic_files": 10
+    }
+  ],
+  "local_installation_updated": false,
+  "device_connected": false,
+  "game_task_started": false,
+  "evidence_sha256": {
+    "SOURCE_COMMIT.json": "3bfa41124c94a45d5049b125e3cfa22bba1b63278625b09f41606f8f491707cf",
+    "CI_BINDING.json": "b0471d0520988ea11ade357e3d23bb9618f55ef16cd66e83c846cd0bfa61913b",
+    "metadata/run.json": "c11ddd90695bb2bc46184416f5ec08481aa40c1a6b0fa3b2c267af05f4a7f267",
+    "metadata/artifact.json": "feb5bb570f71138a2f41854ad51ab95b3d24ee9ffa88cb71aec22f2c07d3ca1c",
+    "metadata/jobs.json": "e1a3864654774fd9cec2737413582ecb9aad1bbb1430407ba4eacb9ff36d18df",
+    "metadata/windows.log": "6339860690f7a2ce73acdd2a41840eb7dae5a97fc38d22c21cfa92721eb0ae22",
+    "BASELINE_SOURCE_VERIFIED.json": "8d3fa3f9eb536e9e5aab317ec5e7b1587e38d057e2f42e4505d2855849b93b98",
+    "BASELINE_VERIFIED.json": "a6a6381247bc48d9d898ab9979cc33098195ac5b3369ff4636ed946e4b8d3a78",
+    "HELPER_SOURCES.json": "3d3be61c12f1e89af8a443205e0d7738c7d960a55b3d35ab5556750ff12ac3a9",
+    "package-checks-observed/PACKAGE_VERIFIED.json": "a9868b1a33694059c720ff986a334249b22f298ebce78a8f8162f31607288890",
+    "PACKAGED_GUI_VERIFIED.json": "59fdf56767bffc0be8e1e32a653f0a3b37db0bae24be673c0d67b08295b3e459",
+    "helpers/check_package_observed.py": "ba8dd48f5dea4dbdc150a3bdf1d8f21441c155ec1c81098705ba7cd4f1cbb58a",
+    "PROCESS_INSPECTION_OBSERVATIONS.jsonl": "37d598cca287240f99b492f3bec8e50a75ae0a3fdfc499d105ad00896d6e0777",
+    "ci-artifact/public-tests.xml": "3f8705f19c5447e9dc9c06adde8b354171991098ab45b319cd17da7b35fd1cde",
+    "ci-artifact/bundled-runtime.xml": "e32c810cb3e0417ea5fbc58194683862de89de48c6d4f3a9c0987e990c7a18f5"
+  },
+  "acceptance_recorder_sha256": "fe4d98b71b9efbef2e088d4b9b0925675a9954aa3271557cd0a827911acdd59f",
   "limits": [
-    "R67 requires its final main CI artifact, packaged runtime/GUI checks and exact R66 delta/full isolated upgrades.",
-    "No real installation, account, device or game acceptance."
+    "Sanitized images, synthetic settings and isolated installation/update copies; no new real account, device, channel-client timing or full-game acceptance.",
+    "Conditional public skips and private replay deselections are separate from passed tests.",
+    "The initial local GUI ACL fixture setup failed; the same source/Core passed the full plan in fresh project runtime fixtures. The failure is retained.",
+    "Two stale R65 workflow-baseline assertions failed during local R67 metadata preparation; corrected before final source CI, with failure evidence retained.",
+    "Two initial package-check attempts stopped fail-closed on incomplete process snapshots before program replacement. Both final upgrade routes passed with the unchanged default guard; a metadata-only observer returned subprocess results unchanged and recorded six complete snapshots. Earlier failures and recovery fixtures are retained.",
+    "Existing clan production/compensation execution gates and historical live-game limits remain unchanged."
   ]
 }
