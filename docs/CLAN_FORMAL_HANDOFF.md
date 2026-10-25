@@ -2,7 +2,7 @@
 
 ## 工作位置与当前范围
 
-继续使用 `C:/Users/87723/.codex/worktrees/33f2/pcr-agent-maa`，分支 `codex/clan-open-20261025`。本轮从 `7dd1edc` 续作，沿用 `.runtime/clan-open-20261025/TASK.md`；具体提交、检查、构建和退出码以该记录及 `formal-implementation/` 原始回执为准。
+继续使用任务登记的工作树，分支 `codex/clan-open-20261025`；本机绝对路径只留在本地任务记录。本轮从 `7dd1edc` 续作，沿用 `.runtime/clan-open-20261025/TASK.md`；具体提交、检查、构建和退出码以该记录及 `formal-implementation/` 原始回执为准。
 
 本分支基于 R66，未合入公开 R67 的其他更新。只构建独立公会战开发候选，不覆盖常用安装、合并主线或公开发布。旧 clan-mainline 工作树及其未提交内容继续保留。
 
