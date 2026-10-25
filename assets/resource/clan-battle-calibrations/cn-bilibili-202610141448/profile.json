@@ -1244,6 +1244,73 @@
       ],
       "template": "clan-battle/cn-bilibili-202610141448/paused-empty-tp.png",
       "sha256": "98408533217338e80cb71f40bb05fcbf72479d35c47330596d3e1070bef1e400"
+    },
+    "inheritance": {
+      "battle_selected": {
+        "recognition": "TemplateMatch",
+        "roi": [
+          350,
+          95,
+          300,
+          45
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/inheritance-battle_selected.png",
+        "sha256": "635367339f335e111647715735f22f552852795e61558695ccc121a6ac030be6"
+      },
+      "radio_on": {
+        "recognition": "TemplateMatch",
+        "roi": [
+          0,
+          0,
+          35,
+          35
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/inheritance-radio_on.png",
+        "sha256": "a3646b5fc5eefbc4174393c942067975ea2e1778362a8a81f6d8aa3e79c444fa"
+      },
+      "radio_off": {
+        "recognition": "TemplateMatch",
+        "roi": [
+          0,
+          0,
+          35,
+          35
+        ],
+        "template": "clan-battle/cn-bilibili-202610141448/inheritance-radio_off.png",
+        "sha256": "b0995bf5f8568276775c82e754cf180f67cb3c8af39102092dc1234c1bdaa326"
+      },
+      "samples": [
+        {
+          "page": "inherit-menu",
+          "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/inherit-menu.png",
+          "sha256": "29d4ba209aa6d2eef30c2292a72296acaae766bd68a896e9c908b34cb0da44a0"
+        },
+        {
+          "page": "inherit-settings-system",
+          "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/inherit-settings-system.png",
+          "sha256": "02ecccdd6f339d5a5a55c2e0a3c67447bd785038618cb17e42d737d0288e2d1a"
+        },
+        {
+          "page": "inherit-settings-battle-index",
+          "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/inherit-settings-battle-index.png",
+          "sha256": "a888b1ac50c5c31fad5c10abcd13fbbfe1bfa3f3b05ee35742e18bfbad3201a0"
+        },
+        {
+          "page": "inherit-settings-all-top",
+          "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/inherit-settings-all-top.png",
+          "sha256": "907451d12600eb25a4a4b8efce742bcf0b57a65d4a0151973ebf672a8625b4b8"
+        },
+        {
+          "page": "inherit-on",
+          "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/inherit-on.png",
+          "sha256": "c96f96666ff5b06ad9856927ee953b03aa50d4d0309340b0090cc6918d6f677a"
+        },
+        {
+          "page": "inherit-off",
+          "path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/samples/inherit-off.png",
+          "sha256": "30515d8f9b0fe7a5d3d6ebd852509f8b92a1e8ad0b5007af3143e63fef21e8e7"
+        }
+      ]
     }
   }
 }

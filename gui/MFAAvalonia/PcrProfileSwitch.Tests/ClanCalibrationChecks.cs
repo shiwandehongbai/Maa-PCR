@@ -327,6 +327,7 @@ internal static class ClanCalibrationChecks
         {
             var shipped = PcrClanCalibration.Read(sourceRoot, (string?)shippedEntry["content_version"]);
             Check(shipped.Error == null && shipped.AutoBattleSpeeds?.SetEquals(new[] { 1, 2 }) == true, "shipped_opening_and_speed_dependencies_verified");
+            Check(shipped.ManageInheritance && shipped.AutoBattleSummary.Contains("自动记录"), "shipped_inheritance_preparation_and_restore");
         }
         Console.WriteLine($"clan_calibration_checks={count}; synthetic fixtures only, game input=0");
     }

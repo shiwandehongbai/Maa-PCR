@@ -7,7 +7,7 @@ import re
 
 INDEX_PATH = 'assets/resource/clan-battle-calibrations/index.json'
 # Updated with reviewed bundle contents, never with a player's local configuration.
-INDEX_SHA256 = '2fb31caadc4976e835b3725665ccb1808fd15b9d8b567da1163ae4a7f8dfa965'
+INDEX_SHA256 = '62b7e11ca8ef4bb6cee03ca24b35fc9fe17e49eddc88fe6d4d6ca76b165207e0'
 HEX = re.compile(r'[0-9a-f]{64}')
 ENTRY_KEYS = {'calibration_id', 'server', 'content_version', 'frame_size', 'profile_path', 'profile_sha256'}
 CAPABILITIES = {'simulation', 'timed', 'formal', 'carryover'}
@@ -130,6 +130,10 @@ def load_calibration(plan, *, root=None, capability='simulation'):
         if type(calibration['auto_battle']) is not dict:
             raise ValueError('clan_battle_auto_calibration_invalid')
         sample_sections.append(calibration['auto_battle'])
+        if 'inheritance' in calibration['auto_battle']:
+            if type(calibration['auto_battle']['inheritance']) is not dict:
+                raise ValueError('clan_battle_inheritance_calibration_invalid')
+            sample_sections.append(calibration['auto_battle']['inheritance'])
     if 'daily' in calibration:
         daily = calibration['daily']
         if type(daily) is not dict:

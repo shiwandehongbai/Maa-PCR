@@ -43,7 +43,11 @@ profile 保留既有页面、动作、编队、支援和保存帧字段。版本
 
 ## 无轴开场与倍速
 
-版本 2 可提供 `auto_battle`，仅用于 `switches: []` 的单次模拟。字段固定为 `speeds`、`opening_guards`、`paused_guards`、`auto_on`、`auto_off`、`speed`、`set_badge`、`empty_tp` 和 `samples`。全部样本和模板沿用安装内路径与 SHA-256 绑定。
+版本 2 可提供 `auto_battle`，仅用于 `switches: []` 的单次模拟。必填字段为 `speeds`、`opening_guards`、`paused_guards`、`auto_on`、`auto_off`、`speed`、`set_badge`、`empty_tp` 和 `samples`，另允许可选的 `inheritance`。全部样本和模板沿用安装内路径与 SHA-256 绑定。
+
+`inheritance` 只含 `battle_selected`、`radio_on`、`radio_off` 和 `samples`。三个标记均为带摘要的模板；两个单选按钮使用实际 18×18 像素内部样本。读取时同时核对设定标题、已选战斗页、完整继承说明、两个单选项文字及互斥选中状态。滚动位置由同帧文字定位，不以固定屏幕高度推断状态。缺少这份资料的旧校准继续使用原手动准备方式。
+
+继承变更沿用 `Journal` 的持久锁和追加记录。关闭前先写入原值；恢复后只有同帧状态读回一致才能结账。正常结算先保存伤害，再恢复原值及目标页。Stop 或未知时不补点；待恢复记录阻止其他账号接管，也不能绕过原战斗未决记录。
 
 `speeds` 是去重的整数数组，必须包含 1，候选范围为 1、2、4；加速档还须分别提供战斗页面的 `speed_two` 或 `speed_four`。当前登记 1／2，4 倍控件样本不授予执行资格。菜单 `speed` 必须分别提供 `1`、`2`、`4` 的完整文字标记。
 

@@ -526,7 +526,7 @@ public sealed class PcrClanGuideView : UserControl
         finally { displaying = before; }
         formalControls.IsVisible = executionLoaded && execution.Mode == PcrClanDailyExecution.FormalDaily;
         executionSummary.Text = !executionLoaded ? "会战模式保存未完成，执行确认已取消；编辑内容保留，请重新打开后核对实际保存的模式。"
-            : execution.Mode == PcrClanDailyExecution.Simulation ? $"当前为单次模拟，{execution.BattleSpeed} 倍速。开场前请临时关闭游戏的战斗设置继承，结束后恢复原选项。程序暂停核对五人 SET／AUTO 和倍速后继续；含战中切换的秒数轴仅支持 1 倍速。已击败的 BOSS 仍可选择模拟战。"
+            : execution.Mode == PcrClanDailyExecution.Simulation ? $"当前为单次模拟，{execution.BattleSpeed} 倍速。程序核对开场准备条件，暂停设置五人 SET／AUTO 和倍速后继续；含战中切换的秒数轴仅支持 1 倍速。战斗继承的处理方式见校准说明。已击败的 BOSS 仍可选择模拟战。"
             : "当前为正式三刀。请预览完整三目标后单独核对保存；只有对应校准可用时才能开始。";
         UpdateCalibrationSummary();
     }

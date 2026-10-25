@@ -102,7 +102,7 @@ def auto_battle_pipeline(calibration, plan):
     if spec is None:
         return {}
     if (calibration.get('version') != 2 or type(spec) is not dict
-            or set(spec) != {'speeds', 'opening_guards', 'paused_guards', 'auto_on', 'auto_off', 'speed', 'set_badge', 'empty_tp', 'samples'}
+            or set(spec) - {'inheritance'} != {'speeds', 'opening_guards', 'paused_guards', 'auto_on', 'auto_off', 'speed', 'set_badge', 'empty_tp', 'samples'}
             or type(spec['speeds']) is not list or not spec['speeds'] or 1 not in spec['speeds']
             or any(type(n) is not int or n not in (1, 2, 4) for n in spec['speeds'])
             or len(set(spec['speeds'])) != len(spec['speeds'])
@@ -156,6 +156,16 @@ def auto_battle_pipeline(calibration, plan):
         all_of=['CBOpeningInputReady', *[f'CBOpening_opening_guards_{i}' for i in range(3)]], action='Click', target=[1204, 31, 6, 6],
         max_hit=1, next=['CBOpeningRead'], timeout=15000, rate_limit=1, pre_delay=0, post_delay=300,
         on_error=['LabyDisconnect6002Observed'])
+    if 'inheritance' in spec:
+        from .clan_battle_inheritance import inheritance_pipeline
+        nodes.update(inheritance_pipeline(spec['inheritance']))
+        guards = [f'CBLabel_formation_{i}' for i in range(len(calibration['pages']['formation']['labels']))]
+        nodes['CBInheritanceFormationObserved'] = dict(recognition='And', all_of=guards,
+            action='DoNothing', next=[], timeout=1000, pre_delay=0, post_delay=0)
+        nodes['CBInheritanceFormationCancelLabel'] = _node(dict(roi=[855, 560, 190, 75], expected='^取消$'))
+        nodes['CBInheritanceFormationCancel'] = dict(recognition='And',
+            all_of=['CBInheritanceFormationCancelLabel', *guards], action='Click', target=True,
+            next=[], max_hit=1, timeout=3000, pre_delay=0, post_delay=500)
     return nodes
 
 
@@ -655,6 +665,7 @@ class NativeClanBattle(NativeGuideTrial):
         self.calibration = calibration
         self.timing_capability = dict(validated=False)
         self.started = False
+        self.inheritance = None
         self.battle_speed, self.opening_paused = battle_speed, False
 
     def configure(self, plan):
@@ -678,6 +689,12 @@ class NativeClanBattle(NativeGuideTrial):
             raise RuntimeError('clan_battle_callback_registration_failed:ClanBattlePage')
         if not resource.register_custom_recognition('ClanBattleCharacters', self.characters):
             raise RuntimeError('clan_battle_callback_registration_failed:ClanBattleCharacters')
+        inheritance = self.calibration.get('auto_battle', {}).get('inheritance')
+        if inheritance is not None:
+            from .clan_battle_inheritance import InheritancePage
+            self.inheritance_page = InheritancePage(inheritance, self.page)
+            if not resource.register_custom_recognition('ClanBattleInheritance', self.inheritance_page):
+                raise RuntimeError('clan_battle_callback_registration_failed:ClanBattleInheritance')
         # Keep the callbacks with the real Resource; registration rejection is terminal.
         self.timing_capability = timing_capability(self.calibration)
 
@@ -725,11 +742,46 @@ class NativeClanBattle(NativeGuideTrial):
             if self.choose(['CBClosedReadOnly']) == 'CBClosedReadOnly':
                 raise RuntimeError('clan_battle_closed')
         self.configure(plan)
+        self._main_menu()
+        self._verify_account(plan)
+        if self.calibration.get('auto_battle', {}).get('inheritance'):
+            from .clan_battle_inheritance import BattleInheritance
+            self.inheritance = BattleInheritance.for_port(self)
+            self.open_inheritance()
+            self.inheritance.prepare()
+            self.close_inheritance()
+        self.run('LabyClientMenuToAdventureOnce', click=True)
+        self.wait(['LabyClientAdventureObserved'], seconds=10)
+        self.run('CBAction_open_clan', click=True)
+        if self.wait(['CBPage_closed', 'CBPage_lobby'], seconds=15) == 'CBPage_closed':
+            raise RuntimeError('clan_battle_closed')
+        if self.calibration.get('version') == 2:
+            self._open_simulation_target(plan)
+            self.run('CBAction_open_formation', click=True)
+        else:
+            self.read_page('lobby')
+            self.run('CBAction_open_boss', click=True)
+            self.wait(['CBPage_target'], seconds=10)
+            self.read_page('target')
+            self.run('CBAction_open_simulation', click=True)
+        self.wait(['CBPage_formation'], seconds=10)
+        self.form_team()
+
+    def _main_menu(self):
         modern = self.calibration.get('version') == 2
-        initial = ['LabyClientGameHomeObserved', 'LabyClientAdventureObserved']
+        initial = ['LabyClientGameHomeObserved', 'LabyClientAdventureObserved', 'LabyClientMainMenuObserved']
         if modern:
             initial = ['CBObserve_boss_detail', 'CBObserve_lobby', *initial]
+        if self.calibration.get('auto_battle', {}).get('inheritance'):
+            initial = ['CBInheritanceSettingsObserved', 'CBInheritanceFormationObserved', *initial]
         hit = self.wait(initial, seconds=10)
+        if hit == 'CBInheritanceSettingsObserved':
+            self.close_inheritance()
+            hit = 'LabyClientMainMenuObserved'
+        if hit == 'CBInheritanceFormationObserved':
+            self.run('CBInheritanceFormationCancel', click=True)
+            self.wait(['CBObserve_boss_detail'], seconds=10)
+            hit = 'CBObserve_boss_detail'
         if hit == 'CBObserve_boss_detail':
             self.run('CBAction_back_to_lobby', click=True)
             self.wait(['CBObserve_lobby'], seconds=10)
@@ -741,8 +793,11 @@ class NativeClanBattle(NativeGuideTrial):
         if hit == 'LabyClientGameHomeObserved':
             self.run('LabyClientHomeToAdventure', click=True)
             self.wait(['LabyClientAdventureObserved'], seconds=10)
-        self.run('LabyClientOpenMainMenuOnce', click=True)
-        self.wait(['LabyClientMainMenuObserved'], seconds=10)
+        if hit != 'LabyClientMainMenuObserved':
+            self.run('LabyClientOpenMainMenuOnce', click=True)
+            self.wait(['LabyClientMainMenuObserved'], seconds=10)
+
+    def _verify_account(self, plan):
         self.run('LabyClientOpenProfileOnce', click=True)
         self.wait([PROFILE_NODE], seconds=10)
         self.account_receipt = self.run(PROFILE_NODE)
@@ -751,22 +806,56 @@ class NativeClanBattle(NativeGuideTrial):
             raise RuntimeError('clan_battle_account_mismatch')
         self.run('LabyClientProfileBackOnce', click=True)
         self.wait(['LabyClientMainMenuObserved'], seconds=10)
-        self.run('LabyClientMenuToAdventureOnce', click=True)
-        self.wait(['LabyClientAdventureObserved'], seconds=10)
-        self.run('CBAction_open_clan', click=True)
-        if self.wait(['CBPage_closed', 'CBPage_lobby'], seconds=15) == 'CBPage_closed':
-            raise RuntimeError('clan_battle_closed')
-        if modern:
-            self._open_simulation_target(plan)
-            self.run('CBAction_open_formation', click=True)
-        else:
-            self.read_page('lobby')
-            self.run('CBAction_open_boss', click=True)
-            self.wait(['CBPage_target'], seconds=10)
-            self.read_page('target')
-            self.run('CBAction_open_simulation', click=True)
-        self.wait(['CBPage_formation'], seconds=10)
-        self.form_team()
+
+    def open_inheritance(self):
+        self.run('CBInheritanceOpen', click=True)
+        self.wait(['CBInheritanceSettingsObserved'], seconds=10)
+        self.run('CBInheritanceBattle', click=True)
+        if self.choose(['CBInheritanceRead', 'CBInheritanceAllExpanded']) == 'GTUnknown':
+            self.run('CBInheritanceExpand', click=True)
+        for index in range(7):
+            if self.choose(['CBInheritanceRead']) == 'CBInheritanceRead':
+                return
+            if index < 6:
+                self.run('CBInheritanceDown', click=True)
+        raise RuntimeError('clan_battle_inheritance_unknown')
+
+    def close_inheritance(self):
+        self.run('CBInheritanceClose', click=True)
+        self.wait(['LabyClientMainMenuObserved'], seconds=10)
+
+    def read_inheritance(self):
+        result = _detail(self.run('CBInheritanceRead'))
+        if (type(result.get('inherit')) is not bool or result.get('same_frame') is not True
+                or type(result.get('frame_pixel_sha256')) is not str
+                or re.fullmatch('[0-9a-f]{64}', result['frame_pixel_sha256']) is None):
+            raise RuntimeError('clan_battle_inheritance_unknown')
+        return dict(result, native_evidence=deepcopy(self.last_receipt))
+
+    def set_inheritance(self, previous, desired):
+        state = self.read_inheritance()
+        if type(previous) is not bool or type(desired) is not bool or state['inherit'] is not previous or previous is desired:
+            raise RuntimeError('clan_battle_inheritance_changed')
+        self.run('CBInheritanceEnable' if desired else 'CBInheritanceDisable', click=True)
+        state = self.read_inheritance()
+        if state['inherit'] is not desired:
+            raise RuntimeError('clan_battle_inheritance_readback_unknown')
+        return state
+
+    def _restore_inheritance(self):
+        self._main_menu()
+        self._verify_account(self.plan)
+        self.open_inheritance()
+        evidence = self.inheritance.restore()
+        self.close_inheritance()
+        return evidence
+
+    def finish_inheritance(self):
+        if self.inheritance is None or self.inheritance.intent is None and self.inheritance.evidence is None:
+            return None
+        if self.inheritance.intent is not None and self.battle_start == 'not_sent':
+            self._restore_inheritance()
+        return deepcopy(self.inheritance.evidence or dict(restored=False))
 
     def _open_simulation_target(self, plan):
         """Select and read the requested independent simulation from the lobby."""
@@ -1055,6 +1144,12 @@ class NativeClanBattle(NativeGuideTrial):
         action = self.run('CBAction_return_to_target', click=True)
         if self.calibration.get('version') == 2:
             self.wait(['CBPage_lobby'], seconds=15)
+            if self.inheritance is not None:
+                self._restore_inheritance()
+                self.run('LabyClientMenuToAdventureOnce', click=True)
+                self.wait(['LabyClientAdventureObserved'], seconds=10)
+                self.run('CBAction_open_clan', click=True)
+                self.wait(['CBPage_lobby'], seconds=15)
             target, target_receipt = self._open_simulation_target(plan)
         else:
             self.wait(['CBPage_target'], seconds=15)

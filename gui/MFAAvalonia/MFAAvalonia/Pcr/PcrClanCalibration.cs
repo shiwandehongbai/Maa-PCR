@@ -10,11 +10,11 @@ using Newtonsoft.Json.Linq;
 
 namespace MFAAvalonia.Pcr;
 
-public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabilities, string? Error, bool OwnUnitsOnly = false, bool AccountStars = false, IReadOnlySet<int>? AutoBattleSpeeds = null)
+public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabilities, string? Error, bool OwnUnitsOnly = false, bool AccountStars = false, IReadOnlySet<int>? AutoBattleSpeeds = null, bool ManageInheritance = false)
 {
     public const string IndexPath = "assets/resource/clan-battle-calibrations/index.json";
     // Kept with the reviewed Python calibration loader when the bundled index changes.
-    public const string IndexSha256 = "2fb31caadc4976e835b3725665ccb1808fd15b9d8b567da1163ae4a7f8dfa965";
+    public const string IndexSha256 = "62b7e11ca8ef4bb6cee03ca24b35fc9fe17e49eddc88fe6d4d6ca76b165207e0";
     private static readonly string[] Names = { "simulation", "timed", "formal", "carryover" };
     private static readonly string[] Labels = { "模拟战", "秒数轴", "正式三刀", "补偿刀" };
     public bool Supports(string capability) => Error == null && Capabilities.Contains(capability);
@@ -24,7 +24,8 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
         + (OwnUnitsOnly ? "。仅全自有队伍可用；借人身份尚未校准。" : "")
         + (AccountStars ? " 出战星级使用24小时内的已确认账号资料，调整后须重新同步。" : "");
     public string AutoBattleSummary => AutoBattleSpeeds == null ? "开场设置与倍速：缺少校准。"
-        : "开场 SET／AUTO 可逐角色设置；无战中切换时支持 " + string.Join("／", AutoBattleSpeeds.Order()) + " 倍速。";
+        : "开场 SET／AUTO 可逐角色设置；无战中切换时支持 " + string.Join("／", AutoBattleSpeeds.Order()) + " 倍速。"
+            + (ManageInheritance ? "自动记录、临时关闭战斗继承，结束后恢复。" : "开始前须临时关闭战斗继承，结束后手动恢复。");
 
     public static PcrClanCalibration Read(string repository, string? contentVersion) => Read(repository, contentVersion, IndexSha256);
 
@@ -81,7 +82,8 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
                 throw new InvalidDataException("星级资料来源无效。[clan_battle_calibration_star_source_invalid]");
             VerifyDependencies(root, profile, capabilities, ownUnitsOnly);
             return new(version == 1 ? 1 : (int)profile["version"]!, capabilities, null, ownUnitsOnly, starSource != null,
-                profile["auto_battle"] is JObject autoBattle ? autoBattle["speeds"]!.Values<int>().ToHashSet() : null);
+                profile["auto_battle"] is JObject autoBattle ? autoBattle["speeds"]!.Values<int>().ToHashSet() : null,
+                profile["auto_battle"]?["inheritance"] is JObject);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException
             or InvalidCastException or FormatException or OverflowException or Newtonsoft.Json.JsonException)
@@ -159,7 +161,8 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
         if (profile.ContainsKey("auto_battle"))
         {
             if ((int?)profile["version"] != 2 || profile["auto_battle"] is not JObject autoBattle
-                || !Keys(autoBattle, "speeds", "opening_guards", "paused_guards", "auto_on", "auto_off", "speed", "set_badge", "empty_tp", "samples")
+                || !Keys(autoBattle, new[] { "speeds", "opening_guards", "paused_guards", "auto_on", "auto_off", "speed", "set_badge", "empty_tp", "samples" }
+                    .Concat(autoBattle.ContainsKey("inheritance") ? new[] { "inheritance" } : Array.Empty<string>()).ToArray())
                 || autoBattle["speeds"] is not JArray { Count: > 0 } speeds || !speeds.Any(v => v.Type == JTokenType.Integer && (int)v == 1)
                 || speeds.Any(v => v.Type != JTokenType.Integer || (int)v is not (1 or 2 or 4)) || speeds.Values<int>().Distinct().Count() != speeds.Count
                 || autoBattle["opening_guards"] is not JArray { Count: 3 } || autoBattle["paused_guards"] is not JArray { Count: 4 }
@@ -172,8 +175,18 @@ public sealed record PcrClanCalibration(int Version, IReadOnlySet<string> Capabi
             if (speeds.Values<int>().Contains(2) && profile["pages"]?["battle"]?["speed_two"] is not JObject
                 || speeds.Values<int>().Contains(4) && profile["pages"]?["battle"]?["speed_four"] is not JObject)
                 throw new InvalidDataException("所选倍速缺少战斗画面校准。[clan_battle_auto_speed_calibration_missing]");
+            var inheritanceMarkers = Enumerable.Empty<JToken>();
+            if (autoBattle.ContainsKey("inheritance"))
+            {
+                if (autoBattle["inheritance"] is not JObject inheritance || !Keys(inheritance, "battle_selected", "radio_on", "radio_off", "samples")
+                    || new[] { "battle_selected", "radio_on", "radio_off" }.Any(key => inheritance[key] is not JObject node
+                        || (string?)node["recognition"] != "TemplateMatch"))
+                    throw new InvalidDataException("战斗继承校准无效。[clan_battle_inheritance_calibration_invalid]");
+                inheritanceMarkers = new[] { inheritance["battle_selected"]!, inheritance["radio_on"]!, inheritance["radio_off"]! };
+                sections.Add(inheritance);
+            }
             foreach (var marker in ((JArray)autoBattle["opening_guards"]!).Concat((JArray)autoBattle["paused_guards"]!)
-                .Concat(speed.Properties().Select(p => p.Value)).Concat(new[] { autoBattle["auto_on"]!, autoBattle["auto_off"]!, autoBattle["set_badge"]!, autoBattle["empty_tp"]! }))
+                .Concat(speed.Properties().Select(p => p.Value)).Concat(new[] { autoBattle["auto_on"]!, autoBattle["auto_off"]!, autoBattle["set_badge"]!, autoBattle["empty_tp"]! }).Concat(inheritanceMarkers))
             {
                 if (marker is not JObject node || (string?)node["recognition"] is not ("OCR" or "TemplateMatch")
                     || node["roi"] is not JArray { Count: 4 } roi || roi.Any(v => v.Type != JTokenType.Integer)

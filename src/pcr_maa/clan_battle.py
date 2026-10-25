@@ -483,6 +483,18 @@ def execute_simulation(port, journal, plan):
                     and getattr(port, 'battle_start', None) == 'not_sent'):
                 journal.append_not_sent(intent, exc.receipt)
                 report.update(simulation_started=False, consumption_sent=False)
+        finally:
+            finish = getattr(port, 'finish_inheritance', None)
+            if callable(finish):
+                try:
+                    restored = finish()
+                    if restored is not None:
+                        report['inheritance'] = restored
+                        if restored.get('restored') is not True:
+                            report.setdefault('error', 'clan_battle_inheritance_restore_pending')
+                except Exception as exc:
+                    report['inheritance'] = dict(restored=False, error=str(exc) or type(exc).__name__)
+                    report.setdefault('error', 'clan_battle_inheritance_restore_pending')
         return report
 
 

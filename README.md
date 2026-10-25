@@ -4,7 +4,7 @@ Windows x64 的 PCR 国服日常与黎明界自动化。提供独立的“日常
 
 ## 当前状态
 
-本分支为 **R67 / v0.1.20-clan-candidate 本地候选**。公会战已通过全自有 AUTO 模拟，以及指定角色开场 SET 和 2 倍速模拟；均完成编队、设置读回、伤害记账和返回。出战星级使用已确认账号资料的 `battle_rarity`。当前开场校准需从默认 1 倍速进入，继承选项的准备方式见[公会战分项验收](docs/CLAN_ACCEPTANCE.md)。秒数轴实测未达时限，4 倍速、借人、正式战和补偿保持关闭。候选只供独立目录运行，未公开发布。
+本分支为 **R67 / v0.1.20-clan-candidate 本地候选**。公会战已通过全自有 AUTO 模拟，以及指定角色开场 SET 和 2 倍速模拟；均完成编队、设置读回、伤害记账和返回。出战星级使用已确认账号资料的 `battle_rarity`。程序自动记录并临时关闭战斗继承，结束后恢复原值；停止后保留待恢复记录，见[公会战分项验收](docs/CLAN_ACCEPTANCE.md)。秒数轴实测未达时限，4 倍速、借人、正式战和补偿保持关闭。候选只供独立目录运行，未公开发布。
 
 正式基线为 **v0.1.19 / R66**，保留移除旧单关试打入口、原配置和账本，以及 R65 的黎明界超时修复。正式发行状态以 [GitHub Releases](https://github.com/shiwandehongbai/Maa-PCR/releases) 为准；[历史发布范围](docs/RELEASE_STATUS.md)和 `delivery/acceptance.json` 不代替本候选的分项验收。
 
