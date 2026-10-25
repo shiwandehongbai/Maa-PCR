@@ -475,6 +475,9 @@ class NativeClanDailyAdapter(NativeClanBattle):
         from .labyrinth.game_session import game_session_pipeline
         calibration = (load_calibration(plan, capability='carryover') if capability == 'carryover'
             else self.calibrations[plan['confirmed_for']])
+        calibration = deepcopy(calibration)
+        # Paused opening controls and inheritance are qualified only for simulation.
+        calibration.pop('auto_battle', None)
         nodes = calibration_pipeline(calibration, plan)
         nodes.update(require_daily_execution(calibration, plan))
         self.plan, self.calibration, self.snapshot = plan, calibration, load_snapshot(plan)

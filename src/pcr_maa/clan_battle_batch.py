@@ -428,7 +428,9 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                 current = _now(now) if not callable(getattr(port, 'now', None)) else _now(port.now())
                 if current_game_day(current) != binding['game_day']:
                     raise ValueError('daily_game_day_changed')
-                observation = _observation(port.observe(deepcopy(binding)), binding, current)
+                observation = port.observe(deepcopy(binding))
+                current = current if not callable(getattr(port, 'now', None)) else _now(port.now())
+                observation = _observation(observation, binding, current)
                 stamp = _timestamp(observation['observed_at'])
                 if last_observed is not None and stamp < last_observed:
                     raise ValueError('daily_observation_clock_rollback')
@@ -455,8 +457,9 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                         raise ValueError('daily_carryover_actual_team_mismatch')
                 port.checkpoint()
                 validate_daily_request(request)
+                fresh = port.observe(deepcopy(binding))
                 fresh_now = current if not callable(getattr(port, 'now', None)) else _now(port.now())
-                fresh = _observation(port.observe(deepcopy(binding)), binding, fresh_now)
+                fresh = _observation(fresh, binding, fresh_now)
                 if (_timestamp(fresh['observed_at']) < stamp
                         or choose_action(request, binding, fresh, regular, grants, consumed).get('action') != action):
                     raise ValueError('daily_target_changed_before_input')

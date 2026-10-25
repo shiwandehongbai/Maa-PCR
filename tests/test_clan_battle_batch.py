@@ -568,6 +568,39 @@ def test_final_inventory_observation_is_followed_by_real_formation_reentry(tmp_p
     assert len(port.prepared) == 6
 
 
+@pytest.mark.parametrize('observation_call', [1, 2])
+def test_observation_elapsed_time_is_validated_after_readback(tmp_path, daily_request, observation_call):
+    port = Port(daily_request)
+    observe = port.observe
+    def elapsed(binding):
+        if len(port.observations) + 1 == observation_call:
+            port.clock += timedelta(milliseconds=1)
+        return observe(binding)
+    port.observe = elapsed
+    result, _ = run(tmp_path, daily_request, port)
+    assert result.get('error') is None and result['outcome'] == 'complete'
+    assert len(port.executions) == 3
+
+
+@pytest.mark.parametrize('observation_call', [1, 2])
+@pytest.mark.parametrize('fault', ['future', 'stale', 'day'])
+def test_post_readback_time_still_rejects_invalid_observations(tmp_path, daily_request, observation_call, fault):
+    port = Port(daily_request)
+    observe = port.observe
+    def invalid(binding):
+        row = observe(binding)
+        if len(port.observations) == observation_call:
+            if fault == 'day':
+                port.clock += timedelta(days=1)
+            else:
+                row['observed_at'] = (port.clock + timedelta(seconds=1 if fault == 'future' else -61)).isoformat()
+        return row
+    port.observe = invalid
+    result, _ = run(tmp_path, daily_request, port)
+    assert result['error'] == 'daily_fresh_observation_required'
+    assert not port.executions and not ledgers(tmp_path)
+
+
 @pytest.mark.parametrize('change,error', [
     ('team', 'daily_team_or_target_unknown'),
     ('order', 'daily_team_changed_before_input'),

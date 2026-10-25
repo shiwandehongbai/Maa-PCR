@@ -413,6 +413,35 @@ def test_daily_adapter_callbacks_remain_on_real_owner_when_slot_reader_changes(e
     assert reference() is router.port and not borrowed.callbacks
 
 
+@pytest.mark.parametrize('capability', ['formal', 'carryover'])
+def test_formal_slot_excludes_simulation_opening_without_changing_shared_calibration(
+        executable, plan, tmp_path, monkeypatch, capability):
+    from pcr_maa import clan_battle, clan_battle_calibration
+    from pcr_maa.clan_battle_native import calibration_pipeline
+    from test_clan_opening import sampled_plan
+    shipped = clan_battle_calibration.load_calibration(sampled_plan())
+    executable['auto_battle'] = deepcopy(shipped['auto_battle'])
+    executable['pages']['battle']['speed_two'] = deepcopy(shipped['pages']['battle']['speed_two'])
+    original = deepcopy(executable)
+    plan = dict(plan, confirmed_for='synthetic-reviewed-plan')
+    monkeypatch.setattr(clan_battle, 'load_snapshot', lambda _: dict(ownership_complete=True,
+        units=[dict(unit_id=uid) for uid in plan['unit_ids']]))
+    loaded = []
+    def carry_calibration(job, *, capability):
+        loaded.append(capability)
+        return executable
+    monkeypatch.setattr(clan_battle_calibration, 'load_calibration', carry_calibration)
+    resource = Registry()
+    port = daily.NativeClanDailyAdapter(NS(resource=resource), tmp_path,
+        request={'slot_plans': {'1': plan}}, calibrations={plan['confirmed_for']: executable})
+    port.configure_slot(plan, capability=capability)
+    assert resource.nodes['CBStart']['next'] == []
+    assert 'CBPauseOpening' not in resource.nodes and 'auto_battle' not in port.calibration
+    assert executable == original and port.calibrations[plan['confirmed_for']] == original
+    assert loaded == (['carryover'] if capability == 'carryover' else [])
+    assert calibration_pipeline(executable, plan)['CBStart']['next'] == ['CBPauseOpening']
+
+
 @pytest.mark.filterwarnings('error::pytest.PytestUnraisableExceptionWarning')
 def test_real_sdk_dispatches_daily_callbacks_after_port_gc_without_input(executable, plan, tmp_path, monkeypatch):
     from pcr_maa import clan_battle, native
