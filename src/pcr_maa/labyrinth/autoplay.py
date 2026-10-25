@@ -746,6 +746,7 @@ class MaaRunActions:
         else:self.effective_ids=()
         self.team=MaaTeam(self.tasker,self.stamp,tuple(self.owned),timings=self.batch.timings,
             characters=self.characters,failed_teams=tuple(self.failed_teams.get(node.block_id,())),
+            combat_kind='BOSS' if boss else 'EX' if getattr(self,'combat_kind',None)=='ex_challenge' else 'NORMAL',
             retry_number=self.retry_numbers.get(node.block_id,0),last_failed_team=self.last_failed_team.get(node.block_id))
         context=self._context(node,combat=True)
         if boss:return self.team.prepare_boss(self.batch,route.enter_id,node.block_id,context,requested=3,force_multi=node.block_id in self.force_multi_blocks)
@@ -772,14 +773,14 @@ class MaaRunActions:
         if self.team is None:raise BatchStopped('team_not_prepared')
         self.battle_result_scene=None
         def read(enter,block):
-            started=time.monotonic();deadline=min(native.RUN_DEADLINE.get(),started+300)
+            started=native.active_now();deadline=min(native.RUN_DEADLINE.get(),started+300)
             token=native.RUN_DEADLINE.set(deadline);team_grace=True
             try:
                 while True:
-                    self.batch.checkpoint();sampled_at=time.monotonic();remaining=deadline-sampled_at
+                    self.batch.checkpoint();sampled_at=native.active_now();remaining=deadline-sampled_at
                     if remaining<=0:raise BatchStopped('battle_timeout')
                     scene=self.runtime.observe(timeout=min(30,remaining),probe_kinds=tuple(_RULES));_native_ok(scene.native)
-                    self.batch.checkpoint();now=time.monotonic()
+                    self.batch.checkpoint();now=native.active_now()
                     if now>=deadline:raise BatchStopped('battle_timeout')
                     if scene.kind in ('battle_victory','battle_defeat','boss_summary'):
                         revived=scene.kind=='battle_defeat' and scene.payload.get('battle_failure_layout')=='two_button'
@@ -982,11 +983,11 @@ class AutoplayRunner:
                 input_action_verified=True,client_page_verified=False)
         # The existing 15s target-observation budget also covers a proven
         # pre-input recognition miss. It never repeats an executed/unknown tap.
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+15)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+15)
         pending_error=None
         while True:
             batch.checkpoint()
-            if pending_error is not None and time.monotonic()>=deadline:
+            if pending_error is not None and native.active_now()>=deadline:
                 raise BatchStopped('route_target_not_visible') from pending_error
             if detail.get('status')=='scene_changed':
                 fresh=detail['scene'];return Scene(fresh['kind'],receipt,fresh['payload'])
@@ -1002,7 +1003,7 @@ class AutoplayRunner:
                     self.moves.add(key);self.cursor.pending=target.block_id
                     break
             elif detail.get('viewport',{}).get('direction',0):break
-            if time.monotonic()>=deadline:
+            if native.active_now()>=deadline:
                 raise BatchStopped(detail.get('viewport',{}).get('reason','route_target_not_visible')) from pending_error
             token=native.RUN_DEADLINE.set(deadline)
             try:

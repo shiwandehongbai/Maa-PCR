@@ -14,6 +14,7 @@ from .session import resume_home_pipeline
 from .interruptions import date_changed_pipeline
 from .snapshots import OpeningSnapshot
 from .scene import OBSERVATION_TIMEOUT_SECONDS
+from .servers import get_server
 
 
 def game_port_pipeline():
@@ -35,12 +36,37 @@ def game_port_pipeline():
 
 
 class MaaGamePort:
-    def __init__(self,tasker,stamp):
+    def __init__(self,tasker,stamp,*,server='cn-bilibili',stopped=lambda:False):
         if not callable(stamp):raise ValueError('owner_stamp_required')
         self.tasker,self.stamp=tasker,stamp
         self.session=None;self.opening=None;self.used=set();self.restarted=set();self.blocked=False
         self.runtime=None;self.runner=None
         self._restore_result=self._restore_snapshot=self._restore_batch=self._restore_facts=None
+        self.server=get_server(server);self.stopped=stopped;self._hard_closed=None
+
+    def prepare_protocol_login(self,server,account_id):
+        """ADB force-stop avoids channel SDK logout before a game-server login."""
+        self._hard_closed=None
+        if (server!=self.server.server_id or not self.server.closes_client_before_login
+                or type(account_id) is not int or not 0<account_id<=2**63-1):
+            raise BatchStopped('channel_client_close_failed')
+        if self.stopped():raise BatchStopped('stopped')
+        node='LabyChannelBeforeLoginStopOnce'
+        if not self.tasker.resource.override_pipeline({node:dict(recognition='DirectHit',action='StopApp',
+                package=self.server.package,max_hit=1,next=[],pre_delay=0,post_delay=0)}):
+            raise BatchStopped('channel_client_close_failed')
+        receipt=native.run(self.tasker,node,reset_hits=(node,))
+        if self.stopped():raise BatchStopped('stopped')
+        action=_root(receipt,node).get('action')
+        if (type(action) is not dict or action.get('name')!=node or action.get('success') is not True
+                or type(action.get('raw')) is not dict or action['raw'].get('package')!=self.server.package):
+            raise BatchStopped('channel_client_close_failed')
+        from .app_version import controller_shell
+        if controller_shell(self.tasker.controller,'pidof '+self.server.package,stopped=self.stopped).strip():
+            raise BatchStopped('channel_client_close_failed')
+        if self.stopped():raise BatchStopped('stopped')
+        self._hard_closed=(self.server.server_id,account_id,self.server.package)
+        return True
 
     def _checkpoint(self,batch):
         batch.checkpoint()
@@ -50,15 +76,15 @@ class MaaGamePort:
     def _wait(self,batch,node,names):
         from .autoplay import _poll_pause
         reason='game_session_readback_unknown'
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+OBSERVATION_TIMEOUT_SECONDS)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+OBSERVATION_TIMEOUT_SECONDS)
         token=native.RUN_DEADLINE.set(deadline)
         try:
             while True:
                 self._checkpoint(batch)
-                if time.monotonic()>=deadline:raise BatchStopped(reason)
+                if native.active_now()>=deadline:raise BatchStopped(reason)
                 with batch.timings.measure('page_wait'):receipt=native.run(self.tasker,node)
                 self._checkpoint(batch)
-                if time.monotonic()>=deadline:raise BatchStopped(reason)
+                if native.active_now()>=deadline:raise BatchStopped(reason)
                 raw=_root(receipt,node).get('recognition')
                 if (type(raw) is not list or not 1<=len(raw)<=len(names)
                         or any(type(row) is not dict or row.get('algorithm')!='And' for row in raw)
@@ -120,26 +146,32 @@ class MaaGamePort:
     def _restart_client(self,batch,snapshot):
         """Invalidate the cached UI once after protocol creation, via Maa only.
 
-        Package is the independently observed B-server foreground package.
+        Package is the selected server's fixed client package.
         Stop/Start are two durable navigation intents. No recovery loop or Back
         is used. Each action ACK settles once; fresh Title/Home readiness is
         a separate readonly follow-up and cannot mint a game handoff.
         """
         self._checkpoint(batch)
+        cold=self.server.closes_client_before_login
+        if cold:
+            permit,self._hard_closed=self._hard_closed,None
+            if permit!=(self.server.server_id,snapshot.account_id,self.server.package):
+                raise BatchStopped('channel_client_close_required')
+            self.session.cold_start_required=True
         key=(snapshot.enter_id,self._active_creation_oid)
         if key in self.restarted:raise BatchStopped('client_restart_already_attempted')
         self.restarted.add(key)
-        nodes=game_session_pipeline(snapshot.account_id)
+        nodes=game_session_pipeline(snapshot.account_id,server=self.server.server_id)
         nodes.update({
             'LabyGamePortStopClientOnce':dict(recognition='DirectHit',action='StopApp',
-                package='com.bilibili.priconne',max_hit=1,next=[],pre_delay=0,post_delay=0),
+                package=self.server.package,max_hit=1,next=[],pre_delay=0,post_delay=0),
             'LabyGamePortStartClientOnce':dict(recognition='DirectHit',action='StartApp',
-                package='com.bilibili.priconne',max_hit=1,next=[],pre_delay=0,post_delay=0),
+                package=self.server.package,max_hit=1,next=[],pre_delay=0,post_delay=0),
         })
         if not self.tasker.resource.override_pipeline(nodes):
             raise BatchStopped('game_port_restart_unavailable')
         fields=dict(source='maa',enter_id=snapshot.enter_id,protocol_enter_id=snapshot.enter_id,
-            creation_operation_id=self._active_creation_oid,package='com.bilibili.priconne')
+            creation_operation_id=self._active_creation_oid,package=self.server.package)
         def stop(oid):
             self._checkpoint(batch)
             with batch.timings.measure('page_wait'):
@@ -198,7 +230,7 @@ class MaaGamePort:
         if key in self.used:
             raise BatchStopped('game_port_opening_already_attempted')
         self.used.add(key)
-        if self.session is None:self.session=MaaGameSession(self.tasker,self.stamp,timings=batch.timings)
+        if self.session is None:self.session=MaaGameSession(self.tasker,self.stamp,timings=batch.timings,server=self.server.server_id)
         if self.opening is None:self.opening=MaaOpening(self.tasker,self.stamp,timings=batch.timings)
         self.session.timings=self.opening.timings=batch.timings
         try:

@@ -118,7 +118,7 @@ def observe_profile(tasker,*,stopped=None,timeout=10):
     def checkpoint():
         if (stopped is not None and stopped()) or getattr(tasker,"stopping",False):raise BatchStopped("stopped")
     checkpoint()
-    token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),time.monotonic()+timeout))
+    token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),native.active_now()+timeout))
     try:
         if not tasker.resource.override_pipeline(profile_pipeline(wait_ms=math.ceil(timeout*1000))):
             raise BatchStopped("profile_pipeline_unavailable")

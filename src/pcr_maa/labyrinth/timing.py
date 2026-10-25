@@ -25,6 +25,9 @@ class Timings:
     def __init__(self):
         self.samples=defaultdict(lambda:deque(maxlen=256));self.stats={};self.lock=RLock()
         self.label_stats={};self.outcomes=defaultdict(lambda:defaultdict(int));self.phase=None
+        self.diagnostics=None
+    def attach_diagnostics(self,diagnostics):
+        with self.lock:self.diagnostics=diagnostics
     def observe(self,category):
         if category not in self.categories:raise ValueError('unknown_timing_category')
         with self.lock:
@@ -43,6 +46,10 @@ class Timings:
                 count,total,maximum=self.label_stats.get(key,(0,0,0))
                 self.label_stats[key]=(count+1,total+elapsed_ms,max(maximum,elapsed_ms))
             if outcome is not None:self.outcomes[key][outcome]+=1
+            diagnostics=self.diagnostics
+        if diagnostics is not None:
+            try:diagnostics.record_timing(category,elapsed_ms,outcome=outcome)
+            except Exception:pass
     @contextmanager
     def measure(self,category,*,label=None):
         if category not in self.categories:raise ValueError('unknown_timing_category')
@@ -109,12 +116,14 @@ class NativeTimings:
         class ControllerSink(ControllerEventSink):
             def on_controller_action(self,controller,noti_type,detail):
                 action=detail.action.lower()
+                if action=='screencap':owner.diagnostic_event('capture',noti_type,NotificationType)
                 # The private trace covers both external and pipeline captures.
                 # Use one source so an external capture is counted only once.
                 category='screenshot' if action=='screencap' and owner.trace_path is None else None
                 if category:owner.event(('controller',detail.ctrl_id),category,noti_type,NotificationType)
         class TaskSink(TaskerEventSink):
             def on_tasker_task(self,tasker,noti_type,detail):
+                owner.diagnostic_event('task',noti_type,NotificationType)
                 if measure_page_wait:owner.event(('task',detail.task_id),'page_wait',noti_type,NotificationType)
                 if not collect_input_evidence:return
                 with owner.lock:
@@ -127,6 +136,7 @@ class NativeTimings:
                         owner.input_evidence[detail.task_id].update(finished=True,failed=noti_type==NotificationType.Failed)
         class ContextSink(ContextEventSink):
             def on_node_recognition(self,context,noti_type,detail):
+                owner.diagnostic_event('recognition',noti_type,NotificationType)
                 with owner.lock:
                     evidence=owner.input_evidence.get(detail.task_id) if collect_input_evidence else None
                     if evidence is not None and noti_type==NotificationType.Failed:evidence['recognition_failed']=True
@@ -147,6 +157,7 @@ class NativeTimings:
                             if detail.name not in evidence['non_input_actions']:evidence['non_input_actions'].append(detail.name)
                         else:evidence['action_started']=True
                 if owner.action_kinds[detail.name] in ('Click','Swipe','MultiSwipe','TouchDown','TouchMove','TouchUp','ClickKey','InputText','KeyDown','KeyUp','StartApp','StopApp'):
+                    owner.diagnostic_event('input',noti_type,NotificationType)
                     owner.event(('input',detail.task_id,detail.action_id),'input',noti_type,NotificationType)
                 if owner.action_kinds[detail.name] in ('Swipe','MultiSwipe'):
                     owner.event(('swipe',detail.task_id,detail.action_id),'swipe',noti_type,NotificationType)
@@ -166,6 +177,14 @@ class NativeTimings:
             self.timings.observe(category)
         if trace_path is None:
             self.timings.observe('screenshot');self.timings.observe('recognition')
+    def diagnostic_event(self,kind,notification,types):
+        if self.closed:return
+        diagnostics=getattr(self.timings,'diagnostics',None)
+        if diagnostics is not None:
+            status={types.Starting:'starting',types.Succeeded:'succeeded',types.Failed:'failed'}.get(notification)
+            if status is not None:
+                try:diagnostics.record_native(kind,status)
+                except Exception:pass
     def event(self,key,category,notification,types):
         with self.lock:
             if self.closed:return

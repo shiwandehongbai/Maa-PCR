@@ -26,7 +26,7 @@ class MaaOpening:
     def _wait_invitation_joined(self,batch,enter_id,invited,node=None):
         from .scene import MaaSceneRuntime
         # Transition and identity reads share one budget, capped by the Owner.
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+JOINED_CONFIRMATION_TIMEOUT_SECONDS)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+JOINED_CONFIRMATION_TIMEOUT_SECONDS)
         token=native.RUN_DEADLINE.set(deadline)
         try:
             MaaSceneRuntime(self.tasker,self.stamp,timings=self.timings,stopped=batch.stopped).wait_for(

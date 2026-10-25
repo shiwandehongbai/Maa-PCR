@@ -277,18 +277,18 @@ class MaaShop:
     def _wait_state(self,batch,expected,*,accept=None):
         import time
         from .autoplay import _poll_pause
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+30)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+30)
         token=native.RUN_DEADLINE.set(deadline)
         try:
             while True:
                 batch.checkpoint()
-                if time.monotonic()>=deadline:raise BatchStopped('shop_readback_unknown')
+                if native.active_now()>=deadline:raise BatchStopped('shop_readback_unknown')
                 try:current,receipt=self._capture()
                 except BatchStopped as error:
                     if error.args!=('shop_readback_unknown',):raise
                 else:
                     batch.checkpoint()
-                    if (time.monotonic()<deadline and current['state']==expected
+                    if (native.active_now()<deadline and current['state']==expected
                             and (accept is None or accept(current))):return current,receipt
                 _poll_pause(self.tasker,batch,'LabyShopPollSpacing','shop_readback_unknown')
         except RuntimeError as error:

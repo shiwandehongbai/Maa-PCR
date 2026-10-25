@@ -1,0 +1,64 @@
+{
+  "repository": "wbero/limingjie-assistant",
+  "revision": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+  "code_license": "CC BY-NC-SA 4.0",
+  "image_rights": "Game imagery retains its separate rights; see assets/labyrinth/character-pack/PROVENANCE.json",
+  "files": [
+    {
+      "file": "special_equipment_auto_button.png",
+      "path": "android/app/src/main/assets/resource-packs/cn-bilibili/vision/special_equipment/special_equipment_auto_button.png",
+      "git_blob": "40ff74379f5c6c6ec8ad15c94570b2f01e85b24c",
+      "size": 27050,
+      "sha256": "0814804e61b3781bcf1016efa83166d2252ebb7e0a4de95fa8f60951591ee920"
+    },
+    {
+      "file": "special_equipment_auto_dialog_anchor.png",
+      "path": "android/app/src/main/assets/resource-packs/cn-bilibili/vision/special_equipment/special_equipment_auto_dialog_anchor.png",
+      "git_blob": "32b4229081fab74e96224f3fe22e1740224ed2aa",
+      "size": 56522,
+      "sha256": "94fe8acdefb1028c1c7b96a62e255a4244ad4e7c5d4422b6210049e388f7e69b"
+    },
+    {
+      "file": "special_equipment_auto_dialog_confirm_button.png",
+      "path": "android/app/src/main/assets/resource-packs/cn-bilibili/vision/special_equipment/special_equipment_auto_dialog_confirm_button.png",
+      "git_blob": "479657b30a206894c0f71cf1919e029d47c48e5d",
+      "size": 45295,
+      "sha256": "d4206c72423f5a60d62f023a28999016f9f23ee6aba64717c9e7b03a20778b6e"
+    },
+    {
+      "file": "special_equipment_battle_team_button.png",
+      "path": "android/app/src/main/assets/resource-packs/cn-bilibili/vision/special_equipment/special_equipment_battle_team_button.png",
+      "git_blob": "f3b04ae1c77309d4b715b405f7b576f5aa17d633",
+      "size": 10153,
+      "sha256": "98ab70f1aabadcd66b797500da3a72d7246d8fa700b3d6bc1f05e75b317b5c67"
+    },
+    {
+      "file": "special_equipment_dialog_anchor.png",
+      "path": "android/app/src/main/assets/resource-packs/cn-bilibili/vision/special_equipment/special_equipment_dialog_anchor.png",
+      "git_blob": "77847671d9a08a6988b0f06ff13efbc02bf5a1c7",
+      "size": 7589,
+      "sha256": "61ded0a2ebb72096d003a8238f983bb8540f5b0d38e384eb724d5f78083a61f0"
+    },
+    {
+      "file": "special_equipment_dialog_title.png",
+      "path": "android/app/src/main/assets/resource-packs/cn-bilibili/vision/special_equipment/special_equipment_dialog_title.png",
+      "git_blob": "266b9433937ccd2a3198a181287db1d6136d70d9",
+      "size": 40432,
+      "sha256": "698538fddc16e34adc096eb84faf7cdef258db897f70991ec6c87ba3abe1ed74"
+    },
+    {
+      "file": "special_equipment_equip_confirm_disabled.png",
+      "path": "android/app/src/main/assets/resource-packs/cn-bilibili/vision/special_equipment/special_equipment_equip_confirm_disabled.png",
+      "git_blob": "61153a1f5916bf9fe7f8350a4a28be0e68cb49ee",
+      "size": 45136,
+      "sha256": "9fb02ffe273cb18ec21703596573b15f087bd918d76739acd52cdf4ea331899e"
+    },
+    {
+      "file": "special_equipment_equip_confirm_enabled.png",
+      "path": "android/app/src/main/assets/resource-packs/cn-bilibili/vision/special_equipment/special_equipment_equip_confirm_enabled.png",
+      "git_blob": "3f54d1ac1b9044efe82c066f9d618ead80713c06",
+      "size": 53621,
+      "sha256": "23d0648ea651f890dbfb7c87d48012006003ebf5e2a1a074c62cae4304454006"
+    }
+  ]
+}

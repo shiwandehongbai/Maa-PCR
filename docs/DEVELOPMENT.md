@@ -37,7 +37,7 @@ python -X utf8 -B scripts/verify.py all
 ```
 
 - `public` 使用 `scripts.public_test_policy`，明确排除 `private_replay`，不要求 .NET。
-- `gui` 校验 SDK 精确版本，依次离线锁定恢复、Release 构建桌面程序，运行 `PcrUpdate.Tests`、`PcrProfileSwitch.Tests`（包括 owner 契约）和 `PcrLabyrinthCredentials.Tests`。每组检查使用的 Core 哈希必须与桌面构建一致。
+- `gui` 校验 SDK 精确版本，依次离线锁定恢复、Release 构建桌面程序，运行 `PcrUpdate.Tests`、`PcrProfileSwitch.Tests`（包括 owner 契约）、`PcrLabyrinthCredentials.Tests`、`PcrLabyrinthAccounts.Tests` 和 `PcrLabyrinthRatings.Tests`。后两组覆盖账号迁移、隔离保存及评分窗口。每组检查使用的 Core 哈希必须与桌面构建一致。
 - `all` 执行上述两组；前置条件或任一步失败就停止并返回非零退出码。`passed` 只表示所选范围的命令成功，不把跳过、未选中或缺失的私有回放计作通过。
 
 入口固定使用所在 checkout 作为源码根目录，不依赖调用方当前目录。通过 `--dotnet` 指定 SDK 可执行文件，通过 `--nuget-cache` 指定已有包缓存；不指定时分别使用 PATH 和 `NUGET_PACKAGES`（未设置则为用户 `.nuget/packages`）。入口不安装依赖、不联网恢复、不打包、不连接设备、不复制到玩家安装。缺依赖时先按锁文件单独准备环境，再重新运行。

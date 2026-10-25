@@ -39,6 +39,7 @@ def test_unsent_final_item_close_waits_for_home_without_animation_input(tmp_path
     runner.route = route
     clock = [0.0]
     monkeypatch.setattr(s, 'time', NS(monotonic=lambda: clock[0]))
+    monkeypatch.setattr('pcr_maa.native.active_now',s.time.monotonic)
     def pause(*args):
         clock[0] += .5
         runtime.advance()
@@ -73,6 +74,7 @@ def test_link_close_waits_for_a_different_business_successor(tmp_path, monkeypat
     actions.item_scene = lambda scene, *args, **kwargs: scene
     clock = [0.0]
     monkeypatch.setattr(s, 'time', NS(monotonic=lambda: clock[0]))
+    monkeypatch.setattr('pcr_maa.native.active_now',s.time.monotonic)
     def pause(*args):
         clock[0] += .5
         runtime.advance()
@@ -114,6 +116,7 @@ def test_unsent_recognized_final_animation_uses_pure_existing_successor(tmp_path
     runner.cursor=a.RunCursor(index=1,final_boss_won=True,clear_observed=True,final_settlement_phase='chest_sequence')
     runner.route=route;clock=[0.];attempts=[]
     monkeypatch.setattr(s,'time',NS(monotonic=lambda:clock[0]))
+    monkeypatch.setattr('pcr_maa.native.active_now',s.time.monotonic)
     def pause(*args):clock[0]+=.5;runtime.advance()
     monkeypatch.setattr(a,'_poll_pause',pause)
     def unsent(scene,action,**kwargs):

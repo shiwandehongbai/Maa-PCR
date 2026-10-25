@@ -13,6 +13,7 @@ from pcr_maa.labyrinth.timing import Timings
 def transition(monkeypatch):
     state = NS(now=0., pages=[], reads=[], inputs=[], observations=[], stopped=False)
     monkeypatch.setattr(game_port, 'time', NS(monotonic=lambda: state.now), raising=False)
+    monkeypatch.setattr('pcr_maa.native.active_now',game_port.time.monotonic)
     resource = NS(override_pipeline=lambda nodes: True)
     owner = NS(resource=resource, stopping=False)
     port = game_port.MaaGamePort(owner, lambda **fields: fields)

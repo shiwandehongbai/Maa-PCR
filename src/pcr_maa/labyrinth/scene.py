@@ -342,7 +342,7 @@ def observe_scene(tasker,*,stopped=None,timings=None,timeout=OBSERVATION_TIMEOUT
     _checkpoint(tasker,stopped)
     if type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=90:raise ValueError('scene_timeout_invalid')
     timings=timings or Timings()
-    token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),time.monotonic()+timeout))
+    token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),native.active_now()+timeout))
     previous=None;scope=_probe_scope(probe_kinds);resource=runtime_resource(tasker) if scope is not None else None
     try:
         if scope is not None:
@@ -437,7 +437,7 @@ class MaaSceneRuntime:
         """Business wait with independent owned acquisition and final-settlement drivers."""
         from .autoplay import _poll_pause, _native_ok, _owned_boss_summary_scene
         sources={source} if isinstance(source,str) else set(source or ())
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+timeout)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+timeout)
         token=native.RUN_DEADLINE.set(deadline);acquisition_clicks=0;last_acquisition=-float('inf')
         def advance_owned(operation,fields,send):
             try:
@@ -461,10 +461,10 @@ class MaaSceneRuntime:
         self._scene_probe_kinds=_probe_scope(set(allowed)|sources|({'boss_summary','battle_victory'} if final_fields is not None else set()))
         try:
             while True:
-                batch.checkpoint();remaining=deadline-time.monotonic()
+                batch.checkpoint();remaining=deadline-native.active_now()
                 if remaining<=0:raise BatchStopped(reason)
                 after=self.observe(timeout=min(timeout,remaining));batch.checkpoint()
-                if time.monotonic()>=deadline:raise BatchStopped(reason)
+                if native.active_now()>=deadline:raise BatchStopped(reason)
                 _native_ok(after.native)
                 if after.kind in ('date_changed','disconnected'):raise BatchStopped(after.kind)
                 # An owned summon may expose MAP before its actual JOINED popup.
@@ -482,29 +482,29 @@ class MaaSceneRuntime:
                         previous=getattr(self,'_final_settlement_progress',(None,0,-float('inf')))
                         count,last=previous[1:] if previous[0]==key else (0,-float('inf'))
                         if count>=40:raise BatchStopped('final_settlement_click_limit')
-                        if time.monotonic()-last>=1.5:
+                        if native.active_now()-last>=1.5:
                             right=(count%4 in (1,3) if phase=='before_score' else count>=3)
                             target=[1093,660,1,1] if right else [640,520,1,1]
                             def advance_final(oid):
                                 batch.checkpoint();sent=self.perform(after,'advance_final_unknown',target=target);_native_ok(sent,action=True)
                                 return self.stamp(operation_id=oid,**final_fields,native=sent,input_native=sent,input_action_verified=True)
                             if advance_owned('advance_final_unknown',final_fields,advance_final):
-                                self._final_settlement_progress=(key,count+1,time.monotonic())
+                                self._final_settlement_progress=(key,count+1,native.active_now())
                         _poll_pause(self.tasker,batch,'LabySceneTransitionPollSpacing',reason);continue
                 if acquisition_fields is not None and final_fields is None and after.kind in ('unknown','event_animation'):
                     if acquisition_clicks>=40:raise BatchStopped('character_acquisition_click_limit')
-                    if time.monotonic()-last_acquisition>=.65:
+                    if native.active_now()-last_acquisition>=.65:
                         def advance(oid):
                             batch.checkpoint();sent=self.perform(after,'advance_character_animation');_native_ok(sent,action=True)
                             return self.stamp(operation_id=oid,**acquisition_fields,native=sent,input_native=sent,input_action_verified=True)
                         if advance_owned('advance_character_animation',acquisition_fields,advance):
-                            acquisition_clicks+=1;last_acquisition=time.monotonic()
+                            acquisition_clicks+=1;last_acquisition=native.active_now()
                     _poll_pause(self.tasker,batch,'LabySceneTransitionPollSpacing',reason);continue
 
                 if after.kind in allowed and not partial_map:
                     accepted=accept is None or accept(after)
                     batch.checkpoint()
-                    if time.monotonic()>=deadline:raise BatchStopped(reason)
+                    if native.active_now()>=deadline:raise BatchStopped(reason)
                     if accepted:
                         if acquisition_fields is not None:
                             after=Scene(after.kind,after.native,dict(after.payload,acquisition_driver_advanced=acquisition_clicks>0))

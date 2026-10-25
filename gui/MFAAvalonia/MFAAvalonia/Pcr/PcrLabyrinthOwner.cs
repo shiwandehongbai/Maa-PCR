@@ -41,6 +41,27 @@ internal static class PcrLabyrinthOwner
             vm.LabyrinthSettings.Progress = "正在等待当前操作记账，然后停止执行组件…";
         }
     }
+    internal static async Task TogglePauseAsync(TaskQueueViewModel vm) {
+        Run? run;
+        string command;
+        lock (PcrProfileRunGate.StartGate) {
+            run=current;
+            if (run?.ViewModel!=vm || run.Cancel.IsCancellationRequested || run.Child is not { Exited:false }
+                || vm.LabyrinthSettings.PausePending) return;
+            command=vm.LabyrinthSettings.IsPaused ? "resume" : "pause";
+            vm.LabyrinthSettings.PausePending=true;
+        }
+        try {
+            await run.Child.Send(new JObject { ["kind"]=command }.ToString(Formatting.None)).WaitAsync(TimeSpan.FromSeconds(2));
+        } catch {
+            lock (PcrProfileRunGate.StartGate) {
+                if (ReferenceEquals(current,run)) {
+                    vm.LabyrinthSettings.PausePending=false;
+                    Stop(vm);
+                }
+            }
+        }
+    }
     // 设置卡片沿用原有文案：运行细节只进实时日志，避免设置区被运行信息淹没。
     private static string SettingsStatusFor(string? outcome) => outcome switch {
         "execution_not_qualified"=>"候选尚未完成地图交接、编组和连续执行验收；本次未连接或操作设备。",
@@ -61,7 +82,10 @@ internal static class PcrLabyrinthOwner
         "controller_connection_timeout" or "controller_connection_failed"=>"连接所选设备失败或超时，本次已停止。请核对设备与 ADB 目标。",
         "content_update_required"=>"游戏资源版本已更新，当前程序需匹配新版数据；本次未开始游戏任务。",
         "protocol_version_invalid"=>"服务器资源版本信息未通过校验，本次未开始游戏任务。请稍后重试或导出诊断记录。",
-        "game_version_unavailable"=>"无法核对所选设备上已安装的游戏版本，本次未开始登录。请确认已安装 B 服游戏，并核对所选设备。",
+        "game_version_unavailable"=>"无法核对所选设备上已安装的游戏版本，本次未开始登录。请确认已安装所选渠道的游戏，并核对设备。",
+        "invalid_server"=>"所选游戏渠道无效，本次未开始登录。",
+        "channel_credentials_required"=>"请填写所选渠道的 UID 和 access_key。",
+        "channel_client_close_required"=>"所选渠道需要先关闭游戏客户端，关闭状态尚未确认，本次已停止。",
         "login_failed"=>"协议登录未通过校验，本次未开始游戏任务。请检查网络或导出黎明界诊断记录。",
         "game_session_readback_unknown"=>"游戏客户端页面未通过校验，本次已停止。请检查游戏是否仍在加载或有弹窗，并导出黎明界诊断记录。",
         "sdk_login_timeout" or "protocol_login_timeout"=>"协议账号登录网络超时，本次已停止；不会自动重试。请检查网络后重新点击开始。",
@@ -126,11 +150,13 @@ internal static class PcrLabyrinthOwner
                     throw new InvalidOperationException("请填写游戏玩家 ID（个人简介，非B站 UID），必须为正整数。");
                 if (vm.CurrentDevice is not AdbDeviceInfo device || !AdbEditorDialogViewModel.TryNormalizePcrAdbTarget(device.AdbPath,device.AdbSerial,out var path,out var serial))
                     throw new InvalidOperationException("请先在设备栏选择有效的 ADB 目标。");
-                request=new JObject { ["version"]=1,["settings"]=snapshot,["account_id"]=accountId,
+                request=new JObject { ["version"]=1,["settings"]=snapshot,["account_id"]=accountId,["server"]=settings.Server,
                     ["keep_old_run"]=settings.KeepOldRun,
                     ["connection"]=new JObject { ["adb_path"]=path,["serial"]=serial },
                     ["credentials"]=new JObject { ["username"]=settings.Username,["password"]=settings.Password } };
                 current=run=new Run(vm);
+                settings.IsPaused=false;
+                settings.PausePending=false;
                 vm.IsRunning=true;
                 settings.Progress="正在校验黎明界配置与运行资源…";
                 PcrProfileRunGate.Notify();
@@ -159,6 +185,8 @@ internal static class PcrLabyrinthOwner
             request.Remove("credentials");
             bool receipt=false;
             var lastLogged=string.Empty;
+            var resumeProgress=string.Empty;
+            string? lastStage="validating";
             await foreach (var line in run.Child.Lines.Reader.ReadAllAsync(cancel.Token)) {
                 if (line.Error) continue; // never display SDK exception text or tokens
                 JObject value;
@@ -168,6 +196,24 @@ internal static class PcrLabyrinthOwner
                         DuplicatePropertyNameHandling=DuplicatePropertyNameHandling.Error });
                 } catch { throw new InvalidOperationException("黎明界组件返回了无效消息，本次任务已停止。"); }
                 var kind=(string?)value["kind"];
+                if (kind=="control") {
+                    var state=(string?)value["state"];
+                    if (value.Properties().Count()!=2 || state is not ("paused" or "running"))
+                        throw new InvalidOperationException("黎明界暂停状态无效，本次任务已停止。");
+                    if (state=="paused") {
+                        resumeProgress=vm.LabyrinthSettings.Progress;
+                        vm.LabyrinthSettings.IsPaused=true;
+                        vm.LabyrinthSettings.Progress="已暂停，当前操作已完成记账。";
+                        startup.CancelAfter(Timeout.InfiniteTimeSpan);
+                    } else {
+                        vm.LabyrinthSettings.IsPaused=false;
+                        vm.LabyrinthSettings.Progress=resumeProgress;
+                        startup.CancelAfter(StartupWait(lastStage) ?? TimeSpan.FromSeconds(30));
+                    }
+                    vm.LabyrinthSettings.PausePending=false;
+                    Trace(vm,state=="paused" ? "已暂停。" : "继续本次任务。");
+                    continue;
+                }
                 if (kind=="log") {
                     // Live business trace from the owner; display only, no protocol meaning.
                     var text=(string?)value["text"];
@@ -192,6 +238,7 @@ internal static class PcrLabyrinthOwner
                 }
                 if (kind=="progress") {
                     var stage=(string?)value["stage"];
+                    lastStage=stage;
                     if (StartupWait(stage) is { } wait) startup.CancelAfter(wait);
                     vm.LabyrinthSettings.Progress=stage switch {
                         "validating"=>"正在校验黎明界配置…", "dependencies"=>"正在加载黎明界执行组件…",
@@ -267,6 +314,8 @@ internal static class PcrLabyrinthOwner
                     if (ReferenceEquals(current,run)) current=null;
                     run.Cancel.Dispose();
                     vm.IsRunning=false;
+                    vm.LabyrinthSettings.IsPaused=false;
+                    vm.LabyrinthSettings.PausePending=false;
                     PcrProfileRunGate.Notify();
                 }
             }

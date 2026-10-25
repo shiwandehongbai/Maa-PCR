@@ -104,6 +104,8 @@ def test_preload_failure_clears_credentials_before_starting_stop_listener(monkey
 
 
 def runtime(tmp_path, monkeypatch, *, resource_timeout=False, stop_on_connect=False, ocr_job=None, ocr_hook=None):
+    # This helper is also imported by restart tests; none of them downloads data.
+    monkeypatch.setattr('pcr_maa.labyrinth.database.DatabaseCache.start_update',lambda self,emit=None:None)
     from pcr_maa import native
     from pcr_maa.labyrinth import timing
     import maa.controller
@@ -649,3 +651,44 @@ def test_timing_finalization_does_not_swallow_interruption(tmp_path, monkeypatch
     monkeypatch.setattr(owned.timings, 'transition', interrupted)
     with pytest.raises(error_type):
         owned._finish_timings()
+
+
+@pytest.mark.parametrize('server',['cn-bilibili','cn-huawei','cn-tencent'])
+def test_owner_binds_server_and_separates_channel_records(tmp_path,monkeypatch,server):
+    owned,events,calls=runtime(tmp_path,monkeypatch)
+    owned.request.server=server
+    versions=[]
+    def version(controller,*,stopped,server):
+        versions.append(server)
+        return '11.7.2'
+    monkeypatch.setattr('pcr_maa.labyrinth.app_version.read_installed_version',version)
+    assert owned.run()==dict(outcome='stopped',batch_complete=False)
+    assert versions==[server]
+    assert owned.port.game.server.server_id==server
+    assert owned.client.before_game_login.__self__ is owned.port.game
+    base=tmp_path/'.runtime/labyrinth-work'
+    expected=base/'ledger' if server=='cn-bilibili' else base/'servers'/server/'ledger'
+    assert owned.port is not None and expected.is_dir()
+    assert (base/'owner-lock').is_dir()
+    if server!='cn-bilibili':assert not (base/'ledger').exists()
+
+
+def test_owner_freezes_database_before_background_and_restores_context(tmp_path,monkeypatch):
+    from pcr_maa.labyrinth.database import DatabaseCache,DATABASE_SNAPSHOT,DatabaseSnapshot
+    from pcr_maa.labyrinth.roles import configured_optimizer
+    owned,events,calls=runtime(tmp_path,monkeypatch)
+    snapshot=DatabaseSnapshot('202610141448','b'*64,{'1001':{'position':998,'damageType':'MAGIC'}})
+    monkeypatch.setattr(DatabaseCache,'snapshot',lambda self:snapshot)
+    def background(self,emit=None):
+        assert DATABASE_SNAPSHOT.get() is snapshot
+        assert configured_optimizer().profiles['1001'].position==998
+        calls.append('background_snapshot_bound')
+    monkeypatch.setattr(DatabaseCache,'start_update',background)
+    sentinel=DatabaseSnapshot()
+    token=DATABASE_SNAPSHOT.set(sentinel)
+    try:
+        assert owned.run()==dict(outcome='stopped',batch_complete=False)
+        assert DATABASE_SNAPSHOT.get() is sentinel
+    finally:DATABASE_SNAPSHOT.reset(token)
+    assert 'background_snapshot_bound' in calls
+    assert owned.diagnostics.closed

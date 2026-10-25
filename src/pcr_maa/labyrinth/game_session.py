@@ -16,10 +16,12 @@ from .session import (title_pipeline,title_player_id,notice_pipeline,resume_home
 from .profile import PROFILE_NODE,profile_pipeline,profile_player_id,observe_profile
 from .snapshots import OpeningSnapshot
 from .timing import Timings
+from .servers import get_server
+from .session import ChannelPrompts
 from pathlib import Path
 import json
 
-_OPERATIONS=('client_download_retry','client_return_title','client_title_start','client_notice_close',
+_OPERATIONS=('client_channel_prompt','client_download_retry','client_return_title','client_title_start','client_notice_close',
              'client_open_adventure','client_open_labyrinth',
              'client_open_main_menu','client_open_profile','client_profile_back',
              'client_menu_to_adventure','client_profile_return_title')
@@ -50,8 +52,9 @@ class ClientSessionFacts:
     account_native: dict|None=None
 
 
-def game_session_pipeline(expected_player_id):
+def game_session_pipeline(expected_player_id,*,server='cn-bilibili'):
     """Only specific sampled pages; input nodes have no implicit next actions."""
+    selected=get_server(server)
     nodes=title_pipeline(expected_player_id)
     # Observe actual title ID independently, then gate Start with the exact
     # expected ID again. Neither observation nor reported ID echoes settings.
@@ -128,6 +131,8 @@ def game_session_pipeline(expected_player_id):
         any_of=['LabyDateChangedObserved','LabyDisconnect6002Observed',
                 'LabyClientNoticeObserved','LabyClientAfterTitleHomeObserved','LabyClientDownloadErrorObserved'],
         action='DoNothing',next=[],timeout=75000,rate_limit=250,pre_delay=0,post_delay=0)
+    if selected.channel:
+        nodes['LabyGameSessionAfterTitleObserved']['any_of'].append('LabyClientTitleObserved')
     nodes['LabyGameSessionTitleStabilityWait']=dict(recognition='DirectHit',
         action='DoNothing',next=[],timeout=1000,pre_delay=500,post_delay=0)
     nodes['LabyGameSessionEntryObserved']=dict(recognition='Or',
@@ -142,6 +147,11 @@ def game_session_pipeline(expected_player_id):
         any_of=['LabyDateChangedObserved','LabyClientTitleObserved',
                 'LabyClientGameHomeObserved'],action='DoNothing',next=[],timeout=30000,
         rate_limit=250,pre_delay=0,post_delay=0)
+    if selected.channel:
+        nodes['LabyGameSessionColdStartObserved']=dict(recognition='Or',
+            any_of=['LabyDateChangedObserved','LabyDisconnect6002Observed','LabyClientTitleObserved',
+                'LabyClientGameHomeObserved','LabyClientAdventureObserved'],action='DoNothing',next=[],
+            timeout=500,rate_limit=250,pre_delay=0,post_delay=0)
     return nodes
 
 
@@ -163,11 +173,47 @@ def _root(receipt,name):
 
 
 class MaaGameSession:
-    def __init__(self,tasker,stamp,*,timings=None):
+    server=get_server()
+    cold_start_required=False
+    def __init__(self,tasker,stamp,*,timings=None,server='cn-bilibili'):
         if not callable(stamp):raise ValueError('owner_stamp_required')
         self.tasker,self.stamp=tasker,stamp
         self.timings=timings or Timings();self.used=set();self.blocked=False
         self.creation_operation_id=None;self.opening_snapshot=None
+        self.server=get_server(server)
+        self.channel_prompts=ChannelPrompts(tasker,stamp,server)
+        self.cold_start_required=False
+
+    def _channel_observe(self,batch,entry,*,seconds):
+        """SDK windows must advance while Unity frames are still unavailable."""
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+seconds)
+        original=self.tasker.resource.get_node_data(entry)
+        token=native.RUN_DEADLINE.set(deadline)
+        try:
+            if not self.tasker.resource.override_pipeline({entry:dict(timeout=500)}):
+                raise BatchStopped('game_session_pipeline_unavailable')
+            while True:
+                self._checkpoint(batch)
+                if native.active_now()>=deadline:raise BatchStopped('game_session_readback_unknown')
+                snapshot=self.opening_snapshot
+                fields=self._fields(snapshot) if snapshot is not None else dict(enter_id=0,protocol_enter_id=0)
+                if self.channel_prompts.poll(batch,fields):
+                    time.sleep(.05);continue
+                with self.timings.measure('page_wait'):receipt=native.run(self.tasker,entry)
+                self._checkpoint(batch)
+                if native.active_now()>=deadline:raise BatchStopped('game_session_readback_unknown')
+                if receipt.get('native_ok') is True:return receipt
+                proof=receipt.get('native_evidence',{})
+                if (receipt.get('tasker_inited') is not True or type(receipt.get('task_id')) is not int
+                        or proof.get('source')!='native_task_events' or proof.get('task_id')!=receipt['task_id']
+                        or proof.get('started') is not True or proof.get('finished') is not True
+                        or proof.get('complete') is not True or proof.get('recognition_failed') is not True
+                        or proof.get('action_started') is not False):
+                    raise BatchStopped('game_session_readback_unknown')
+        finally:
+            native.RUN_DEADLINE.reset(token)
+            if original is not None and not self.tasker.resource.override_pipeline({entry:original}):
+                raise BatchStopped('game_session_pipeline_unavailable')
 
     def _checkpoint(self,batch):
         batch.checkpoint()
@@ -195,19 +241,24 @@ class MaaGameSession:
         wait='LabyGameSessionTitleStabilityWait'
         names=['LabyDateChangedObserved','LabyDisconnect6002Observed',
                'LabyClientNoticeObserved','LabyClientAfterTitleHomeObserved','LabyClientDownloadErrorObserved']
-        started=time.monotonic();owner_deadline=native.RUN_DEADLINE.get()
-        expires=min(owner_deadline,started+75)
+        if self.server.channel:names.append('LabyClientTitleObserved')
+        started=native.active_now();owner_deadline=native.RUN_DEADLINE.get()
+        startup_seconds=120 if self.server.transient_rotation else 75
+        expires=min(owner_deadline,started+startup_seconds)
         # Repeated endpoint reads share the original 75s pipeline budget and
         # preserve the Owner's earlier deadline; native conversion gets 85s max.
-        token=native.RUN_DEADLINE.set(min(owner_deadline,started+85))
+        token=native.RUN_DEADLINE.set(min(owner_deadline,started+(startup_seconds if self.server.channel else 85)))
         previous_page=previous_native=wait_native=None;download_retries=0
+        last_title_tap=started
         try:
             while True:
-                self._checkpoint(batch);remaining=expires-time.monotonic()
+                self._checkpoint(batch);remaining=expires-native.active_now()
                 if remaining<=0:raise BatchStopped('game_session_readback_unknown')
                 if not self.tasker.resource.override_pipeline({entry:dict(timeout=max(1,int(remaining*1000)))}):
                     raise BatchStopped('game_session_pipeline_unavailable')
-                with self.timings.measure('page_wait'):receipt=native.run(self.tasker,entry)
+                if self.server.channel:receipt=self._channel_observe(batch,entry,seconds=remaining)
+                else:
+                    with self.timings.measure('page_wait'):receipt=native.run(self.tasker,entry)
                 self._checkpoint(batch);raw=_root(receipt,entry).get('recognition')
                 if (type(raw) is not list or not 1<=len(raw)<=len(names)
                     or any(type(row) is not dict or row.get('algorithm')!='And' for row in raw)
@@ -217,8 +268,24 @@ class MaaGameSession:
                 hit=raw[-1]['name']
                 if hit=='LabyDateChangedObserved':raise BatchStopped('date_changed')
                 if hit=='LabyDisconnect6002Observed':raise BatchStopped('disconnected')
+                if hit=='LabyClientTitleObserved':
+                    if native.active_now()>=expires:raise BatchStopped('game_session_readback_unknown')
+                    if native.active_now()-last_title_tap>=5:
+                        actual,account_native=self._title(batch,batch.binding.account_id)
+                        fields=self._fields(self.opening_snapshot,input_node='LabyClientTitleStartOnce')
+                        def title_send(oid):
+                            sent=self._input(batch,'LabyClientTitleStartOnce')
+                            return self.stamp(operation_id=oid,**fields,title_player_id=actual,
+                                account_source='client_title_ocr',account_native=account_native,
+                                input_action_verified=True,client_page_verified=False,native=sent,input_native=sent)
+                        batch.transaction('client_title_start',fields,title_send)
+                        last_title_tap=native.active_now()
+                    previous_page=previous_native=wait_native=None
+                    with self.timings.measure('page_wait'):wait_native=native.run(self.tasker,wait)
+                    self._checkpoint(batch);_root(wait_native,wait)
+                    continue
                 if hit=='LabyClientDownloadErrorObserved':
-                    if time.monotonic()>=expires:raise BatchStopped('game_session_readback_unknown')
+                    if native.active_now()>=expires:raise BatchStopped('game_session_readback_unknown')
                     # Retry ACK may leave the old dialog during its closing animation.
                     if download_retries:continue
                     download_retries+=1
@@ -230,7 +297,7 @@ class MaaGameSession:
                     batch.transaction('client_download_retry',fields,retry_send)
                     previous_page=previous_native=wait_native=None
                     continue
-                if time.monotonic()>=expires:raise BatchStopped('game_session_readback_unknown')
+                if native.active_now()>=expires:raise BatchStopped('game_session_readback_unknown')
                 page='notice' if hit=='LabyClientNoticeObserved' else 'client_home'
                 if page==previous_page:
                     receipt['title_stability']=dict(consecutive_frames=2,minimum_interval_ms=500,
@@ -239,7 +306,7 @@ class MaaGameSession:
                 # A different actual page replaces the prior candidate; it can
                 # never inherit HOME's stability or permanently skip Notice.
                 previous_page,previous_native=page,receipt
-                if expires-time.monotonic()<.5:raise BatchStopped('game_session_readback_unknown')
+                if expires-native.active_now()<.5:raise BatchStopped('game_session_readback_unknown')
                 with self.timings.measure('page_wait'):wait_native=native.run(self.tasker,wait)
                 self._checkpoint(batch);_root(wait_native,wait)
         finally:native.RUN_DEADLINE.reset(token)
@@ -265,24 +332,38 @@ class MaaGameSession:
 
     def _entry(self,batch,*,recovery=False):
         self._checkpoint(batch)
-        entry='LabyGameSessionRecoveryObserved' if recovery else 'LabyGameSessionEntryObserved'
+        cold=self.cold_start_required
+        entry=('LabyGameSessionColdStartObserved' if cold else
+            'LabyGameSessionRecoveryObserved' if recovery else 'LabyGameSessionEntryObserved')
         names=['LabyDateChangedObserved','LabyClientTitleObserved','LabyClientGameHomeObserved'] if recovery else [
             'LabyDateChangedObserved','LabyDisconnect6002Observed','LabyClientTitleObserved',
             'LabyClientGameHomeObserved','LabyClientAdventureObserved']
-        token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),time.monotonic()+30)) if recovery else None
+        if cold:names=['LabyDateChangedObserved','LabyDisconnect6002Observed','LabyClientTitleObserved',
+            'LabyClientGameHomeObserved','LabyClientAdventureObserved']
+        recovery_seconds=120 if self.server.transient_rotation else 30
+        token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),native.active_now()+recovery_seconds)) if recovery else None
+        survived=0;deadline=min(native.RUN_DEADLINE.get(),native.active_now()+(120 if self.server.transient_rotation else 30))
         try:
-            with self.timings.measure('page_wait'):receipt=native.run(self.tasker,entry)
+            while True:
+                if self.server.channel:receipt=self._channel_observe(batch,entry,seconds=max(0,deadline-native.active_now()))
+                else:
+                    with self.timings.measure('page_wait'):receipt=native.run(self.tasker,entry)
+                self._checkpoint(batch);raw=_root(receipt,entry).get('recognition')
+                if (type(raw) is not list or not 1<=len(raw)<=len(names)
+                    or any(type(row) is not dict or row.get('algorithm')!='And' for row in raw)
+                    or [row.get('name') for row in raw]!=names[:len(raw)]
+                    or any(row.get('box') is not None for row in raw[:-1]) or not _box(raw[-1].get('box'))):
+                    raise BatchStopped('game_session_readback_unknown')
+                hit=raw[-1]['name']
+                if hit=='LabyDateChangedObserved':raise BatchStopped('date_changed')
+                if not cold or hit=='LabyClientTitleObserved':
+                    self.cold_start_required=False
+                    return next(page for page,node in _PAGES.items() if node==hit),receipt
+                if hit=='LabyDisconnect6002Observed':raise BatchStopped('channel_client_close_failed')
+                survived+=1
+                if survived>=2:raise BatchStopped('channel_client_close_failed')
         finally:
             if token is not None:native.RUN_DEADLINE.reset(token)
-        self._checkpoint(batch);raw=_root(receipt,entry).get('recognition')
-        if (type(raw) is not list or not 1<=len(raw)<=len(names)
-            or any(type(row) is not dict or row.get('algorithm')!='And' for row in raw)
-            or [row.get('name') for row in raw]!=names[:len(raw)]
-            or any(row.get('box') is not None for row in raw[:-1]) or not _box(raw[-1].get('box'))):
-            raise BatchStopped('game_session_readback_unknown')
-        hit=raw[-1]['name']
-        if hit=='LabyDateChangedObserved':raise BatchStopped('date_changed')
-        return next(page for page,node in _PAGES.items() if node==hit),receipt
 
     def _title(self,batch,expected):
         # A genuine separately completed native title receipt, not an OR leaf
@@ -309,6 +390,9 @@ class MaaGameSession:
 
     def _input(self,batch,node):
         self._checkpoint(batch)
+        if self.server.server_id in ('cn-aligames','cn-vivo','cn-4399'):
+            match,blocked=self.channel_prompts._read(batch)
+            if match is not None or blocked:raise BatchStopped('channel_login_prompt_changed')
         # Called only inside a newly journaled transaction after duplicate/unknown
         # gates. Maa's max_hit is global to Context, so scope its reset to this
         # one navigation node for this new intent, never to a business budget.
@@ -321,6 +405,7 @@ class MaaGameSession:
 
     def _fields(self,snapshot,**extra):
         fields=dict(enter_id=snapshot.enter_id,protocol_enter_id=snapshot.enter_id,**extra)
+        if self.server.channel:fields.update(server=self.server.server_id,package=self.server.package)
         if self.creation_operation_id is not None:fields['creation_operation_id']=self.creation_operation_id
         return fields
 
@@ -361,7 +446,7 @@ class MaaGameSession:
             raise BatchStopped('game_session_already_attempted')
         self._checkpoint(batch);self.used.add(key);self.creation_operation_id=creation_operation_id;self.opening_snapshot=snapshot
         try:
-            pipeline=game_session_pipeline(batch.binding.account_id)
+            pipeline=game_session_pipeline(batch.binding.account_id,server=self.server.server_id)
             if not self.tasker.resource.override_pipeline(pipeline):raise BatchStopped('game_session_pipeline_unavailable')
             initial,_=self._entry(batch)
             if initial=='disconnect':

@@ -85,11 +85,13 @@ dotnet restore gui\MFAAvalonia\MFAAvalonia.Desktop\MFAAvalonia.Desktop.csproj -r
 dotnet restore gui\MFAAvalonia\PcrUpdate.Tests\PcrUpdate.Tests.csproj -r win-x64 @common
 dotnet restore gui\MFAAvalonia\PcrProfileSwitch.Tests\PcrProfileSwitch.Tests.csproj @common
 dotnet restore gui\MFAAvalonia\PcrLabyrinthCredentials.Tests\PcrLabyrinthCredentials.Tests.csproj @common
+dotnet restore gui\MFAAvalonia\PcrLabyrinthAccounts.Tests\PcrLabyrinthAccounts.Tests.csproj @common
+dotnet restore gui\MFAAvalonia\PcrLabyrinthRatings.Tests\PcrLabyrinthRatings.Tests.csproj @common
 ```
 
 - 前两个项目必须带 `-r win-x64`，否则 `--locked-mode` 报 `NU1004`（锁定文件的 RID 与项目不一致）。
 - 失败可直接重跑同一条命令，已下载的包会跳过。
-- 完成判据：4 条都 `Restored ...`，缓存约 130 个包、2.8 GB，位于 `%USERPROFILE%\.nuget\packages`。
+- 完成判据：6 条都 `Restored ...`，缓存约 130 个包、2.8 GB，位于 `%USERPROFILE%\.nuget\packages`。
 - 如有必要可配置镜像源加速下载。
 
 ## 4. 验证
