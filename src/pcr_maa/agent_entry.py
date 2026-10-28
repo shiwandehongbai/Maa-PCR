@@ -113,6 +113,8 @@ class ExecutionContext:
     mumu: dict | None = None
     controller: dict | None = None
     observation_source: object = None  # Trusted live callable, never saved/PI data.
+    clan_consumption_consent: object = None
+    owner_core_sha256: str | None = None
 
 
 class AlphaEntry(CustomAction):
@@ -151,6 +153,12 @@ class AlphaEntry(CustomAction):
                 or type(grant.schedule_attest_current_plan) is not bool
                 or type(grant.schedule_confirm_new_cycle) is not bool):
             raise ValueError('invalid_owner_binding_or_permissions')
+        if selection['selected_modules'] == ['clan_battle_daily']:
+            if (not callable(grant.clan_consumption_consent) or type(grant.owner_core_sha256) is not str
+                    or re.fullmatch('[0-9a-f]{64}', grant.owner_core_sha256) is None):
+                raise ValueError('trusted_clan_consumption_consent_required')
+        elif grant.clan_consumption_consent is not None:
+            raise ValueError('unexpected_clan_consumption_consent')
         owner = context.tasker
         if not owner.inited or owner.stopping:
             raise RuntimeError('owner_stopped_or_uninitialized_outcome_unknown')
@@ -235,7 +243,8 @@ class AlphaEntry(CustomAction):
                         report = run_owned(facade, config, directory)
                     elif selection['selected_modules'] == ['clan_battle_daily']:
                         from .clan_battle_batch import run_owned
-                        report = run_owned(facade, config, directory)
+                        report = run_owned(facade, config, directory,
+                            consumption_consent=grant.clan_consumption_consent, owner_core_sha256=grant.owner_core_sha256)
                     else:
                         report = supported_daily.execute_supported(facade, config,
                             execute=grant.execute, game_day=grant.game_day, context=grant.count_context,

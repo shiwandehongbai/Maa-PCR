@@ -56,6 +56,17 @@ class ClanGuideSourceTest(unittest.TestCase):
                          dict(phase='D', round_min=23, round_max=None))
         self.assertIsNone(parse_header([], '未知分P')['phase'])
 
+    def test_fourth_phase_and_explicit_rounds_are_read_without_guessing(self):
+        for header in ('第四阶段 23周目及以上', '4阶段 23周目以上', '第4阶段 23+周目', 'D面 23周目及以上'):
+            with self.subTest(header=header):
+                self.assertEqual(parse_header([dict(text=header)], 'other'),
+                                 dict(phase='D', round_min=23, round_max=None))
+        self.assertEqual(parse_header([], '第四阶段 23周目及以上'),
+                         dict(phase='D', round_min=23, round_max=None))
+        self.assertEqual(parse_header([dict(text='第四阶段')], 'other'),
+                         dict(phase='D', round_min=None, round_max=None))
+        self.assertIsNone(parse_header([dict(text='C面 第四阶段 23+周目')], 'other')['phase'])
+
     def test_support_damage_and_explicit_switches(self):
         self.assertEqual(parse_support('qsjs'), 'qsjs')
         self.assertEqual(parse_support('缺谁借谁'), 'qsjs')
@@ -193,6 +204,36 @@ class ClanGuideSourceTest(unittest.TestCase):
                 bundle = prepare_bundle('https://www.bilibili.com/video/BV1Rbh86XEsq/?p=2',Path(directory)/'only-p2')
             self.assertEqual([p['page'] for p in bundle['pages']],[2])
             self.assertEqual(frames.call_count,1)
+
+    def test_share_parameters_preserve_selected_and_all_page_semantics(self):
+        from contextlib import nullcontext
+        def download(url, path, limit):
+            path.write_text(json.dumps(dict(code=0, data=dict(bvid='BV1hQnb6XEyf', title='2026.10月', pages=[
+                dict(page=1,cid=11,part='C'), dict(page=2,cid=22,part='D')]))), encoding='utf-8')
+        def acquire(url, directory):
+            from pcr_maa.guide_source import video_reference
+            bvid, page = video_reference(url)
+            return Path('never.mp4'), dict(bvid=bvid, page=page, cid=page*11, source_url=url)
+        inputs = [
+            ('https://www.bilibili.com/video/BV1hQnb6XEyf/?vd_source=private-value&spm_id_from=333.1&p=2', [2],
+             'https://www.bilibili.com/video/BV1hQnb6XEyf/?p=2'),
+            ('https://www.bilibili.com/video/BV1hQnb6XEyf/?spm_id_from=333.1', [1,2],
+             'https://www.bilibili.com/video/BV1hQnb6XEyf/'),
+            ('https://www.bilibili.com/video/BV1hQnb6XEyf/?p=1&vd_source=x', [1],
+             'https://www.bilibili.com/video/BV1hQnb6XEyf/?p=1')]
+        with TemporaryDirectory(dir=Path.cwd()/'.runtime') as directory, \
+             patch('pcr_maa.clan_guide_source._download', side_effect=download), \
+             patch('pcr_maa.clan_guide_source.offline_ocr', return_value=nullcontext(None)), \
+             patch('pcr_maa.clan_guide_source.acquire_video', side_effect=acquire), \
+             patch('pcr_maa.clan_guide_source.static_frames', return_value=[]), \
+             patch('pcr_maa.clan_guide_source.build_page_jobs', return_value=([],[])):
+            for index, (url, pages, canonical) in enumerate(inputs):
+                with self.subTest(url=url):
+                    output = Path(directory)/str(index)
+                    bundle = prepare_bundle(url, output)
+                    self.assertEqual([p['page'] for p in bundle['pages']], pages)
+                    self.assertEqual(bundle['source']['url'], canonical)
+                    self.assertNotIn('private-value', (output/'bundle.json').read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':

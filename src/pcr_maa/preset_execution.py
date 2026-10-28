@@ -151,6 +151,12 @@ class Journal:
 
     @staticmethod
     def _validate_event(event, index, previous):
+        if isinstance(event, dict) and event.get('state') == 'observed_external':
+            if index != 0 or previous is not None or event.get('operation') != 'clan_battle_external_regular':
+                raise ValueError('Journal sequence invalid')
+            from .clan_battle_batch import validate_external_regular_event
+            validate_external_regular_event(event)
+            return
         if not isinstance(event, dict) or event.get('state') not in ('in_flight', 'settled', 'historical_unknown'):
             raise ValueError('Journal malformed; parent reconciliation required')
         guide_exited = False
@@ -163,6 +169,10 @@ class Journal:
         if index % 2 and event.get('recovery_scope') == 'guide_trial_user_exit':
             from .guide_trial import is_user_exit_history
             guide_exited = is_user_exit_history(event, previous)
+        clan_simulation_exited = False
+        if index % 2 and event.get('recovery_scope') == 'clan_battle_simulation_user_exit':
+            from .clan_battle import is_simulation_user_exit_history
+            clan_simulation_exited = is_simulation_user_exit_history(event, previous)
         closed_run = False
         if index % 2 and event.get('recovery_scope') == 'labyrinth_restart':
             from .labyrinth.restart import is_closed_run_history
@@ -181,7 +191,8 @@ class Journal:
         if (event['state'] != ('in_flight' if index % 2 == 0 else 'settled')
                 and not (index % 2 and event['state'] == 'historical_unknown'
                          and event.get('operation') == 'schedule_onekey')
-                and not retired_invitation and not closed_run and not guide_exited and not guide_progressed):
+                and not retired_invitation and not closed_run and not guide_exited
+                         and not guide_progressed and not clan_simulation_exited):
             raise ValueError('Journal sequence invalid')
 
     def _current_events(self):
@@ -191,8 +202,9 @@ class Journal:
                 raise ValueError('Journal changed while locked')
             return self._cached_events
         events = [] if stamp is None else [json.loads(line) for line in self.path.read_text(encoding='utf-8').splitlines()]
+        offset = int(bool(events) and isinstance(events[0], dict) and events[0].get('state') == 'observed_external')
         for index, event in enumerate(events):
-            self._validate_event(event, index, events[index - 1] if index else None)
+            self._validate_event(event, index - offset if index else 0, events[index - 1] if index else None)
         if self._file_stamp() != stamp:
             raise ValueError('Journal changed during read')
         if self._locked:
@@ -222,7 +234,8 @@ class Journal:
         if self._locked:
             events = self._current_events()
             frozen = json.loads(encoded)
-            self._validate_event(frozen, len(events), events[-1] if events else None)
+            offset = int(bool(events) and isinstance(events[0], dict) and events[0].get('state') == 'observed_external')
+            self._validate_event(frozen, len(events) - offset, events[-1] if events else None)
         with self.path.open('a', encoding='utf-8', newline='\n') as handle:
             before = self._stamp(os.fstat(handle.fileno()))
             if self._locked:

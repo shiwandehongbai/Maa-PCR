@@ -36,6 +36,9 @@ public static partial class PcrAlphaOwner
         public string? ConfigFileHash { get; init; }
         public bool PreparationOnly { get; init; }
         public readonly PcrStartConsent Consent = consent;
+        public readonly PcrClanCodeBinding? ClanCode = selection["selected_modules"] is JArray { Count: 1 } modules
+            && (string?)modules[0] == "clan_battle_daily" ? PcrClanCodeBinding.Capture(repository, (JObject)JObject.Parse(config.Json)["config"]!) : null;
+        public readonly System.Collections.Generic.HashSet<string> ClanRequests = new(StringComparer.Ordinal);
         public readonly Stopwatch Watch = Stopwatch.StartNew();
         public readonly string Invocation = Guid.NewGuid().ToString("N");
         public bool Revoked, Started, Appending, Consumed, RawVerified, ConstructionAttempted, CleanupUnconfirmed;
@@ -80,20 +83,38 @@ public static partial class PcrAlphaOwner
             var port = ReadConnectionAsync().GetAwaiter().GetResult();
             _ = Task.Run(() => WatchConnectionAsync(port));
         }
-        private Task<PcrAgentConnection.Peer> ReadConnectionAsync() => Task.Run(() =>
+        private async Task<PcrAgentConnection.Peer> ReadConnectionAsync()
         {
-            int[] members;
-            lock (exitGate)
+            var cancellation = session.Cancel.Token;
+            cancellation.ThrowIfCancellationRequested();
+            var read = Task.Run(() =>
             {
-                if (disposed != 0 || process.Exited) throw new InvalidOperationException("Owned Agent creation handle exited");
-                members = process.ProcessIds;
+                int[] members;
+                lock (exitGate)
+                {
+                    if (disposed != 0 || process.Exited) throw new InvalidOperationException("Owned Agent creation handle exited");
+                    members = process.ProcessIds;
+                }
+                var peer = PcrAgentConnection.EstablishedConnection(members, int.Parse(request.Identifier));
+                lock (exitGate)
+                    if (disposed != 0 || process.Exited || Array.IndexOf(process.ProcessIds, peer.ProcessId) < 0)
+                        throw new InvalidOperationException("Owned Agent process binding changed");
+                return peer;
+            });
+            try
+            {
+                // A slow OS snapshot is not a disconnected Peer; keep one read until it returns or this Owner stops.
+                var peer = await read.WaitAsync(cancellation).ConfigureAwait(false);
+                cancellation.ThrowIfCancellationRequested();
+                return peer;
             }
-            var peer = PcrAgentConnection.EstablishedConnection(members, int.Parse(request.Identifier));
-            lock (exitGate)
-                if (disposed != 0 || process.Exited || Array.IndexOf(process.ProcessIds, peer.ProcessId) < 0)
-                    throw new InvalidOperationException("Owned Agent process binding changed");
-            return peer;
-        }).WaitAsync(TimeSpan.FromSeconds(2));
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                _ = read.ContinueWith(completed => { _ = completed.Exception; }, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                throw;
+            }
+        }
         private async Task WatchConnectionAsync(PcrAgentConnection.Peer port)
         {
             try
@@ -215,6 +236,11 @@ public static partial class PcrAlphaOwner
                                 ? process.SendGrant(reply.ToString(Formatting.None))
                                 : process.Send(reply.ToString(Formatting.None)));
                         }
+                        else if (line.StartsWith(PcrClanConsumptionConsent.Prefix, StringComparison.Ordinal))
+                        {
+                            var reply = await ConfirmClanConsumptionAsync(session, PcrClanConsumptionConsent.Parse(line[PcrClanConsumptionConsent.Prefix.Length..]));
+                            await ((bool?)reply["ok"] == true ? process.SendGrant(reply.ToString(Formatting.None)) : process.Send(reply.ToString(Formatting.None)));
+                        }
                         else if (line.StartsWith("info:") || line.StartsWith("error:") || line.StartsWith("warning:"))
                         {
                             request.Output(line);
@@ -271,6 +297,7 @@ public static partial class PcrAlphaOwner
                     ["schedule_authorizations"] = new JArray(session.Consent.ScheduleAuthorizations),
                     ["schedule_attest_current_plan"] = session.Consent.AttestCurrentPlan,
                     ["schedule_confirm_new_cycle"] = session.Consent.ConfirmNewCycle };
+                if (session.ClanCode != null) reply["owner_core_sha256"] = session.ClanCode.Core;
                 if (binding["controller"] != null) reply["controller"] = binding["controller"]!.DeepClone();
                 else if (binding["mumu"] != null) reply["mumu"] = binding["mumu"]!.DeepClone();
                 else

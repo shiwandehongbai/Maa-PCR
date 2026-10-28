@@ -205,7 +205,7 @@ internal static class ClanWorkflowChecks
         var preview = (Image)typeof(PcrClanGuideView).GetField("preview", hidden)!.GetValue(view)!;
         var sourceDetails = (Expander)typeof(PcrClanGuideView).GetField("sourceDetails", hidden)!.GetValue(view)!;
         check(!sourceDetails.IsExpanded && image.Source == null && preview.Source == null, "collapsed_source_does_not_decode_images");
-        sourceDetails.IsExpanded = true;
+        sourceDetails.IsExpanded = true; ClanGuideChecks.CompleteLoading(view);
         var boxes = (Dictionary<string, TextBox>)typeof(PcrClanGuideView).GetField("fields", hidden)!.GetValue(view)!;
         boxes["boss_name"].Text = "离线未保存草稿：保留图片与编辑";
         var draft = JObject.FromObject(view.Capture()); var diskHash = PcrClanGuide.Stamp(fixture.Guide);
@@ -221,7 +221,7 @@ internal static class ClanWorkflowChecks
                 var beforeImage = image.Source; var beforePreview = preview.Source;
                 host.Content = null; Dispatcher.UIThread.RunJobs();
                 check(image.Source == null && preview.Source == null, "detach_releases_image_sources_" + cycle);
-                host.Content = view; Dispatcher.UIThread.RunJobs();
+                host.Content = view; Dispatcher.UIThread.RunJobs(); ClanGuideChecks.CompleteLoading(view);
                 check(image.Source != null && preview.Source != null && !ReferenceEquals(image.Source, beforeImage) && !ReferenceEquals(preview.Source, beforePreview), "reattach_recreates_both_images_" + cycle);
                 check(JToken.DeepEquals(draft, JObject.FromObject(view.Capture())) && PcrClanGuide.Stamp(fixture.Guide) == diskHash && !view.HasCurrentConfirmation,
                     "reattach_preserves_unsaved_fields_confirmation_and_disk_" + cycle);
@@ -231,19 +231,19 @@ internal static class ClanWorkflowChecks
             var freshImage = (Image)typeof(PcrClanGuideView).GetField("image", hidden)!.GetValue(fresh)!;
             var freshPreview = (Image)typeof(PcrClanGuideView).GetField("preview", hidden)!.GetValue(fresh)!;
             var freshDetails = (Expander)typeof(PcrClanGuideView).GetField("sourceDetails", hidden)!.GetValue(fresh)!;
-            freshDetails.IsExpanded = true;
+            freshDetails.IsExpanded = true; ClanGuideChecks.CompleteLoading(fresh);
             check(fresh.HasCurrentConfirmation, "source_change_case_starts_confirmed");
             host.Content = fresh; Dispatcher.UIThread.RunJobs(); host.Content = null; Dispatcher.UIThread.RunJobs();
             var path = (string)fresh.Capture().Job["source"]!["image_path"]!; var bytes = File.ReadAllBytes(path);
             try
             {
                 File.WriteAllBytes(path, bytes.Concat(new byte[] { 0 }).ToArray());
-                host.Content = fresh; Dispatcher.UIThread.RunJobs();
+                host.Content = fresh; Dispatcher.UIThread.RunJobs(); ClanGuideChecks.CompleteLoading(fresh);
                 check(freshImage.Source == null && freshPreview.Source == null && !fresh.HasCurrentConfirmation && fresh.Capture().ConfirmedFor == null
                     && fresh.StatusText.Contains("图片"), "reattach_changed_source_stays_blank_and_revokes_confirmation");
             }
             finally { File.WriteAllBytes(path, bytes); host.Content = null; Dispatcher.UIThread.RunJobs(); }
-            host.Content = fresh; Dispatcher.UIThread.RunJobs();
+            host.Content = fresh; Dispatcher.UIThread.RunJobs(); ClanGuideChecks.CompleteLoading(fresh);
             check(freshImage.Source != null && freshPreview.Source != null && !fresh.HasCurrentConfirmation && PcrClanGuide.Stamp(fixture.Guide) == diskHash,
                 "restored_source_reloads_images_without_restoring_confirmation_or_saving");
         }

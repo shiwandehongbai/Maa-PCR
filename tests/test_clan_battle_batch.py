@@ -278,7 +278,7 @@ def test_carryover_uses_actual_new_instance_before_next_regular(tmp_path, daily_
     assert port.executions[1]['action']['round'] > port.executions[0]['action']['round']
 
 
-@pytest.mark.parametrize('fault', ['same_instance', 'appeared_before_issue', 'unavailable'])
+@pytest.mark.parametrize('fault', ['same_instance', 'unavailable'])
 def test_round_increase_alone_never_proves_new_carry_target(tmp_path, daily_request, fault):
     port = Port(daily_request)
     port.issue = {1}
@@ -289,25 +289,23 @@ def test_round_increase_alone_never_proves_new_carry_target(tmp_path, daily_requ
             row['bosses'][0]['round'] = 5
             if fault == 'same_instance':
                 row['bosses'][0]['instance_id'] = 'synthetic-instance-1-original'
-            elif fault == 'appeared_before_issue':
-                row['bosses'][0]['appeared_at'] = (NOW - timedelta(seconds=10)).isoformat()
             else:
                 row['bosses'][0]['available'] = False
         return row
     port.observe = changed
     result, _ = run(tmp_path, daily_request, port)
-    assert result['outcome'] == 'remind_carryover' and result['regular_settled'] == 3
-    assert result['remaining_count'] == 0
-    assert [row['action']['kind'] for row in port.executions] == ['regular'] * 3
+    assert result['outcome'] == 'remind_carryover' and result['regular_settled'] == 1
+    assert result['remaining_count'] == 2
+    assert [row['action']['kind'] for row in port.executions] == ['regular']
     assert result['held_carryovers'][0]['reason'] == 'same_boss_new_appearance_not_observed'
 
 
-def test_held_carry_can_resume_after_main_targets_complete(tmp_path, daily_request):
+def test_held_carry_can_resume_when_same_boss_becomes_available(tmp_path, daily_request):
     port = Port(daily_request)
     port.issue, port.refresh = {1}, False
     result, _ = run(tmp_path, daily_request, port)
     assert result['outcome'] == 'remind_carryover'
-    assert result['remaining_count'] == 0
+    assert result['remaining_count'] == 2
     port.clock += timedelta(seconds=1)
     port.instances[1] = ('synthetic-later-instance', port.clock)
     port.rounds[1] += 1
@@ -317,19 +315,19 @@ def test_held_carry_can_resume_after_main_targets_complete(tmp_path, daily_reque
 
 def test_carry_priority_is_source_slot_then_stock_not_grant_insertion(tmp_path, daily_request):
     port = Port(daily_request)
-    port.available[1] = False
-    port.issue, port.refresh = {1, 2}, False
+    port.issue = {1, 2}
     run(tmp_path, daily_request, port)
-    port.available[1] = True
-    run(tmp_path, daily_request, port)
-    port.clock += timedelta(seconds=1)
-    port.instances[1] = ('later-one', port.clock)
-    port.instances[2] = ('later-two', port.clock)
-    port.rounds[1] += 1
-    port.rounds[2] += 1
-    result, _ = run(tmp_path, daily_request, port)
-    assert result['outcome'] == 'complete'
-    assert [row['action']['slot'] for row in port.executions if row['action']['kind'] == 'carryover'] == [1, 2]
+    events = Journal(ledgers(tmp_path)[0].parent).events()
+    binding = {key:events[0][key] for key in batch.BINDING_KEYS}
+    regular, grants, _, _, external = batch._history(events,daily_request,binding)
+    observation = port.observe(binding)
+    observation['carry_stock_indices'] = [1,0]
+    reversed_grants = {1:grants[1],0:grants[0]}
+    chosen = batch.choose_action(daily_request,binding,observation,regular,reversed_grants,set(),external=external)
+    assert chosen['action']['slot'] == 1
+    observation['carry_stock_indices'] = [1]
+    chosen = batch.choose_action(daily_request,binding,observation,regular,reversed_grants,{0},external=external)
+    assert chosen['action']['slot'] == 2
 
 
 @pytest.mark.parametrize('fail', ['stopped', '6002', 'result_unknown'])
@@ -663,15 +661,15 @@ def test_uncalibrated_axis_does_not_create_intent(tmp_path, daily_request):
     assert result['error'] == 'clan_battle_timing_not_calibrated' and not port.executions and not ledgers(tmp_path)
 
 
-def test_carry_axis_not_shifted_to_shorter_actual_start_time(tmp_path, daily_request):
+def test_carry_keeps_formal_axis_unsupported_scope(tmp_path, daily_request):
     daily_request['slot_plans']['1']['switches'] = [dict(remaining_seconds=60, auto=False, set_by_unit={})]
     rebind(daily_request)
     port = Port(daily_request)
     port.issue = {1}
     result, _ = run(tmp_path, daily_request, port)
     assert result['outcome'] == 'remind_carryover'
-    assert result['held_carryovers'][0]['reason'] == 'carryover_axis_start_time_incompatible'
-    assert len(port.executions) == 3
+    assert result['held_carryovers'][0]['reason'] == 'clan_battle_daily_opening_axis_unsupported'
+    assert len(port.executions) == 1
 
 
 def test_no_simulation_or_guide_ledger_is_read_or_written(tmp_path, daily_request):
@@ -728,11 +726,12 @@ def test_production_entry_dispatches_reviewed_adapter_through_existing_batch_and
         return {'calibration_id': 'synthetic-full-profile'}
     monkeypatch.setattr(clan_battle_calibration, 'load_calibration', loaded)
     monkeypatch.setattr(clan_battle_daily_native, 'require_daily_execution', lambda *args: {})
-    def adapter(tasker, directory, *, request, calibrations):
+    def adapter(tasker, directory, *, request, calibrations, consumption_consent, owner_core_sha256):
         assert request == daily_request and len(calibrations) == 3
         return port
     monkeypatch.setattr(clan_battle_daily_native, 'NativeClanDailyAdapter', adapter)
-    report = batch.run_owned(object(), {'clan_battle_daily': daily_request}, tmp_path / 'report')
+    report = batch.run_owned(object(), {'clan_battle_daily': daily_request}, tmp_path / 'report',
+        consumption_consent=lambda *args: None, owner_core_sha256='a'*64)
     result = report['steps'][0]['result']
     assert report['outcome'] == result['outcome'] == 'complete'
     assert result['daily_execution_available'] is True and result['regular_settled'] == 3
@@ -759,7 +758,7 @@ def test_rescanning_same_boss_round_cannot_manufacture_a_new_carry_target(tmp_pa
     second, _ = run(tmp_path, daily_request, port)
     assert second['outcome'] == 'remind_carryover'
     assert second['held_carryovers'][0]['reason'] == 'same_boss_new_appearance_not_observed'
-    assert len(port.executions) == 3 and port.inventory == [0]
+    assert len(port.executions) == 1 and port.inventory == [0]
 
 
 @pytest.mark.parametrize('cp,earned', [(0, 0), (299, 0), (300, 1), (599, 1), (600, 2), (900, 3)])
@@ -829,12 +828,12 @@ def test_cp_requires_actual_cumulative_observation(tmp_path, daily_request, faul
 
 def test_carry_does_not_spend_cp_and_can_run_with_zero_regular_challenges(tmp_path, daily_request):
     port = Port(daily_request)
-    port.issue, port.refresh = {1}, False
+    port.issue, port.refresh = {3}, False
     result, _ = run(tmp_path, daily_request, port)
     assert result['outcome'] == 'remind_carryover' and result['cp'] == 900 and result['remaining_count'] == 0
     port.clock += timedelta(seconds=1)
-    port.instances[1] = ('synthetic-later-instance', port.clock)
-    port.rounds[1] += 1
+    port.instances[3] = ('synthetic-later-instance', port.clock)
+    port.rounds[3] += 1
     result, _ = run(tmp_path, daily_request, port)
     assert result['outcome'] == 'complete' and result['cp'] == 900
 
@@ -863,8 +862,9 @@ def test_first_seen_instance_has_no_invented_appearance_time_for_carry(tmp_path,
         return row
     port.observe = first_seen
     result, _ = run(tmp_path, daily_request, port)
-    assert result['outcome'] == 'remind_carryover' and result['regular_settled'] == 3
-    assert result['carryover_settled'] == 0
+    assert result['outcome'] == 'complete' and result['regular_settled'] == 3
+    assert result['carryover_settled'] == 1
+    assert all(boss['appeared_at'] is None for row in port.executions for boss in row['before']['bosses'])
 
 
 def test_current_start_not_sent_closes_only_this_attempt_and_requires_new_start(tmp_path, daily_request):
@@ -939,3 +939,132 @@ def test_carry_start_not_sent_preserves_grant_for_explicit_resumption(tmp_path, 
     result, _ = run(tmp_path, daily_request, port)
     assert result['outcome'] == 'complete' and result['carryover_settled'] == 1
     assert len([row for row in port.executions if row['action']['kind'] == 'regular']) == 3
+
+
+def cancelled_carry_confirmation(tmp_path, request):
+    """Synthetic completed formation click, unclicked confirmation, then UI cancel."""
+    port = Port(request)
+    port.issue = {1}
+    execute, prepare = port.execute, port.prepare
+    def select(action, job, binding):
+        ready = prepare(action, job, binding)
+        if action['kind'] == 'carryover':
+            ready['evidence']['carry_selection'] = dict(stock_index=action['stock_index'],
+                time=action['start_seconds'], using_unit=list(ready['unit_ids']),
+                support_unit=ready['support_unit'], support_owner_viewer_id=ready['support_owner_viewer_id'])
+        return ready
+    def stopped(intent, job):
+        if intent['action']['kind'] == 'carryover':
+            raise RuntimeError('synthetic_confirmation_not_recognized')
+        return execute(intent, job)
+    port.prepare, port.execute = select, stopped
+    result, _ = run(tmp_path, request, port)
+    assert result['outcome'] == 'stopped'
+    journal = Journal(ledgers(tmp_path)[0].parent)
+    rows = journal.events()
+    intent = rows[-1]
+    assert len(rows) == 3 and intent['action']['kind'] == 'carryover'
+    cancelled = port.clock + timedelta(seconds=5)
+    observed = cancelled + timedelta(seconds=1)
+    artifacts = {key: dict(path='synthetic-' + key, sha256='a' * 64)
+        for key in ('start_receipt', 'native_log', 'confirmation_frame', 'cancel_input', 'inventory', 'lobby')}
+    row = dict(deepcopy(intent), state='settled', recovery=dict(
+        kind='carryover_confirmation_cancelled', observed_at=observed.isoformat(),
+        after=dict(remaining_count=intent['before']['remaining_count'], cp=intent['before']['cp'],
+            carry_stock_indices=list(intent['before']['carry_stock_indices']),
+            stock=deepcopy(intent['ready']['evidence']['carry_selection'])),
+        evidence=dict(source='manual_confirmation_cancel_readback', cancelled_at=cancelled.isoformat(),
+            cancel_verified=True, confirmation_input_count=0, artifacts=artifacts,
+            start_receipt=dict(tasker_inited=True, task_id=99, native_ok=False, nodes=[
+                dict(name='CBStart', completed=True, action=dict(name='CBStart', success=True)),
+                dict(name='', completed=False, action=None)]))))
+    port.execute, port.clock = execute, observed
+    return port, journal, rows, row
+
+
+def test_carry_confirmation_cancel_closes_without_consuming_and_resumes_once(tmp_path, daily_request):
+    port, journal, rows, row = cancelled_carry_confirmation(tmp_path, daily_request)
+    binding = {key: row[key] for key in batch.BINDING_KEYS}
+    regular, grants, consumed, pending, external = batch._history(rows + [row], daily_request, binding)
+    assert len(regular) == 1 and set(grants) == {0} and consumed == set() and pending is False
+    assert not external and 'result' not in row and 'input_execution' not in row
+    original = journal.path.read_bytes()
+    with journal.locked():
+        journal.append(row)
+    assert journal.path.read_bytes().startswith(original)
+    report, _ = run(tmp_path, daily_request, port)
+    assert report['outcome'] == 'complete' and report['regular_settled'] == 3 and report['carryover_settled'] == 1
+    assert len(journal.events()) == 10
+    assert [x['action']['kind'] for x in port.executions] == ['regular', 'carryover', 'regular', 'regular']
+
+
+@pytest.mark.parametrize('fault', [
+    'extra_result', 'changed_intent', 'wrong_kind', 'missing_stock', 'wrong_stock', 'wrong_time',
+    'wrong_team', 'wrong_support', 'changed_cp', 'changed_count', 'missing_inventory',
+    'confirmation_input', 'confirmation_unknown', 'confirmation_bool', 'confirmation_action',
+    'formation_unsent', 'duplicate_formation_input', 'malformed_action', 'bool_stock',
+    'cancel_unverified', 'cancel_before_intent', 'readback_before_cancel',
+    'cross_day', 'missing_artifact', 'invalid_hash', 'wrong_source'])
+def test_carry_confirmation_cancel_rejects_incomplete_or_changed_proof(tmp_path, daily_request, fault):
+    port, journal, rows, row = cancelled_carry_confirmation(tmp_path, daily_request)
+    recovery = row['recovery']
+    after, proof = recovery['after'], recovery['evidence']
+    if fault == 'extra_result': row['result'] = {}
+    elif fault == 'changed_intent': row['intent_id'] = 'b' * 64
+    elif fault == 'wrong_kind': recovery['kind'] = 'regular_confirmation_cancelled'
+    elif fault == 'missing_stock': after['stock'] = None
+    elif fault == 'wrong_stock': after['stock']['stock_index'] = 1
+    elif fault == 'wrong_time': after['stock']['time'] += 1
+    elif fault == 'wrong_team': after['stock']['using_unit'].reverse()
+    elif fault == 'wrong_support': after['stock']['support_unit'] = after['stock']['using_unit'][0]
+    elif fault == 'changed_cp': after['cp'] -= 1
+    elif fault == 'changed_count': after['remaining_count'] -= 1
+    elif fault == 'missing_inventory': after['carry_stock_indices'] = []
+    elif fault == 'confirmation_input': proof['confirmation_input_count'] = 1
+    elif fault == 'confirmation_unknown': proof['confirmation_input_count'] = None
+    elif fault == 'confirmation_bool': proof['confirmation_input_count'] = False
+    elif fault == 'confirmation_action':
+        proof['start_receipt']['nodes'].append(dict(name='CBDailyStartConfirmation', completed=True,
+            action=dict(name='CBDailyStartConfirmation', success=True)))
+    elif fault == 'formation_unsent': proof['start_receipt']['nodes'][0]['action']['success'] = False
+    elif fault == 'duplicate_formation_input':
+        proof['start_receipt']['nodes'].append(deepcopy(proof['start_receipt']['nodes'][0]))
+    elif fault == 'malformed_action': proof['start_receipt']['nodes'][0]['action'] = 'unknown'
+    elif fault == 'bool_stock': after['stock']['stock_index'] = False
+    elif fault == 'cancel_unverified': proof['cancel_verified'] = False
+    elif fault == 'cancel_before_intent':
+        proof['cancelled_at'] = (batch._timestamp(row['observed_at']) - timedelta(seconds=1)).isoformat()
+    elif fault == 'readback_before_cancel': recovery['observed_at'] = row['observed_at']
+    elif fault == 'cross_day': recovery['observed_at'] = (port.clock + timedelta(days=1)).isoformat()
+    elif fault == 'missing_artifact': del proof['artifacts']['native_log']
+    elif fault == 'invalid_hash': proof['artifacts']['inventory']['sha256'] = 'unknown'
+    elif fault == 'wrong_source': proof['source'] = 'automatic_settlement'
+    binding = {key: row[key] for key in batch.BINDING_KEYS}
+    with pytest.raises(ValueError):
+        batch._history(rows + [row], daily_request, binding)
+    assert journal.events() == rows
+
+
+def test_carry_confirmation_cancel_preserves_readback_time_lower_bound(tmp_path, daily_request):
+    port, journal, rows, row = cancelled_carry_confirmation(tmp_path, daily_request)
+    with journal.locked():
+        journal.append(row)
+    port.clock = batch._timestamp(row['recovery']['observed_at']) - timedelta(seconds=1)
+    before = len(port.executions)
+    report, _ = run(tmp_path, daily_request, port)
+    assert report['error'] == 'daily_observation_clock_rollback'
+    assert len(port.executions) == before and journal.events() == rows + [row]
+
+
+@pytest.mark.parametrize('fault', ['regular_intent', 'unissued_stock', 'consumed_stock'])
+def test_carry_confirmation_cancel_only_resolves_existing_unused_carry(tmp_path, daily_request, fault):
+    port, journal, rows, row = cancelled_carry_confirmation(tmp_path, daily_request)
+    binding = {key: row[key] for key in batch.BINDING_KEYS}
+    regular, grants, consumed, pending, external = batch._history(rows, daily_request, binding)
+    intent = deepcopy(rows[-1])
+    if fault == 'regular_intent':
+        intent['action']['kind'] = row['action']['kind'] = 'regular'
+    elif fault == 'unissued_stock': grants.clear()
+    elif fault == 'consumed_stock': consumed.add(0)
+    with pytest.raises(ValueError, match='daily_carryover_cancel_proof_invalid'):
+        batch._cancelled_carryover_confirmation(row, intent, grants, consumed, binding)

@@ -7,7 +7,7 @@ import re
 
 INDEX_PATH = 'assets/resource/clan-battle-calibrations/index.json'
 # Updated with reviewed bundle contents, never with a player's local configuration.
-INDEX_SHA256 = '62b7e11ca8ef4bb6cee03ca24b35fc9fe17e49eddc88fe6d4d6ca76b165207e0'
+INDEX_SHA256 = 'b006c5b9810d9ff9a0ebe378e7107611f632d790e9d7f2e1a014b3a4bd48a214'
 HEX = re.compile(r'[0-9a-f]{64}')
 ENTRY_KEYS = {'calibration_id', 'server', 'content_version', 'frame_size', 'profile_path', 'profile_sha256'}
 CAPABILITIES = {'simulation', 'timed', 'formal', 'carryover'}
@@ -143,6 +143,11 @@ def load_calibration(plan, *, root=None, capability='simulation'):
             if type(daily['execution']) is not dict:
                 raise ValueError('clan_battle_daily_execution_calibration_missing')
             sample_sections.append(daily['execution'])
+            for name in ('start_confirmation', 'carry_start_confirmation', 'result_reward'):
+                if name in daily['execution']:
+                    if type(daily['execution'][name]) is not dict:
+                        raise ValueError('clan_battle_daily_dialog_calibration_invalid:' + name)
+                    sample_sections.append(daily['execution'][name])
             if 'opening' in daily['execution']:
                 opening = daily['execution']['opening']
                 if type(opening) is not dict or type(opening.get('inheritance')) is not dict:
@@ -186,11 +191,12 @@ def load_calibration(plan, *, root=None, capability='simulation'):
     else:
         calibration.pop('timing_measurements', None)
     from .clan_battle_native import calibration_pipeline, timing_capability
-    calibration_pipeline(calibration, plan)
-    if 'daily' in calibration or capability in ('formal', 'carryover'):
+    calibration_pipeline(calibration, plan, capability=capability)
+    if 'daily' in calibration or capability in ('formal', 'carryover') or 'carryover' in capabilities:
         from .clan_battle_daily_native import daily_pipeline, require_daily_execution
-        if capability in ('formal', 'carryover') or calibration['daily'].get('version') == 2:
-            require_daily_execution(calibration, plan, require_scope=capability in ('formal', 'carryover'))
+        if capability in ('formal', 'carryover') or 'carryover' in capabilities or calibration['daily'].get('version') == 2:
+            scope = 'carryover' if 'carryover' in capabilities else capability
+            require_daily_execution(calibration, plan, require_scope=capability in ('formal', 'carryover'), capability=scope)
         else:
             daily_pipeline(calibration, plan)
     if 'timed' in capabilities and timing_capability(calibration).get('validated') is not True:

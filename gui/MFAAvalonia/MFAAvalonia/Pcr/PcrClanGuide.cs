@@ -148,7 +148,7 @@ public static class PcrClanGuide
     {
         return ValidateBundle(ReadJson(Local(path)));
     }
-    private static JObject ValidateBundle(JObject root)
+    internal static JObject ValidateBundle(JObject root)
     {
         if ((int?)root["version"] != 1 || root["source"] is not JObject || root["pages"] is not JArray pages || pages.Count is < 1 or > 100
             || root["jobs"] is not JArray jobs || jobs.Count is < 1 or > 500 || jobs.Any(x => x is not JObject))
@@ -159,11 +159,20 @@ public static class PcrClanGuide
     }
     public static void Select(PcrClanGuideDocument document, string bundlePath, string jobId)
     {
+        var inputs = new PlanInputs();
+        var selected = JsonConvert.DeserializeObject<PcrClanGuideDocument>(JsonConvert.SerializeObject(document))!;
+        Select(selected, bundlePath, jobId, inputs);
+        inputs.Verify();
+        document.BundlePath = selected.BundlePath; document.BundleSha256 = selected.BundleSha256;
+        document.SelectedJobId = selected.SelectedJobId; document.Job = selected.Job; document.ConfirmedFor = selected.ConfirmedFor;
+    }
+    internal static void Select(PcrClanGuideDocument document, string bundlePath, string jobId, PlanInputs inputs)
+    {
         bundlePath = Local(bundlePath);
-        var before = Stamp(bundlePath);
-        var bundle = Bundle(bundlePath);
+        var before = inputs.Stamp(bundlePath);
+        var bundle = ValidateBundle(inputs.Json(bundlePath));
         var jobs = ((JArray)bundle["jobs"]!).OfType<JObject>().Where(j => (string?)j["source"]?["job_id"] == jobId).ToArray();
-        if (jobs.Length != 1 || Stamp(bundlePath) != before) throw new InvalidDataException("所选作业不存在或材料读取时发生变化。");
+        if (jobs.Length != 1) throw new InvalidDataException("所选作业不存在或材料读取时发生变化。");
         document.BundlePath = bundlePath; document.BundleSha256 = before!; document.SelectedJobId = jobId;
         document.Job = (JObject)jobs[0].DeepClone(); document.ConfirmedFor = null;
         if (document.SavedJobs.TryGetValue(before + ":" + jobId, out var saved) && JToken.DeepEquals(saved.Job["source"], jobs[0]["source"]))
@@ -210,6 +219,32 @@ public static class PcrClanGuide
         if (now - at > TimeSpan.FromHours(24)) throw new InvalidDataException("账号缓存已超过 24 小时，请在空闲时通过原账号模块刷新。");
         return value;
     }
+    internal static int? SupportRequirement(JObject job, JObject snapshot)
+    {
+        var mode = (string?)job["support_mode"];
+        if (mode is not ("none" or "qsjs" or "specified") || job["unit_ids"] is not JArray members
+            || members.Count != 5 || members.Any(id => id.Type != JTokenType.Integer))
+            throw new InvalidDataException("五人或支援方式尚未明确。");
+        var ids = members.Values<int>().ToArray();
+        var required = mode == "specified" ? (int?)job["support_unit_id"] : null;
+        if (mode == "specified" && (!required.HasValue || !ids.Contains(required.Value)))
+            throw new InvalidDataException("指定支援必须是本队角色。");
+        var owned = ((JArray)snapshot["units"]!).Select(row => (int)row["unit_id"]!).ToHashSet();
+        var unknown = ((JArray)snapshot["unknown_fields"]!).Values<string>().ToArray();
+        bool Unknown(int id) => new[] { "units", "unit_list", "ownership", "units.ownership", "units." + id.ToString(CultureInfo.InvariantCulture) + ".ownership" }
+            .Any(path => unknown.Any(field => field == path || path.StartsWith(field + ".", StringComparison.Ordinal)));
+        if (ids.Any(id => id != required && Unknown(id))) throw new InvalidDataException("本队自有角色的持有资料标为未知，不能推断持有或缺少。");
+        var absent = ids.Where(id => !owned.Contains(id)).ToArray();
+        if (required.HasValue)
+        {
+            if (absent.Any(id => id != required)) throw new InvalidDataException("本队缺少的角色超出所选支援方式。");
+            return required;
+        }
+        if (absent.Length == 0) return null;
+        if (snapshot["ownership_complete"]?.Value<bool>() != true) throw new InvalidDataException("原账号资料的持有范围不完整，缺行不能当作缺角色。");
+        if (mode == "qsjs" && absent.Length == 1) return absent[0];
+        throw new InvalidDataException("本队缺少的角色超出所选支援方式，不能替换其他角色。");
+    }
     public static JObject BuildPlan(PcrClanGuideDocument document, string configDirectory, string repository, DateTimeOffset now)
     {
         var inputs = new PlanInputs();
@@ -253,7 +288,6 @@ public static class PcrClanGuide
         var units = ((JArray)snapshot["units"]!).OfType<JObject>().ToDictionary(u => (int)u["unit_id"]!);
         var unknown = ((JArray)snapshot["unknown_fields"]!).Values<string>().ToHashSet(StringComparer.Ordinal);
         bool Unknown(string path) => unknown.Any(item => path == item || path.StartsWith(item + ".", StringComparison.Ordinal));
-        bool OwnershipUnknown(int id) => Unknown("units") || Unknown("unit_list") || Unknown("ownership") || Unknown("units.ownership") || Unknown("units." + id.ToString(CultureInfo.InvariantCulture) + ".ownership");
         var resolvedStars = new JArray();
         for (var index = 0; index < 5; index++)
         {
@@ -285,11 +319,7 @@ public static class PcrClanGuide
         var support = job["support_unit_id"];
         if (mode == "specified" && !ids.Contains(Number(support, "指定支援", 1, 100000000)) || mode != "specified" && support?.Type != JTokenType.Null)
             throw new InvalidDataException("指定支援必须是本队角色，其他支援方式不填写指定角色。");
-        var absent = ids.Where(id => !units.ContainsKey(id)).ToArray();
-        if (ids.Any(id => (mode != "specified" || id != (int)support!) && OwnershipUnknown(id))) throw new InvalidDataException("本队自有角色的持有资料标为未知，不能推断持有或缺少。");
-        if (mode == "qsjs" && absent.Length > 0 && snapshot["ownership_complete"]?.Value<bool>() != true) throw new InvalidDataException("原账号资料的持有范围不完整，缺行不能当作缺角色。");
-        if (mode == "none" && absent.Length > 0 || mode == "qsjs" && absent.Length > 1 || mode == "specified" && absent.Any(id => id != (int)support!))
-            throw new InvalidDataException("本队缺少的角色超出所选支援方式，不能替换其他角色。");
+        _ = SupportRequirement(job, snapshot);
         if (job["reference_damage"]?.Type != JTokenType.Null) _ = LongNumber(job["reference_damage"], "参考伤害", 1, long.MaxValue);
         var plan = new JObject { ["version"] = 1, ["server"] = "cn-bilibili", ["account_id"] = snapshot["account_id"]!.DeepClone(), ["content_version"] = snapshot["content_version"]!.DeepClone() };
         foreach (var key in JobFields) plan[key] = job[key]?.DeepClone() ?? JValue.CreateNull();

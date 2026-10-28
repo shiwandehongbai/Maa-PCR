@@ -1,0 +1,25 @@
+{
+  "files": [
+    {
+      "path": "src/pcr_maa/a.py",
+      "text": "answer = 1\n"
+    },
+    {
+      "path": "src/pcr_maa/z.py",
+      "text": "answer = 2\r\n"
+    },
+    {
+      "path": "src/pcr_maa/中文.py",
+      "text": "name = '中文'\n"
+    },
+    {
+      "path": "src/pcr_maa/😀.py",
+      "text": "emoji = 1\n"
+    },
+    {
+      "path": "src/pcr_maa/.py",
+      "text": "private_area = 1\n"
+    }
+  ],
+  "sha256": "0bb0da93797049847686b8b7844357dd9a46c62a7327269c8c02a695adf37b0c"
+}

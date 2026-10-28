@@ -186,6 +186,7 @@ def test_account_stars_reject_missing_changed_or_stale_values(plan, change, erro
 
 
 def test_account_stars_cannot_authorize_a_borrowed_unit(plan):
+    snapshot_update(plan, lambda s: s['units'].pop())
     with pytest.raises(RuntimeError, match='account_stars_support_uncalibrated'):
         account_battle_stars(plan)
 

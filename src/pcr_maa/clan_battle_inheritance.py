@@ -1,9 +1,8 @@
-"""Temporarily disable battle inheritance through the same Owner, then restore it."""
+"""Preserve battle inheritance and reconcile only read-back legacy restore records."""
 from copy import deepcopy
 import hashlib
 import json
 import re
-from uuid import uuid4
 
 import cv2
 import numpy as np
@@ -18,7 +17,7 @@ OPERATION = 'clan_battle_inheritance'
 
 def inheritance_pipeline(spec):
     from .clan_battle_native import _node
-    if (type(spec) is not dict or set(spec) != {'battle_selected', 'radio_on', 'radio_off', 'samples'}
+    if (type(spec) is not dict or set(spec) - {'ub_auto_clear'} != {'battle_selected', 'radio_on', 'radio_off', 'samples'}
             or any(type(spec[key]) is not dict or spec[key].get('recognition') != 'TemplateMatch'
                    for key in ('battle_selected', 'radio_on', 'radio_off'))):
         raise ValueError('clan_battle_inheritance_calibration_invalid')
@@ -35,6 +34,17 @@ def inheritance_pipeline(spec):
             ('OffLabel', '^无法继承$', [930, 180, 180, 395]),
             ('CloseLabel', '^关闭$', [565, 605, 160, 70])):
         nodes['CBInheritance'+name] = _node(dict(roi=roi, expected=expected))
+    if 'ub_auto_clear' in spec:
+        policy = spec['ub_auto_clear']
+        if (type(policy) is not dict or set(policy) != {'description', 'on_label', 'off_label'}
+                or any(type(policy[key]) is not dict or policy[key].get('recognition') != 'OCR'
+                    for key in policy)):
+            raise ValueError('clan_battle_ub_auto_clear_calibration_invalid')
+        for name, key in (('Description', 'description'), ('OnLabel', 'on_label'), ('OffLabel', 'off_label')):
+            nodes['CBSetReset'+name] = _node(policy[key])
+        nodes['CBSetResetRead'] = dict(recognition='Custom', custom_recognition='ClanBattleInheritance',
+            custom_recognition_param='read_ub_auto_clear', action='DoNothing', next=[],
+            timeout=1000, pre_delay=0, post_delay=0)
     base = ['CBInheritanceSettingsTitle', 'CBInheritanceCloseLabel']
     nodes['CBInheritanceSettingsObserved'] = dict(recognition='And', all_of=base,
         action='DoNothing', next=[], timeout=1000, pre_delay=0, post_delay=0)
@@ -61,26 +71,31 @@ class InheritancePage(CustomRecognition):
     def __init__(self, spec, reader):
         super().__init__()
         self.reader = reader
+        self.ub_auto_clear = 'ub_auto_clear' in spec
         self.radios = {state: cv2.imdecode(np.frombuffer(
             (native.RESOURCE/'image'/spec['radio_'+state]['template']).read_bytes(), np.uint8), cv2.IMREAD_COLOR)
                        for state in ('on', 'off')}
         if any(image is None or image.shape != (18, 18, 3) for image in self.radios.values()):
             raise ValueError('clan_battle_inheritance_radio_invalid')
 
-    def read(self, context, image):
+    def read(self, context, image, *, prefix='CBInheritance', field='inherit'):
         if context.tasker.stopping or image is None or image.shape != (720, 1280, 3):
             raise RuntimeError('clan_battle_inheritance_unknown')
         for name in ('SettingsTitle', 'BattleSelected'):
             if not self.reader.hit(context, image, 'CBInheritance'+name):
                 raise RuntimeError('clan_battle_inheritance_unknown')
-        self.reader.word(context, image, 'CBInheritanceDescription')
+        self.reader.word(context, image, prefix+'Description')
         boxes = []
         for name in ('OnLabel', 'OffLabel'):
-            self.reader.word(context, image, 'CBInheritance'+name)
-            boxes.append(list(context.run_recognition('CBInheritance'+name, image).box))
+            self.reader.word(context, image, prefix+name)
+            boxes.append(list(context.run_recognition(prefix+name, image).box))
         left, right = boxes
         if abs(left[1]+left[3]/2-right[1]-right[3]/2) > 5 or not 250 < right[0]-left[0] < 360:
             raise RuntimeError('clan_battle_inheritance_unknown')
+        if prefix == 'CBSetReset':
+            description = list(context.run_recognition(prefix+'Description', image).box)
+            if not 30 < left[1]+left[3]/2-description[1]-description[3] < 140:
+                raise RuntimeError('clan_battle_inheritance_unknown')
         centers = [(box[0]-39, int(box[1]+box[3]/2)) for box in boxes]
         states = []
         for x, y in centers:
@@ -93,13 +108,18 @@ class InheritancePage(CustomRecognition):
             states.append(matches[0])
         if states not in (['on', 'off'], ['off', 'on']):
             raise RuntimeError('clan_battle_inheritance_unknown')
-        return dict(inherit=states[0] == 'on', same_frame=True,
+        return dict({field: states[0] == 'on'}, same_frame=True,
             frame_pixel_sha256=hashlib.sha256(image.tobytes()).hexdigest()), centers
 
     def analyze(self, context, argv):
         try:
-            reading, centers = self.read(context, argv.image)
             mode = json.loads(argv.custom_recognition_param)
+            if mode == 'read_ub_auto_clear':
+                if not self.ub_auto_clear:
+                    return None
+                reading, _ = self.read(context, argv.image, prefix='CBSetReset', field='auto_release_on_ub')
+                return self.AnalyzeResult(box=[0, 0, 1, 1], detail=reading)
+            reading, centers = self.read(context, argv.image)
             if mode not in ('read', 'enable', 'disable') or mode != 'read' and reading['inherit'] is (mode == 'enable'):
                 return None
             x, y = centers[0 if mode == 'enable' else 1]
@@ -133,47 +153,35 @@ class BattleInheritance:
 
     def _restore(self, intent):
         state = self.port.read_inheritance()
-        if state['inherit'] is False:
-            state = self.port.set_inheritance(False, True)
-        if state['inherit'] is not True:
-            raise RuntimeError('clan_battle_inheritance_restore_unverified')
+        if state['inherit'] is not intent['original']:
+            # A later human choice cannot be distinguished from our old temporary disable.
+            raise RuntimeError('clan_battle_inheritance_user_state_confirmation_required')
         self.journal.append(dict(intent, state='settled', restored=True, restore_evidence=state))
         return state
 
     def recover(self):
         with self.journal.locked():
             pending = self._pending()
-            return self._restore(pending) if pending is not None else None
-
-    def prepare(self):
-        with self.journal.locked():
-            pending = self._pending()
-            if pending is not None:
-                self._restore(pending)
-            state = self.port.read_inheritance()
-            self.evidence = dict(original=state['inherit'], original_evidence=deepcopy(state), restored=not state['inherit'])
-            if state['inherit']:
-                self.intent = dict(state='in_flight', operation=OPERATION, intent_id=uuid4().hex,
-                    account_id=self.port.account, original=True, original_evidence=deepcopy(state))
-                self.journal.append(self.intent)
-                state = self.port.set_inheritance(True, False)
-            if state['inherit'] is not False:
-                raise RuntimeError('clan_battle_inheritance_prepare_unverified')
-            self.evidence['prepared_evidence'] = deepcopy(state)
-
-    def restore(self):
-        if self.intent is None:
-            state = self.port.read_inheritance()
-            if self.evidence is None or state['inherit'] is not self.evidence['original']:
-                raise RuntimeError('clan_battle_inheritance_restore_unverified')
-            self.evidence.update(restored=True, restore_evidence=deepcopy(state))
-            return deepcopy(self.evidence)
-        with self.journal.locked():
-            if self._pending() != self.intent:
-                raise RuntimeError('clan_battle_inheritance_ledger_changed')
-            state = self._restore(self.intent)
+            if pending is None:
+                return None
+            self.intent = pending
+            self.evidence = dict(original=pending['original'], restored=False)
+            state = self._restore(pending)
             self.evidence.update(restored=True, restore_evidence=deepcopy(state))
             self.intent = None
+            return deepcopy(self.evidence)
+
+    def prepare(self):
+        return self.recover()
+
+    def restore(self):
+        if self.intent is not None:
+            with self.journal.locked():
+                if self._pending() != self.intent:
+                    raise RuntimeError('clan_battle_inheritance_ledger_changed')
+                state = self._restore(self.intent)
+                self.evidence.update(restored=True, restore_evidence=deepcopy(state))
+                self.intent = None
         return deepcopy(self.evidence)
 
     @classmethod

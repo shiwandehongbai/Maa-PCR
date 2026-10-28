@@ -23,6 +23,7 @@ internal static class ClanFormalChecks
 {
     public static void Run(string sourceRoot, string directory, bool checkSaveFailures = true)
     {
+        ClanConsumptionConsentChecks.Run(sourceRoot, directory);
         ClanWorkflowChecks.Run(sourceRoot, directory);
         var root = Path.Combine(Path.GetFullPath(directory), "clan-workflow"); var config = Path.Combine(root, "config");
         var guide = Path.Combine(config, "agent-guide-review.json"); var modePath = PcrClanDailyExecution.PathFor(config); var count = 0;

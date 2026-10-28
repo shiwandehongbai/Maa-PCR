@@ -55,7 +55,17 @@ internal static class PcrMuMuDisplay
     internal static Mapping ParseMapping(string activity, string input, bool validatePhysicalViewport = true,
         string package = Package, string appActivity = ".MainActivity")
     {
+        // Regex timeouts include GC pauses; a second parse uses the same captured snapshot.
+        try { return ParseMappingOnce(activity, input, validatePhysicalViewport, package, appActivity); }
+        catch (RegexMatchTimeoutException) { return ParseMappingOnce(activity, input, validatePhysicalViewport, package, appActivity); }
+    }
+
+    private static Mapping ParseMappingOnce(string activity, string input, bool validatePhysicalViewport,
+        string package, string appActivity)
+    {
         var component = ComponentPattern(package, appActivity);
+        if (package == Package && appActivity is (".MainActivity" or "com.bilibili.priconne.MainActivity"))
+            component = "(?:" + component + "|" + ComponentPattern(package, "com.gsc.announcement.AnnouncementActivity") + ")";
         Match[] Matches(string text, string pattern) => Regex.Matches(text, pattern, RegexOptions.Multiline,
             TimeSpan.FromSeconds(1)).Cast<Match>().ToArray();
         int Id(string text) => int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
@@ -65,9 +75,11 @@ internal static class PcrMuMuDisplay
         if (!Regex.IsMatch(activity, @"^\s*topResumedActivity=", RegexOptions.Multiline))
             return ParseAndroid9Default(activity, input, validatePhysicalViewport, component);
         var active = Matches(activity, @"^Display #([^\s]+) \(activities from top to bottom\):([\s\S]*?)(?=^Display #|^ActivityTaskSupervisor state:|\z)")
-            .SelectMany(block => Matches(block.Groups[2].Value, @"^\s*topResumedActivity=ActivityRecord\{(\S+) u\d+ " + component + @" t\d+\}")
-                .Select(record => (Logical: Id(block.Groups[1].Value), Record: record.Groups[1].Value))).ToArray();
+            .SelectMany(block => Matches(block.Groups[2].Value, @"^\s*topResumedActivity=ActivityRecord\{(\S+) u\d+ (" + component + @") t\d+\}")
+                .Select(record => (Logical: Id(block.Groups[1].Value), Record: record.Groups[1].Value, Component: record.Groups[2].Value))).ToArray();
         if (active.Length != 1) throw new InvalidOperationException("PCR resumed target missing or ambiguous");
+        var activeComponent = active[0].Component.Split('/');
+        component = ComponentPattern(activeComponent[0], activeComponent[1]);
         var logical = active[0].Logical;
         var focused = Matches(activity, @"^  Display: mDisplayId=(\S+) (?:rootTasks=\d+|\(organized\))([\s\S]*?)(?=^  Display:|\z)")
             .Where(block => Regex.IsMatch(block.Groups[2].Value, @"mFocusedApp=ActivityRecord\{\S+ u\d+ " + component + @" t\d+\}"))
@@ -124,10 +136,12 @@ internal static class PcrMuMuDisplay
         Match[] Matches(string text, string pattern) => Regex.Matches(text, pattern, RegexOptions.Multiline,
             TimeSpan.FromSeconds(1)).Cast<Match>().ToArray();
         var resumed = Matches(activity, @"^Display #([^\s]+) \(activities from top to bottom\):([\s\S]*?)(?=^Display #|^ActivityStackSupervisor state:|\z)")
-            .SelectMany(block => Matches(block.Groups[2].Value, @"^\s*mResumedActivity: ActivityRecord\{(\S+) u0 " + component + @" t\d+\}")
-                .Select(record => (Display: block.Groups[1].Value, Record: record.Groups[1].Value))).ToArray();
+            .SelectMany(block => Matches(block.Groups[2].Value, @"^\s*mResumedActivity: ActivityRecord\{(\S+) u0 (" + component + @") t\d+\}")
+                .Select(record => (Display: block.Groups[1].Value, Record: record.Groups[1].Value, Component: record.Groups[2].Value))).ToArray();
         if (resumed.Length != 1 || resumed[0].Display != "0")
             throw new InvalidOperationException("PCR resumed target missing or ambiguous");
+        var activeComponent = resumed[0].Component.Split('/');
+        component = ComponentPattern(activeComponent[0], activeComponent[1]);
         var apps = Matches(input, @"^\s*FocusedApplication: name='AppWindowToken\{\S+ token=Token\{\S+ ActivityRecord\{(\S+) u0 " + component + @" t\d+\}\}\}', dispatchingTimeout=\S+\s*$");
         var focused = Matches(input, @"^\s*FocusedWindow: name='(Window\{\S+ u0 " + component + @"\})'\s*$");
         var windows = Matches(input, @"^  Windows:\r?\n([\s\S]*?)(?=^  \S|\z)");

@@ -39,7 +39,7 @@ internal static class ClanUiFlowChecks
         selector.SelectedIndex = 1;
         Check(view.ExecutionMode == PcrClanDailyExecution.FormalDaily && formal.IsVisible,
             "actual_selector_reveals_formal_review_controls");
-        Check(view.ExecutionSummaryText.Contains("对应校准可用") && (Field<TextBlock>(view, "calibrationSummary").Text ?? "").Contains("不可用"),
+        Check(view.ExecutionSummaryText.Contains("对应资料校验通过") && (Field<TextBlock>(view, "calibrationSummary").Text ?? "").Contains("不可用"),
             "formal_mode_does_not_claim_capability_from_mode_selection");
         Check(PcrClanDailyExecution.Read(modePath, out _).Mode == PcrClanDailyExecution.FormalDaily
             && view.BattleSpeed == 2 && view.ExecutionConfirmationForStart == null, "formal_selection_saves_fixed_two_without_start_confirmation");
@@ -63,6 +63,22 @@ internal static class ClanUiFlowChecks
         view.Reload();
         selector.SelectedIndex = 0;
         Check(view.ExecutionMode == PcrClanDailyExecution.Simulation && !formal.IsVisible, "reopen_then_retry_recovers_mode");
+
+        var speedSelector = Field<ComboBox>(view, "battleSpeed");
+        var speedBeforeReload = view.BattleSpeed;
+        var modeBeforeReload = File.ReadAllBytes(modePath);
+        var reload = view.ReloadAsync();
+        Check(!selector.IsEnabled && !speedSelector.IsEnabled, "reload_disables_mode_and_speed_until_actual_readback");
+        var modeRejected = false; var speedRejected = false;
+        try { view.ChangeExecutionMode(PcrClanDailyExecution.FormalDaily); } catch (InvalidOperationException) { modeRejected = true; }
+        try { view.ChangeBattleSpeed(speedBeforeReload == 2 ? 1 : 2); } catch (InvalidOperationException) { speedRejected = true; }
+        Check(modeRejected && speedRejected && File.ReadAllBytes(modePath).SequenceEqual(modeBeforeReload),
+            "reload_rejects_interleaved_execution_writes_without_changing_disk");
+        ClanGuideChecks.CompleteLoading(view);
+        Check(reload.IsCompleted && selector.IsEnabled && speedSelector.IsEnabled
+            && view.ExecutionMode == PcrClanDailyExecution.Simulation && view.BattleSpeed == speedBeforeReload
+            && PcrClanDailyExecution.Read(modePath, out _).BattleSpeed == speedBeforeReload,
+            "reload_restores_enabled_controls_with_ui_matching_disk");
 
         var refreshRequests = 0;
         view.AccountRefreshRequested += (_, _) => refreshRequests++;
@@ -100,7 +116,7 @@ internal static class ClanUiFlowChecks
         var image = Field<Image>(view, "image"); var preview = Field<Image>(view, "preview");
         Check(!source.IsExpanded && image.Source == null && preview.Source == null,
             "display_keeps_source_collapsed_without_image_allocation");
-        source.IsExpanded = true;
+        source.IsExpanded = true; ClanGuideChecks.CompleteLoading(view);
         Check(image.Source != null && preview.Source != null, "expanding_source_decodes_requested_images");
         source.IsExpanded = false;
         Check(image.Source == null && preview.Source == null, "collapsing_source_releases_images");

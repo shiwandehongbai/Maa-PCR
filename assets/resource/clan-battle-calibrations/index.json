@@ -10,9 +10,11 @@
         720
       ],
       "profile_path": "assets/resource/clan-battle-calibrations/cn-bilibili-202610141448/profile.json",
-      "profile_sha256": "0322f9c7be6c0a7493ff844c6cdcb2d7d584b47840c3cba2aaacb8efaf757a22",
+      "profile_sha256": "7ec1fdf9c9c3dee9780c3c319979372d9be70a3dbaedea9c4eb301680ae07a27",
       "capabilities": [
-        "simulation"
+        "simulation",
+        "formal",
+        "carryover"
       ]
     }
   ]

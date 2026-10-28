@@ -66,10 +66,11 @@ public partial class TaskQueueView : UserControl
             (input, token) => MFAAvalonia.Pcr.PcrGuideSyncOwner.ReadAsync(vm, input, token),
             MFAAvalonia.Pcr.PcrGuideSyncOwner.ConfiguredAccountId);
         if (accountPage) review.ShowAccountPage();
-        review.AccountAccepted += snapshot =>
+        review.AccountAccepted += async snapshot =>
         {
-            _pcrClanGuide?.UseAccountSnapshot(snapshot);
-            guideReviewWindow?.Close();
+            var window = guideReviewWindow;
+            if (_pcrClanGuide != null && !await _pcrClanGuide.UseAccountSnapshotAsync(snapshot)) return;
+            if (ReferenceEquals(guideReviewWindow, window)) window?.Close();
         };
         guideReviewWindow = new SukiWindow
         {
@@ -77,7 +78,7 @@ public partial class TaskQueueView : UserControl
             Width = accountPage ? 760 : 960, Height = accountPage ? 560 : 760, MinWidth = 640, MinHeight = 460,
             Content = review
         };
-        guideReviewWindow.Closed += (_, _) => { guideReviewWindow = null; _pcrClanGuide?.RefreshAccounts(); };
+        guideReviewWindow.Closed += (_, _) => { guideReviewWindow = null; _ = _pcrClanGuide?.RefreshAccountsAsync(); };
         if (TopLevel.GetTopLevel(this) is Window owner) guideReviewWindow.Show(owner);
         else guideReviewWindow.Show();
     }
@@ -3004,6 +3005,7 @@ public partial class TaskQueueView : UserControl
         TopToolbar.SizeChanged -= OnTopToolbarSizeChanged;
         MainGrid.SizeChanged -= OnMainGridSizeChanged;
         TaskQueueDashboardGrid.PropertyChanged -= OnDashboardLayoutPropertyChanged;
+        LanguageHelper.LanguageChanged -= OnLanguageChanged;
 
         UpdateViewModelSubscription(null);
     }
@@ -3122,9 +3124,5 @@ public partial class TaskQueueView : UserControl
         {
             Spliter2Compact.IsVisible = deviceVisible;
         }
-    }
-    ~TaskQueueView()
-    {
-        LanguageHelper.LanguageChanged -= OnLanguageChanged;
     }
 }

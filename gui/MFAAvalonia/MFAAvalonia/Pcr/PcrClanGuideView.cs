@@ -17,7 +17,7 @@ using Newtonsoft.Json.Linq;
 
 namespace MFAAvalonia.Pcr;
 
-public sealed class PcrClanGuideView : UserControl
+public sealed partial class PcrClanGuideView : UserControl
 {
     private sealed record Choice(string Value, string Label) { public override string ToString() => Label; }
     private sealed class Member
@@ -80,6 +80,8 @@ public sealed class PcrClanGuideView : UserControl
     private readonly Image preview = new() { Stretch = Stretch.Uniform, MaxHeight = 220 };
     private readonly TextBlock imageNote = Note("请选择一队并对照原图。未知字段保留待确认。练度、EX 和强化差异只作提示。" );
     private readonly TextBlock status = Note("");
+    private readonly TextBlock videoStatus = Note("");
+    private readonly TextBlock cacheNotice = Note("");
     private readonly TextBlock accountNote = Note("");
     public string StatusText => status.Text ?? "";
     public string ExecutionMode => executionLoaded ? execution.Mode : "unavailable";
@@ -99,12 +101,13 @@ public sealed class PcrClanGuideView : UserControl
     }
     public bool HasCurrentConfirmation
     {
-        get { if (!loaded) return false; try { var value = Capture(); return value.ConfirmedFor != null && value.ConfirmedFor == (string?)PcrClanGuide.BuildPlan(value, configDirectory, repository, DateTimeOffset.Now)["confirmed_for"]; } catch { return false; } }
+        get { if (!loaded || loading || dailyPlan.IsLoading) return false; try { var value = Capture(); return value.ConfirmedFor != null && value.ConfirmedFor == (string?)PcrClanGuide.BuildPlan(value, configDirectory, repository, DateTimeOffset.Now)["confirmed_for"]; } catch { return false; } }
     }
 
     public PcrClanGuideView() : this(null) { }
-    public PcrClanGuideView(string? repository) : this(repository ?? PcrAlphaOwner.Repository, PcrClanGuide.StatePath, AppPaths.ConfigDirectory) { }
-    public PcrClanGuideView(string repository, string statePath, string configDirectory)
+    public PcrClanGuideView(string? repository) : this(repository ?? PcrAlphaOwner.Repository, PcrClanGuide.StatePath, AppPaths.ConfigDirectory, true) { }
+    public PcrClanGuideView(string repository, string statePath, string configDirectory) : this(repository, statePath, configDirectory, false) { }
+    private PcrClanGuideView(string repository, string statePath, string configDirectory, bool deferLoad)
     {
         this.repository = Path.GetFullPath(repository); this.statePath = Path.GetFullPath(statePath); this.configDirectory = Path.GetFullPath(configDirectory);
         var guide = new StackPanel { Spacing = 10 };
@@ -117,8 +120,8 @@ public sealed class PcrClanGuideView : UserControl
         guide.Children.Add(new TextBlock { Text = "账号", FontSize = 16, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
         guide.Children.Add(Buttons(accounts, Button("账号资料与刷新", () => AccountRefreshRequested?.Invoke(this, EventArgs.Empty))));
         guide.Children.Add(accountNote);
-        guide.Children.Add(new Expander { Header = "更多账号操作", Content = Buttons(Button("选用最新账号资料", UseLatestAccount)) });
-        formalControls.Children.Add(Note("保存不会开始战斗；开始时仍会核对实际次数与补偿。"));
+        guide.Children.Add(new Expander { Header = "更多账号操作", Content = Buttons(Button("选用最新账号资料", () => _ = UseSelectedAccountAsync())) });
+        formalControls.Children.Add(Note("保存三目标不授权消费。Start 会先读取实时 BOSS 实例和次数，再分别确认普通挑战与补偿。"));
         formalControls.Children.Add(Buttons(Button("预览正式三目标（不执行）", PreviewDaily), Button("核对并保存正式三目标", ConfirmDaily)));
         guide.Children.Add(new TextBlock { Text = "作业", FontSize = 16, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
         guide.Children.Add(selectionSummary);
@@ -126,6 +129,10 @@ public sealed class PcrClanGuideView : UserControl
         chooseWork.Children.Add(video);
         stopFetch = Button("停止获取", () => fetchCancel?.Cancel()); stopFetch.IsVisible = false;
         chooseWork.Children.Add(Buttons(Button("获取视频作业", async () => await FetchVideo()), Button("导入已获取的作业包", PickBundle), stopFetch));
+        Avalonia.Automation.AutomationProperties.SetName(videoStatus, "视频作业获取状态");
+        chooseWork.Children.Add(videoStatus);
+        Avalonia.Automation.AutomationProperties.SetName(cacheNotice, "本地视频缓存提示");
+        chooseWork.Children.Add(cacheNotice);
         chooseWork.Children.Add(Buttons(page, package, teams));
         workSelection.Content = chooseWork; guide.Children.Add(workSelection);
         var source = new StackPanel { Spacing = 8 }; source.Children.Add(imageNote); source.Children.Add(image); source.Children.Add(preview); source.Children.Add(calibrationDetails);
@@ -161,25 +168,21 @@ public sealed class PcrClanGuideView : UserControl
         var timing = new StackPanel { Spacing = 6 }; timing.Children.Add(Note("每行：剩余秒数 | AUTO（不变 / 开 / 关）| SET（完整角色名或编号=开/关，用分号分隔）。秒数严格递减。未解析的原轴须填写支持的秒数，或明确写“无切换”；空白不代替未知。错过秒数、读回未知或断线即停，不补点。")); timing.Children.Add(switches);
         timing.Children.Add(timingStatus);
         guide.Children.Add(new Expander { Header = "战中 SET / AUTO 秒数轴", Content = timing });
-        guide.Children.Add(Buttons(Button("核对五人和操作并保存", ConfirmAndSave), Button("暂存草稿", SaveDraft), Button("放弃编辑并重开", Reload)));
+        guide.Children.Add(Buttons(Button("核对五人和操作并保存", () => _ = PersistAsync(true)), Button("暂存草稿", () => _ = PersistAsync(false)), Button("放弃编辑并重开", () => _ = ReloadAsync())));
         guide.Children.Add(status);
         guide.Children.Add(new Expander { Header = "作业名称与参考伤害", Content = reference });
         dailyPlan = new PcrClanDailyPlanView(this.repository, PcrClanDailyPlan.PathFor(this.configDirectory), this.configDirectory,
-            this.statePath, Capture, () => HasCurrentConfirmation, LoadReviewed);
+            this.statePath, Capture, () => HasCurrentConfirmation, LoadReviewed, LoadReviewedAsync);
         var dailySection = new StackPanel { Spacing = 8 }; dailySection.Children.Add(dailyPlan); dailySection.Children.Add(formalControls);
         dailyDetails.Content = dailySection; guide.Children.Add(dailyDetails);
         Content = new ScrollViewer { Content = guide, Margin = new Thickness(16), HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
-        page.SelectionChanged += (_, _) => { if (!displaying) Guard(PopulatePackages); };
-        package.SelectionChanged += (_, _) => { if (!displaying) Guard(PopulateTeams); };
-        teams.SelectionChanged += (_, _) => { if (!displaying && teams.SelectedItem is Choice choice) Guard(() => SelectJob(choice.Value)); };
+        page.SelectionChanged += (_, _) => { if (!displaying) Guard(() => PopulatePackages(true), true); };
+        package.SelectionChanged += (_, _) => { if (!displaying) Guard(() => PopulateTeams(true), true); };
+        teams.SelectionChanged += (_, _) => { if (!displaying && teams.SelectedItem is Choice choice) _ = SelectJobAsync(choice.Value); };
         accounts.SelectionChanged += (_, _) =>
         {
             if (displaying) return;
-            Guard(() =>
-            {
-                if (accounts.SelectedItem is Choice choice) { document.SnapshotPath = choice.Value; document.SnapshotSha256 = PcrClanGuide.Stamp(choice.Value) ?? ""; LoadCatalog(); }
-                Invalidate(); DescribeAccount();
-            });
+            _ = UseSelectedAccountAsync();
         };
         auto.SelectionChanged += (_, _) => Invalidate(); support.SelectionChanged += (_, _) => { supportRole.IsVisible = (support.SelectedItem as Choice)?.Value == "specified"; Invalidate(); if (!displaying) UpdateCalibrationSummary(); };
         Watch(supportRole); Watch(switches); Watch(video);
@@ -187,7 +190,7 @@ public sealed class PcrClanGuideView : UserControl
         battleSpeed.SelectionChanged += (_, _) => { if (!displaying && battleSpeed.SelectedItem is Choice selected) GuardExecution(() => ChangeBattleSpeed(int.Parse(selected.Value, CultureInfo.InvariantCulture))); };
         foreach (var (control, name) in new (Control, string)[] { (video, "公会战视频链接"), (page, "视频分 P"), (package, "视频套餐"), (teams, "视频队伍"), (accounts, "共用账号缓存"), (auto, "开场 AUTO"), (support, "支援方式"), (supportRole, "指定支援角色"), (switches, "剩余秒数 SET AUTO 切换轴") })
             Avalonia.Automation.AutomationProperties.SetName(control, name);
-        DetachedFromVisualTree += (_, _) => { fetchCancel?.Cancel(); ReleaseImages(); };
+        DetachedFromVisualTree += (_, _) => { fetchCancel?.Cancel(); CancelPendingLoad(); ReleaseImages(); };
         sourceDetails.PropertyChanged += (_, e) =>
         {
             if (e.Property != Expander.IsExpandedProperty) return;
@@ -198,45 +201,14 @@ public sealed class PcrClanGuideView : UserControl
         {
             if (sourceDetails.IsExpanded) RestoreImages();
         };
-        Reload();
+        if (deferLoad) _ = ReloadAsync(); else Reload();
     }
-    private void RestoreImages()
-    {
-        if (bitmap != null || previewBitmap != null || document.Job["source"]?["image_path"]?.Type != JTokenType.String) return;
-        try { LoadImages(); }
-        catch (Exception ex) { document.ConfirmedFor = null; status.Text = "图片恢复失败，旧确认已取消；编辑内容保留：" + ex.Message; }
-    }
+    private void RestoreImages() => _ = RestoreImagesAsync();
     private void ReleaseImages()
     {
+        imageVersion++;
         image.Source = null; preview.Source = null;
         bitmap?.Dispose(); bitmap = null; previewBitmap?.Dispose(); previewBitmap = null;
-    }
-    private void LoadImages()
-    {
-        ReleaseImages();
-        var job = document.Job;
-        try
-        {
-            JObject? originalJob = null;
-            if (!string.IsNullOrEmpty(document.BundlePath))
-            {
-                if (PcrClanGuide.Stamp(document.BundlePath) != document.BundleSha256) throw new InvalidDataException("作业原件摘要不一致。");
-                originalJob = ((JArray)PcrClanGuide.Bundle(document.BundlePath)["jobs"]!).OfType<JObject>().SingleOrDefault(j => (string?)j["source"]?["job_id"] == document.SelectedJobId);
-                if (originalJob == null || !JToken.DeepEquals(job["source"], originalJob["source"]) || PcrClanGuide.Stamp(document.BundlePath) != document.BundleSha256)
-                    throw new InvalidDataException("图片来源与当前作业原件不符。");
-            }
-            if (job["source"]?["image_path"]?.Type == JTokenType.String)
-            {
-                var bytes = PcrGuideData.ReadLocal((string)job["source"]!["image_path"]!);
-                if (PcrClanGuide.Hash(bytes) != (string?)job["source"]?["image_sha256"]) throw new InvalidDataException("原图摘要不一致。");
-                bitmap = new Bitmap(new MemoryStream(bytes));
-            }
-            var cropToken = originalJob?["image_base64"] ?? job["image_base64"];
-            if (cropToken?.Type == JTokenType.String && ((string)cropToken!).Length is > 0 and < 8_000_000)
-                previewBitmap = new Bitmap(new MemoryStream(Convert.FromBase64String((string)cropToken!)));
-            image.Source = bitmap; preview.Source = previewBitmap;
-        }
-        catch { ReleaseImages(); throw; }
     }
     private static ComboBox Toggle(bool unchanged) => new() { MinWidth = 100, ItemsSource = new[] { unchanged ? "不变" : "待确认", "开启", "关闭" }, SelectedIndex = 0 };
     private static TextBlock Note(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap };
@@ -244,11 +216,12 @@ public sealed class PcrClanGuideView : UserControl
     { var panel = new WrapPanel(); foreach (var item in controls) { item.Margin = new Thickness(0, 0, 8, 5); panel.Children.Add(item); } return panel; }
     private Button Button(string label, Action action)
     { var button = new Button { Content = label }; button.Click += (_, _) => { try { action(); } catch (Exception ex) { status.Text = "未完成：" + ex.Message; } }; return button; }
-    private void Guard(Action action)
-    { try { action(); } catch (Exception ex) { document.ConfirmedFor = null; status.Text = "作业不可用，尚未确认：" + ex.Message; } }
+    private void SetVideoStatus(string text) { videoStatus.Text = text; status.Text = text; }
+    private void Guard(Action action, bool videoChoice = false)
+    { try { action(); } catch (Exception ex) { document.ConfirmedFor = null; var message = "作业不可用，尚未确认：" + ex.Message; if (videoChoice) SetVideoStatus(message); else status.Text = message; } }
     private void Watch(TextBox box) => box.PropertyChanged += (_, e) => { if (e.Property == TextBox.TextProperty) Invalidate(); };
     private void Invalidate()
-    { if (displaying) return; document.ConfirmedFor = null; execution.ConfirmedFor = null; UpdateSelectionSummary(); status.Text = "内容已修改，请对照原图后一次确认保存。"; }
+    { if (displaying) return; CancelPendingLoad(); document.ConfirmedFor = null; execution.ConfirmedFor = null; UpdateSelectionSummary(); status.Text = "内容已修改，请对照原图后一次确认保存。"; }
     private void UpdateSelectionSummary()
     {
         string Value(string key) => fields[key].Text?.Trim() is { Length: > 0 } text ? text : "待填写";
@@ -313,36 +286,18 @@ public sealed class PcrClanGuideView : UserControl
     }
     private string RoleName(JToken? token)
     { var id = token?.Type == JTokenType.Integer ? (int?)token : null; return id.HasValue ? catalog?.Units.FirstOrDefault(u => u.UnitId == id)?.ToString() ?? id.ToString()! : ""; }
-    private void LoadCatalog()
-    {
-        try
-        {
-            var version = File.Exists(document.SnapshotPath) ? (string?)PcrClanGuide.ReadJson(document.SnapshotPath)["content_version"] : null;
-            var old = Path.Combine(configDirectory, "guide-review.json");
-            catalog = File.Exists(old) ? new PcrGuideStore(old).Load().Input.Catalog : null;
-            if (catalog != null && (version == null || catalog.ContentVersion == version)) return;
-            // The shared roster supplies display names only; execution still requires the versioned catalog above.
-            var path = Path.Combine(repository, "assets", "labyrinth", "character-pack", "characters.landosolroster.json");
-            var bytes = PcrGuideData.ReadLocal(path); var roster = PcrClanGuide.ReadJson(path);
-            if ((int?)roster["schemaVersion"] != 1 || roster["characters"] is not JArray rows) throw new InvalidDataException("原角色目录格式无效。");
-            var units = new List<PcrGuideUnit>();
-            foreach (var row in rows)
-            {
-                if (!int.TryParse((string?)row["id"], NumberStyles.None, CultureInfo.InvariantCulture, out var character) || character is <= 1000 or > 9999) continue;
-                var name = (string?)row["officialName"]; if (string.IsNullOrWhiteSpace(name)) name = (string?)row["name"];
-                if (!string.IsNullOrWhiteSpace(name)) units.Add(new(character * 100 + 1, name));
-            }
-            if (units.Count == 0 || units.Select(u => u.UnitId).Distinct().Count() != units.Count) throw new InvalidDataException("原角色目录为空或编号重复。");
-            catalog = new PcrGuideCatalog { Server = "cn-bilibili", Source = path, Sha256 = PcrClanGuide.Hash(bytes), Units = units };
-        }
-        catch (Exception ex) { catalog = null; accountNote.Text = "角色目录暂不可用：" + ex.Message; }
-    }
     public void Display(PcrClanGuideDocument value)
+    {
+        CancelPendingLoad();
+        using var data = PrepareDisplay(value, sourceDetails.IsExpanded);
+        ApplyDisplay(data);
+    }
+    private void ApplyDisplay(DisplayData data)
     {
         displaying = true;
         try
         {
-            document = JsonConvert.DeserializeObject<PcrClanGuideDocument>(JsonConvert.SerializeObject(value))!; LoadCatalog();
+            document = data.Document; catalog = data.Catalog;
             workSelection.IsExpanded = string.IsNullOrEmpty(document.SelectedJobId);
             var job = document.Job;
             foreach (var pair in fields) pair.Value.Text = job[pair.Key]?.Type == JTokenType.Null ? "" : job[pair.Key]?.ToString() ?? "";
@@ -366,27 +321,35 @@ public sealed class PcrClanGuideView : UserControl
             timingStatus.Text = unparsedSwitches ? "原轴尚未解析；当前空白表示未知，不能执行。请补秒数轴，或明确写“无切换”。" : "已导入明确的操作轴；空白表示原作业没有战中切换。";
             video.Text = (string?)job["source"]?["url"] ?? "";
             ReleaseImages();
-            if (sourceDetails.IsExpanded) LoadImages();
+            bitmap = data.Image; previewBitmap = data.Preview; data.Image = data.Preview = null;
+            image.Source = bitmap; preview.Source = previewBitmap;
             imageNote.Text = $"原图：P{job["source"]?["page"]} · {job["source"]?["at_seconds"]} 秒。请对照原图核对五人、星级和操作。练度、EX 和强化差异只作提示。";
             if (job["members"] is JArray candidateMembers && candidateMembers.Any(m => m["unit_id"]?.Type != JTokenType.Integer && m["proposal_unit_id"]?.Type == JTokenType.Integer))
                 imageNote.Text += "\n角色栏预填的是识别候选，请结合完整原图与局部放大核对形态；候选尚未确认。";
             if (job["warnings"] is JArray warnings && warnings.Count > 0) imageNote.Text += "\n" + string.Join("；", warnings.Values<string>());
-            RefreshAccounts();
+            ApplyAccount(data);
         }
         finally { displaying = false; }
-        DescribeAccount(); UpdateSelectionSummary();
+        UpdateSelectionSummary();
     }
-    public void LoadBundle(string path)
+    public void LoadBundle(string path) => LoadBundle(path, null);
+    private void LoadBundle(string path, int? preferredPage)
     {
         var next = PcrClanGuide.Bundle(path);
+        var choices = ((JArray)next["pages"]!).Select(p => new Choice(p["page"]!.ToString(), $"P{p["page"]} · {p["label"]}")).ToArray();
+        var selected = preferredPage == null ? 0 : Array.FindIndex(choices, c => c.Value == preferredPage.Value.ToString(CultureInfo.InvariantCulture));
+        if (selected < 0) throw new InvalidDataException("缓存中没有对应的分 P。");
+        cacheNotice.Text = "";
         bundle = next;
         document.BundlePath = Path.GetFullPath(path); document.BundleSha256 = PcrClanGuide.Stamp(path)!; document.ConfirmedFor = null;
         displaying = true;
-        try { page.ItemsSource = ((JArray)bundle["pages"]!).Select(p => new Choice(p["page"]!.ToString(), $"P{p["page"]} · {p["label"]}")).ToArray(); page.SelectedIndex = 0; }
+        try { page.ItemsSource = choices; page.SelectedIndex = selected; }
         finally { displaying = false; }
         PopulatePackages();
+        workSelection.IsExpanded = true;
+        SetVideoStatus(teams.SelectedItem is Choice ? "已载入视频作业，请选择分 P、套餐和队伍并核对。" : "当前分 P 未识别到作业，请选择其他分 P。");
     }
-    private void PopulatePackages()
+    private void PopulatePackages(bool asynchronously = false)
     {
         if (bundle == null) return;
         var number = (page.SelectedItem as Choice)?.Value;
@@ -394,9 +357,9 @@ public sealed class PcrClanGuideView : UserControl
         displaying = true;
         try { package.ItemsSource = list.Select(p => new Choice(p, p.Length == 0 ? "待核对套餐" : p)).ToArray(); package.SelectedIndex = 0; }
         finally { displaying = false; }
-        PopulateTeams();
+        PopulateTeams(asynchronously);
     }
-    private void PopulateTeams()
+    private void PopulateTeams(bool asynchronously = false)
     {
         if (bundle == null) return;
         var number = (page.SelectedItem as Choice)?.Value; var name = (package.SelectedItem as Choice)?.Value;
@@ -404,12 +367,18 @@ public sealed class PcrClanGuideView : UserControl
         displaying = true;
         try { teams.ItemsSource = list.Select(j => new Choice((string)j["source"]!["job_id"]!, $"{j["team_label"] ?? "待核对队伍"} · BOSS {j["boss"]} · {j["source"]?["at_seconds"]} 秒")).ToArray(); teams.SelectedIndex = 0; }
         finally { displaying = false; }
-        if (teams.SelectedItem is Choice selected) SelectJob(selected.Value);
+        if (teams.SelectedItem is Choice selected) { if (asynchronously) _ = SelectJobAsync(selected.Value); else SelectJob(selected.Value); }
+        else { Invalidate(); SetVideoStatus("当前分 P 或套餐未识别到作业，请选择其他项。"); }
     }
     public void SelectJob(string jobId)
     {
         PcrClanGuide.Select(document, document.BundlePath, jobId);
-        Display(document); SynchronizeSelection(); status.Text = HasCurrentConfirmation ? "已恢复本队保存的核对，账号和原件保持一致。" : "已载入作业。未知字段请对照原图明确填写，完成后一次确认保存。";
+        var expanded = workSelection.IsExpanded;
+        try { Display(document); }
+        finally { workSelection.IsExpanded = expanded; }
+        if (!string.IsNullOrEmpty(cacheNotice.Text)) Invalidate();
+        SynchronizeSelection(); status.Text = HasCurrentConfirmation ? "已恢复本队保存的核对，账号和原件保持一致。" : "已载入作业。未知字段请对照原图明确填写，完成后一次确认保存。";
+        videoStatus.Text = status.Text;
     }
     private void SynchronizeSelection()
     {
@@ -456,7 +425,7 @@ public sealed class PcrClanGuideView : UserControl
             throw new InvalidDataException("所选资料与账号身份不一致。");
         if (document.SnapshotPath == path && document.SnapshotSha256 == next.SnapshotSha256) { RefreshAccounts(); return; }
         document.SnapshotPath = next.SnapshotPath; document.SnapshotSha256 = next.SnapshotSha256;
-        LoadCatalog(); Invalidate(); RefreshAccounts(); ExecutionModeChanged?.Invoke(this, EventArgs.Empty);
+        Invalidate(); RefreshAccounts(); ExecutionModeChanged?.Invoke(this, EventArgs.Empty);
         status.Text = "已使用账号资料，编辑内容保留；请重新核对作业和三刀。";
     }
     public void UseLatestAccount()
@@ -465,46 +434,40 @@ public sealed class PcrClanGuideView : UserControl
         if (accounts.SelectedItem is not Choice choice) { status.Text = "请先选择账号资料。"; return; }
         var stamp = PcrClanGuide.Stamp(choice.Value) ?? throw new IOException("所选账号资料不存在，请重新读取。");
         if (document.SnapshotSha256 == stamp) return;
-        document.SnapshotSha256 = stamp; LoadCatalog(); Invalidate(); DescribeAccount(); ExecutionModeChanged?.Invoke(this, EventArgs.Empty);
+        document.SnapshotSha256 = stamp; Invalidate(); DescribeAccount(); ExecutionModeChanged?.Invoke(this, EventArgs.Empty);
         status.Text = "已选用最新账号资料，编辑内容保留；请重新核对五人和操作并保存。";
     }
     private void DescribeAccount()
     {
-        if (string.IsNullOrEmpty(document.SnapshotPath)) { accountNote.Text = "尚未选择账号资料。可在“账号资料与刷新”读取，再选择所需账号。"; return; }
-        try
-        {
-            var value = PcrClanGuide.Snapshot(document, configDirectory, repository, DateTimeOffset.Now, out _);
-            accountNote.Text = $"账号 {value["account_id"]} · 采集于 {value["observed_at"]} · {((bool?)value["ownership_complete"] == true ? "完整持有名单" : "部分持有资料")}。资料有效期 24 小时。";
-        }
-        catch (Exception ex) { accountNote.Text = "账号资料不可用：" + ex.Message + "；请在“账号资料与刷新”核对后，点击“选用最新账号资料”。"; }
-        UpdateCalibrationSummary();
+        using var data = PrepareDisplay(document, false);
+        ApplyAccount(data);
     }
     private void UpdateCalibrationSummary()
     {
-        string? version = null;
-        try
-        {
-            if (PcrClanGuide.Stamp(document.SnapshotPath) == document.SnapshotSha256)
-                version = (string?)PcrClanGuide.ReadJson(document.SnapshotPath)["content_version"];
-        }
-        catch (Exception) { /* Invalid account data is explained by the account panel. */ }
-        var calibration = PcrClanCalibration.Read(repository, version);
+        var calibration = displayCalibration;
         calibrationDetails.Text = calibration.Summary + Environment.NewLine + calibration.AutoBattleSummary;
         var formal = execution.Mode == PcrClanDailyExecution.FormalDaily;
         var capability = formal ? "formal" : "simulation";
         var label = formal ? "正式三刀" : "模拟战";
         var reason = calibration.Error ?? (!calibration.Supports(capability) ? "缺少对应页面校准和真实验收。" : null);
-        if (reason == null && calibration.OwnUnitsOnly && (support.SelectedItem as Choice)?.Value is "qsjs" or "specified")
-            reason = "当前校准仅支持全自有队伍。";
+        if (reason == null && calibration.OwnUnitsOnly)
+        {
+            try
+            {
+                if (displaySnapshot == null || PcrClanGuide.SupportRequirement(Capture().Job, displaySnapshot).HasValue)
+                    reason = "当前校准仅支持全自有队伍。";
+            }
+            catch (Exception) { reason = "请先核对五人及其持有资料；当前校准仅支持全自有队伍。"; }
+        }
         if (reason == null && formal && !calibration.FormalOpening) reason = "缺少正式开场校准。";
         if (reason == null && formal && execution.BattleSpeed != 2) reason = "旧正式配置需重新确认并保存为 2 倍速。";
         if (reason == null && !formal && execution.BattleSpeed != 1 && calibration.AutoBattleSpeeds?.Contains(execution.BattleSpeed) != true)
             reason = $"缺少 {execution.BattleSpeed} 倍速校准。";
-        calibrationSummary.Text = reason == null ? label + "校准可用；开始前仍会核对实际页面。" : label + "不可用：" + reason;
+        calibrationSummary.Text = reason == null ? label + "：资料校验通过；开始前仍会核对实际页面。不代表当前阶段已通过正常 Start 全程验收。" : label + "不可用：" + reason;
     }
     private void Persist(bool confirm)
     {
-        if (!loaded) throw new InvalidOperationException("原作业未成功载入，禁止覆盖。请保留原文件并重开。");
+        if (!loaded || loading || dailyPlan.IsLoading) throw new InvalidOperationException("原作业未成功载入，禁止覆盖。请保留原文件并重开。");
         var value = Capture();
         loadedHash = PcrClanGuide.Save(value, statePath, loadedHash, configDirectory, repository, DateTimeOffset.Now, confirm);
         document = value;
@@ -523,6 +486,7 @@ public sealed class PcrClanGuideView : UserControl
     { try { action(); } catch (Exception ex) { status.Text = "会战模式未完成：" + ex.Message; } }
     public void ChangeExecutionMode(string mode)
     {
+        if (loading) throw new InvalidOperationException("正在载入公会战资料，请等待读取完成再修改模式或倍速。");
         try
         {
             if (!executionLoaded) throw new InvalidOperationException("会战模式未成功读取，禁止覆盖。请重新打开。");
@@ -538,6 +502,7 @@ public sealed class PcrClanGuideView : UserControl
     }
     public void ChangeBattleSpeed(int speed)
     {
+        if (loading) throw new InvalidOperationException("正在载入公会战资料，请等待读取完成再修改模式或倍速。");
         try
         {
             if (!executionLoaded || execution.Mode != PcrClanDailyExecution.Simulation)
@@ -559,7 +524,8 @@ public sealed class PcrClanGuideView : UserControl
         {
             executionMode.SelectedItem = executionLoaded ? ((IEnumerable<Choice>)executionMode.ItemsSource!).Single(c => c.Value == execution.Mode) : null;
             battleSpeed.SelectedItem = executionLoaded ? ((IEnumerable<Choice>)battleSpeed.ItemsSource!).Single(c => c.Value == execution.BattleSpeed.ToString(CultureInfo.InvariantCulture)) : null;
-            battleSpeed.IsEnabled = executionLoaded && execution.Mode == PcrClanDailyExecution.Simulation;
+            executionMode.IsEnabled = !loading;
+            battleSpeed.IsEnabled = !loading && executionLoaded && execution.Mode == PcrClanDailyExecution.Simulation;
             battleSpeed.IsVisible = speedLabel.IsVisible = !executionLoaded || execution.Mode == PcrClanDailyExecution.Simulation;
             formalSpeed.IsVisible = executionLoaded && execution.Mode == PcrClanDailyExecution.FormalDaily;
         }
@@ -567,8 +533,8 @@ public sealed class PcrClanGuideView : UserControl
         formalControls.IsVisible = executionLoaded && execution.Mode == PcrClanDailyExecution.FormalDaily;
         dailyDetails.IsExpanded = formalControls.IsVisible;
         executionSummary.Text = !executionLoaded ? "会战模式保存未完成，执行确认已取消；编辑内容保留，请重新打开后核对实际保存的模式。"
-            : execution.Mode == PcrClanDailyExecution.Simulation ? $"单次模拟，{execution.BattleSpeed} 倍速；开场按作业设置 SET／AUTO。已击败的 BOSS 仍可选择模拟战。"
-            : "正式三刀固定 2 倍速。请在三刀目标中预览并核对保存；只有对应校准可用时才能开始。"
+            : execution.Mode == PcrClanDailyExecution.Simulation ? $"单次模拟，{execution.BattleSpeed} 倍速；保留继承，开场只校正不同的 SET／AUTO 和速度。已击败的 BOSS 仍可选择模拟战。"
+            : "正式三刀固定 2 倍速，保留继承并只校正开场差异。请在三刀目标中预览并核对保存；只有对应资料校验通过时才能开始。"
                 + (execution.BattleSpeed != 2 ? " 旧 1 倍配置尚未重新确认。" : "");
         UpdateCalibrationSummary();
     }
@@ -613,7 +579,7 @@ public sealed class PcrClanGuideView : UserControl
             var plan = PcrClanGuide.CreatePlan(statePath, configDirectory, repository, DateTimeOffset.Now);
             if (readHash != savedHash || saved.SelectedJobId != value.SelectedJobId || saved.ConfirmedFor != (string?)plan["confirmed_for"])
                 throw new IOException("当前模拟队写后核对失败，请重新打开。");
-            loadedHash = readHash; bundle = nextBundle; Display(saved); SynchronizeSelection(); loaded = true;
+            loadedHash = readHash; bundle = nextBundle; cacheNotice.Text = ""; Display(saved); SynchronizeSelection(); loaded = true;
         }
         catch { document.ConfirmedFor = null; status.Text = "当前模拟队读回失败，请重新打开核对；旧显示已取消确认。"; throw; }
         status.Text = "已载入并保存本刀为当前模拟队；可见队伍、原文件和开始任务读取的队伍一致。一次开始仍只做一场模拟战。";
@@ -621,6 +587,7 @@ public sealed class PcrClanGuideView : UserControl
     public void Reload()
     {
         loaded = false;
+        cacheNotice.Text = "";
         try
         {
             var value = PcrClanGuide.Read(statePath, out loadedHash);
@@ -644,17 +611,87 @@ public sealed class PcrClanGuideView : UserControl
         {
             var top = TopLevel.GetTopLevel(this); if (top == null) return;
             var files = await top.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions { Title = "选择已获取的 bundle.json", AllowMultiple = false });
-            if (files.Count == 1) LoadBundle(files[0].Path.LocalPath);
+            if (files.Count == 1) await LoadBundleAsync(files[0].Path.LocalPath);
         }
-        catch (Exception ex) { status.Text = "导入未完成：" + ex.Message; }
+        catch (Exception ex) { SetVideoStatus("导入未完成：" + ex.Message); }
+    }
+    private static JArray ReadCacheRecords(string path)
+    {
+        using var stream = new MemoryStream(PcrGuideData.ReadLocal(Path.GetFullPath(path)));
+        using var text = new StreamReader(stream, new System.Text.UTF8Encoding(false, true));
+        using var reader = new JsonTextReader(text) { DateParseHandling = DateParseHandling.None, MaxDepth = 32 };
+        var records = JArray.Load(reader, new JsonLoadSettings { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error });
+        if (reader.Read()) throw new InvalidDataException("缓存记录后有多余内容。");
+        return records;
+    }
+    private (string Path, string Stamp, DateTimeOffset At, int Page)? FindCachedVideo(Uri uri, CancellationToken cancel)
+    {
+        var videoId = System.Text.RegularExpressions.Regex.Match(uri.AbsolutePath, @"^/video/(BV[0-9A-Za-z]{10})/?$");
+        var pages = uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Split('=', 2))
+            .Where(x => Uri.UnescapeDataString(x[0]) == "p").ToArray();
+        if (!videoId.Success || pages.Length != 1 || pages[0].Length != 2
+            || !System.Text.RegularExpressions.Regex.IsMatch(pages[0][1], @"^[0-9]{1,3}$")
+            || !int.TryParse(pages[0][1], NumberStyles.None, CultureInfo.InvariantCulture, out var part) || part is < 1 or > 500) return null;
+        var bvid = videoId.Groups[1].Value;
+        var runtime = Path.GetFullPath(Path.Combine(repository, ".runtime")) + Path.DirectorySeparatorChar;
+        var root = Path.Combine(runtime, "clan-guide-sources");
+        if (!Directory.Exists(root)) return null;
+        var candidates = new List<(string Path, string Stamp, DateTimeOffset At, int Page)>();
+        foreach (var directory in Directory.EnumerateDirectories(root))
+        {
+            cancel.ThrowIfCancellationRequested();
+            try
+            {
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) continue;
+                var path = Path.Combine(directory, "bundle.json"); var recognitionPath = Path.Combine(directory, "recognition.json");
+                if (!File.Exists(path) || !File.Exists(recognitionPath)) continue;
+                var stamp = PcrClanGuide.Stamp(path)!; var cached = PcrClanGuide.Bundle(path);
+                if ((string?)cached["source"]?["bvid"] != bvid) continue;
+                var matchingPages = ((JArray)cached["pages"]!).OfType<JObject>().Where(x => (int?)x["page"] == part).ToArray();
+                if (matchingPages.Length != 1 || matchingPages[0]["cid"]?.Type != JTokenType.Integer || (long)matchingPages[0]["cid"]! <= 0) continue;
+                var cid = (long)matchingPages[0]["cid"]!;
+                var jobs = ((JArray)cached["jobs"]!).OfType<JObject>().Where(x => (int?)x["source"]?["page"] == part).ToArray();
+                if (jobs.Length == 0) continue;
+                var records = ReadCacheRecords(recognitionPath).OfType<JObject>().Where(x => (int?)x["page"] == part).ToArray();
+                if (records.Length != 1 || records[0]["acquisition"] is not JObject acquisition
+                    || (string?)acquisition["bvid"] != bvid || (int?)acquisition["page"] != part || (long?)acquisition["cid"] != cid
+                    || acquisition["retrieved_at"]?.Type != JTokenType.String || records[0]["observations"] is not JArray observations) continue;
+                var at = PcrGuideData.Observation((string)acquisition["retrieved_at"]!);
+                if (at > DateTimeOffset.Now) continue;
+                var recognitionStamp = PcrClanGuide.Stamp(recognitionPath);
+                var valid = true;
+                foreach (var job in jobs)
+                {
+                    cancel.ThrowIfCancellationRequested();
+                    var source = job["source"] as JObject;
+                    var image = (string?)source?["image_path"]; var id = (string?)source?["job_id"];
+                    if (source == null || (string?)source["bvid"] != bvid || (long?)source["cid"] != cid || image == null || id == null
+                        || source["at_seconds"]?.Type != JTokenType.Integer || !Path.IsPathFullyQualified(image)
+                        || !Path.GetFullPath(image).StartsWith(runtime, StringComparison.OrdinalIgnoreCase)
+                        || PcrClanGuide.Stamp(image) != (string?)source["image_sha256"]) { valid = false; break; }
+                    var imageDir = Path.GetDirectoryName(image); var sourceDir = imageDir == null ? null : Path.GetDirectoryName(imageDir);
+                    var sourceRoot = sourceDir == null ? null : Path.GetDirectoryName(sourceDir);
+                    if (sourceDir == null || sourceRoot == null || !JToken.DeepEquals(PcrClanGuide.ReadJson(Path.Combine(sourceDir, "acquisition.json")), acquisition)
+                        || PcrClanGuide.Stamp(Path.Combine(sourceRoot, "recognition.json")) != recognitionStamp) { valid = false; break; }
+                    var matching = observations.OfType<JObject>().Where(x => JToken.DeepEquals(x["at_seconds"], source["at_seconds"])
+                        && (string?)x["image_path"] == image).ToArray();
+                    if (matching.Length != 1 || matching[0]["tables"] is not JArray tables
+                        || tables.OfType<JObject>().Count(x => (string?)x["job_id"] == id) != 1) { valid = false; break; }
+                }
+                if (valid && PcrClanGuide.Stamp(path) == stamp) candidates.Add((path, stamp, at, part));
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception) { /* An incomplete or changed local cache is not a usable fallback. */ }
+        }
+        return candidates.OrderByDescending(x => x.At).ThenBy(x => x.Path, StringComparer.Ordinal).FirstOrDefault() is var found && found.Path != null ? found : null;
     }
     private async Task FetchVideo()
     {
-        if (fetchCancel != null) { status.Text = "正在获取，可先停止当前获取。"; return; }
+        if (fetchCancel != null) { SetVideoStatus("正在获取，可先停止当前获取。"); return; }
         var url = video.Text?.Trim() ?? "";
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.Host != "www.bilibili.com" || uri.UserInfo != "") { status.Text = "请粘贴 B 站 HTTPS 视频链接。"; return; }
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != "https" || (uri.Host != "www.bilibili.com" && uri.Host != "bilibili.com") || uri.UserInfo != "") { SetVideoStatus("请粘贴 B 站 HTTPS 视频链接。"); return; }
         using var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(5)); fetchCancel = cancel; stopFetch.IsVisible = true;
-        status.Text = "正在获取视频原图与分 P 作业，取得后仍需核对五人和操作。";
+        SetVideoStatus("正在获取视频原图与分 P 作业，较长的视频可能需要几分钟；取得后仍需核对五人和操作。");
         var output = Path.Combine(repository, ".runtime", "clan-guide-sources", Guid.NewGuid().ToString("N"));
         using var child = new Process(); var started = false;
         try
@@ -665,14 +702,34 @@ public sealed class PcrClanGuideView : UserControl
             started = true;
             var stdout = child.StandardOutput.ReadToEndAsync(cancel.Token); var stderr = child.StandardError.ReadToEndAsync(cancel.Token);
             await child.WaitForExitAsync(cancel.Token); var text = await stdout; var error = await stderr;
-            if (child.ExitCode != 0) throw new InvalidOperationException("视频获取失败：" + error.Trim().Substring(0, Math.Min(error.Trim().Length, 1500)));
+            if (child.ExitCode != 0)
+            {
+                var detail = error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "请检查网络后重试。";
+                if (detail.Contains("HTTP Error 412", StringComparison.OrdinalIgnoreCase))
+                {
+                    SetVideoStatus("线上获取受阻，正在查找同一分 P 的本地缓存。");
+                    var cached = await Task.Run(() => FindCachedVideo(uri, cancel.Token), cancel.Token);
+                    if (cached is { } found && PcrClanGuide.Stamp(found.Path) == found.Stamp)
+                    {
+                        await LoadBundleAsync(found.Path, found.Page);
+                        Invalidate();
+                        cacheNotice.Text = $"本地缓存（采集于 {found.At:yyyy-MM-dd HH:mm:ss zzz}）；线上是否更新尚未核验，请对照原图核对。";
+                        SetVideoStatus("线上获取受阻，已载入本地缓存供核对。");
+                        return;
+                    }
+                    detail = "B 站暂时拒绝自动获取（HTTP 412）；可稍后重试或导入已获取的作业包。";
+                }
+                else if (detail.StartsWith("ValueError: ", StringComparison.Ordinal)) detail = detail[12..];
+                if (detail.Length > 300) detail = detail[..300] + "…";
+                throw new InvalidOperationException(detail);
+            }
             var last = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "";
             var result = JObject.Parse(last); var path = (string?)result["bundle_path"] ?? throw new InvalidDataException("视频获取未返回作业包。");
             if (Path.GetFullPath(path) != Path.Combine(output, "bundle.json")) throw new InvalidDataException("视频获取返回了其他目录。");
-            LoadBundle(path);
+            await LoadBundleAsync(path);
         }
-        catch (OperationCanceledException) { if (started && !child.HasExited) child.Kill(true); status.Text = "获取已停止，已保存的作业未改变。"; }
-        catch (Exception ex) { status.Text = "获取未完成：" + ex.Message; }
+        catch (OperationCanceledException) { if (started && !child.HasExited) child.Kill(true); SetVideoStatus("获取已停止，已保存的作业未改变。"); }
+        catch (Exception ex) { SetVideoStatus("获取未完成：" + ex.Message); }
         finally { fetchCancel = null; stopFetch.IsVisible = false; }
     }
 }

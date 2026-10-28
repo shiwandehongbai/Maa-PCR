@@ -3,7 +3,7 @@ from unittest.mock import patch
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from pcr_maa.guide_source import video_reference, _public_url, acquire_video
+from pcr_maa.guide_source import video_reference, canonical_video_url, _public_url, acquire_video
 
 
 class GuideSourceTest(unittest.TestCase):
@@ -11,13 +11,24 @@ class GuideSourceTest(unittest.TestCase):
         self.assertEqual(video_reference('https://www.bilibili.com/video/BV1DeNY6dEJP/?p=10'), ('BV1DeNY6dEJP', 10))
         self.assertEqual(video_reference('https://www.bilibili.com/video/BV1Fvpu6DE4x/'), ('BV1Fvpu6DE4x', 1))
 
+    def test_webpage_tracking_is_removed_and_explicit_page_is_preserved(self):
+        raw = 'https://www.bilibili.com/video/BV1hQnb6XEyf/?vd_source=private-value&spm_id_from=333.1&p=2'
+        self.assertEqual(video_reference(raw), ('BV1hQnb6XEyf', 2))
+        self.assertEqual(canonical_video_url(raw), 'https://www.bilibili.com/video/BV1hQnb6XEyf/?p=2')
+        self.assertEqual(canonical_video_url('https://bilibili.com/video/BV1hQnb6XEyf?spm_id_from=333.1'),
+                         'https://www.bilibili.com/video/BV1hQnb6XEyf/')
+        self.assertEqual(canonical_video_url('https://www.bilibili.com/video/BV1hQnb6XEyf/?p=1&vd_source=x'),
+                         'https://www.bilibili.com/video/BV1hQnb6XEyf/?p=1')
+
     def test_invalid_reference_is_not_guessed(self):
         for url in ('https://b23.tv/example', 'https://example.com/video/BV1DeNY6dEJP/',
                     'https://www.bilibili.com/video/BV1DeNY6dEJP/?p=0',
                     'https://www.bilibili.com/video/BV1DeNY6dEJP/?p=1&p=10',
                     'https://www.bilibili.com/video/BV1DeNY6dEJP/?p=１０',
                     'https://www.bilibili.com/video/BV1DeNY6dEJP/?p=1&token=private',
-                    'https://user:pass@www.bilibili.com/video/BV1DeNY6dEJP/'):
+                    'https://user:pass@www.bilibili.com/video/BV1DeNY6dEJP/',
+                    'https://@www.bilibili.com/video/BV1DeNY6dEJP/',
+                    'https://www.bilibili.com/video/BV1DeNY6dEJP/?p=1&%70=2'):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 video_reference(url)
 
@@ -44,7 +55,9 @@ class GuideSourceTest(unittest.TestCase):
             with path.open('x', encoding='utf-8') as stream:
                 json.dump(value, stream)
         with TemporaryDirectory(dir=Path.cwd()/'.runtime') as directory, patch('pcr_maa.guide_source._download', download):
-            video, result = acquire_video('https://www.bilibili.com/video/BV1DeNY6dEJP/?p=10', directory)
+            video, result = acquire_video('https://www.bilibili.com/video/BV1DeNY6dEJP/?vd_source=private-value&p=10&spm_id_from=333.1', directory)
+            self.assertEqual(result['source_url'], 'https://www.bilibili.com/video/BV1DeNY6dEJP/?p=10')
+            self.assertNotIn('private-value', (Path(directory)/'acquisition.json').read_text(encoding='utf-8'))
             self.assertEqual(result['cid'], 88)
             self.assertEqual(result['part'], '火8-8')
             self.assertEqual(video.read_bytes(), b'fixture-video')

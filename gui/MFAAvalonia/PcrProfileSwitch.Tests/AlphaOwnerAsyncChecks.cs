@@ -453,8 +453,8 @@ internal static class AlphaOwnerAsyncChecks
     private static void CopyClanCalibration(string source, string destination, string version)
     {
         var available = PcrClanCalibration.Read(source, version);
-        if (!available.Supports("simulation") || !available.OwnUnitsOnly || available.Supports("timed") || available.Supports("formal") || available.Supports("carryover"))
-            throw new InvalidDataException("Offline Owner fixture expects the bundled none-only simulation calibration.");
+        if (!available.Supports("simulation") || !available.OwnUnitsOnly || available.Supports("timed"))
+            throw new InvalidDataException("Offline Owner fixture requires bundled own-units simulation support without timed capability.");
         void Copy(string relative)
         {
             var target = Path.GetFullPath(Path.Combine(destination, relative));

@@ -86,6 +86,10 @@ def calibration_v2(calibration):
             fields={key: [200, 20+index*50, 300, 45] for index, key in enumerate(visible)}, inherit=list(inherited))
         if page in ('formation', 'support'):
             value['pages'][page]['formal'] = deepcopy(label)
+    value['pages']['result']['fields']['damage'] = [88, 47, 162, 38]
+    value['pages']['lobby']['boss_slots'] = {str(boss): dict(round=[200, 20, 300, 45],
+        defeated=deepcopy(label)) for boss in range(1, 6)}
+    value['pages']['boss_detail']['navigation'] = {direction: deepcopy(label) for direction in ('previous', 'next')}
     value['pages']['battle']['speed_one'] = deepcopy(label)
     value['pages']['target']['live_state'] = {state: deepcopy(label) for state in ('on', 'off', 'absent')}
     value['actions'] = {name: dict(page=page, label=deepcopy(label), target=[10, 10, 40, 40],
@@ -98,12 +102,15 @@ def calibration_v2(calibration):
 def v2_context(calibration, plan):
     nodes = module.calibration_pipeline(calibration, plan)
     texts = {'CBField_lobby_period': plan['period'], 'CBField_battle_remaining_seconds': '1:30',
-             'CBField_result_damage': '12,345',
+             'CBField_result_damage': '12,345×3.1',
+             'CBField_result_damage_verify': '12,345×3.1',
              'CBField_result_simulation': '模拟战的战斗结果不会显示在团队战成绩中。'}
     for page in ('boss_detail', 'target'):
         texts.update({f'CBField_{page}_phase': '第2阶段', f'CBField_{page}_boss': f'合成魔物{plan["boss"]}'})
     for page in ('target', 'formation', 'support'):
         texts[f'CBField_{page}_simulation'] = '设定为模拟战。'
+    texts.update({'CBNavRound'+str(boss): '第5轮' for boss in range(1, 6)})
+    texts.update(CBNavBoss=f'合成魔物{plan["boss"]}', CBNavSimulation='设定为模拟战。')
     guards = {f'CBLabel_{page}_{index}' for page in module.V2_PAGES for index in range(2)} | {'CBOneSpeed', 'CBLiveState_absent'}
     return nodes, texts, guards, context_for(nodes, texts, guards)
 
@@ -128,8 +135,10 @@ def test_v2_own_only_scope_omits_unverified_support_input_but_keeps_borrowed_mar
 
 
 @pytest.mark.parametrize('support_mode', ['qsjs', 'specified'])
-def test_v2_own_only_scope_rejects_support_plans_before_input(calibration_v2, plan, support_mode):
+def test_v2_own_only_scope_rejects_support_plans_before_input(calibration_v2, plan, support_mode, monkeypatch):
     profile = own_only_profile(calibration_v2)
+    monkeypatch.setattr(clan_battle, 'load_snapshot', lambda _: dict(ownership_complete=True,
+        units=[dict(unit_id=uid) for uid in plan['unit_ids'][:-1]]))
     with pytest.raises(RuntimeError, match='support_mode_uncalibrated'):
         module.calibration_pipeline(profile, dict(plan, support_mode=support_mode))
 
@@ -316,6 +325,7 @@ def test_v2_prepare_normalizes_current_clan_page_before_account_check(calibratio
     monkeypatch.setattr(port, 'choose', lambda names, **kwargs: 'CBPage_target')
     monkeypatch.setattr(port, 'read_page', lambda name: (calls.append('read_'+name) or dict(phase='B', live_state='absent'), {}))
     monkeypatch.setattr(port, 'form_team', lambda: calls.append('form_team'))
+    monkeypatch.setattr(port, '_open_simulation_target', lambda _: calls.append('read_target') or ({}, {}))
     port.prepare(plan)
     assert calls.index('CBAction_back_to_adventure') < calls.index(module.PROFILE_NODE) < calls.index('CBAction_open_clan')
     assert calls.index('read_target') < calls.index('CBAction_open_formation') < calls.index('form_team')
@@ -323,46 +333,58 @@ def test_v2_prepare_normalizes_current_clan_page_before_account_check(calibratio
     assert ('CBAction_back_to_lobby' in calls) == (initial == 'CBObserve_boss_detail')
 
 
-@pytest.mark.parametrize('mode_selected,live_state', [(True, 'absent'), (False, 'on')])
-def test_v2_return_reselects_simulation_after_next_returns_to_lobby(calibration_v2, plan, tmp_path, monkeypatch,
-                                                                 mode_selected, live_state):
+def test_v2_return_reselects_simulation_after_next_returns_to_lobby(calibration_v2, plan, tmp_path, monkeypatch):
     port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
     port.account = plan['account_id']
     calls = []
-    state = dict(identity(plan), live_state=live_state)
-    def read_page(name):
-        calls.append('read_'+name)
-        return dict(state), {'read': name}
-    def run(node, **kwargs):
-        calls.append(node)
-        if node == 'CBAction_disable_live_state':
-            state['live_state'] = 'off'
-        return {'node': node}
-    monkeypatch.setattr(port, 'read_page', read_page)
+    observed = result_page_receipt(dict(identity(plan), damage=123))
+    port.last_receipt = port._simulation_result_receipt = observed
+    monkeypatch.setattr(port, 'read_page', lambda *_: pytest.fail('must not recapture result'))
+    def run(name, *, click=False):
+        assert click is True
+        calls.append(name)
+        return {}
     monkeypatch.setattr(port, 'run', run)
     monkeypatch.setattr(port, 'wait', lambda names, **kwargs: calls.append('wait_'+names[0]) or names[0])
-    monkeypatch.setattr(port, 'choose', lambda names, **kwargs: names[0] if mode_selected else None)
+    monkeypatch.setattr(port, '_open_simulation_target', lambda _: (calls.append('select_simulation') or identity(plan), {}))
     returned = port.return_to_target(plan)
     assert returned['return_verified'] and returned['boss'] == plan['boss']
-    assert calls.index('CBAction_return_to_target') < calls.index('wait_CBPage_lobby') < calls.index('read_lobby')
-    assert calls.index('read_lobby') < calls.index('CBAction_open_boss') < calls.index('read_target')
-    assert calls.count('CBAction_return_to_target') == 1
-    assert ('CBAction_open_simulation' in calls) is not mode_selected
-    assert ('CBAction_disable_live_state' in calls) == (live_state == 'on')
-    assert 'CBStart' not in calls and 'CBAction_open_formation' not in calls
+    assert returned['native_evidence']['before'] is observed
+    assert calls == ['CBAction_return_to_target', 'select_simulation']
 
 
 def test_v2_return_wait_failure_never_repeats_next_or_opens_boss(calibration_v2, plan, tmp_path, monkeypatch):
     port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
     calls = []
-    monkeypatch.setattr(port, 'read_page', lambda name: (identity(plan), {}))
+    port.last_receipt = port._simulation_result_receipt = result_page_receipt(dict(identity(plan), damage=123))
+    monkeypatch.setattr(port, 'read_page', lambda *_: pytest.fail('must not recapture result'))
     monkeypatch.setattr(port, 'run', lambda node, **kwargs: calls.append(node) or {})
     def fail(*args, **kwargs):
         raise RuntimeError('page_unknown')
-    monkeypatch.setattr(port, 'wait', fail)
+    monkeypatch.setattr(port, '_open_simulation_target', fail)
     with pytest.raises(RuntimeError, match='page_unknown'):
         port.return_to_target(plan)
     assert calls == ['CBAction_return_to_target']
+
+
+@pytest.mark.parametrize('fault', ['missing', 'failed', 'wrong_node', 'unfinished', 'wrong_page',
+    'bad_damage', 'wrong_target', 'changed_receipt'])
+def test_v2_return_rejects_unverified_or_changed_result_without_input(calibration_v2, plan, tmp_path, monkeypatch, fault):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    observed = result_page_receipt(dict(identity(plan), damage=123))
+    port.last_receipt = port._simulation_result_receipt = observed
+    detail = observed['nodes'][-1]['recognition']['best']['detail']
+    if fault == 'missing': port.last_receipt = None
+    elif fault == 'failed': observed['native_ok'] = False
+    elif fault == 'wrong_node': observed['nodes'][-1]['name'] = 'CBReadSettings'
+    elif fault == 'unfinished': observed['nodes'][-1]['completed'] = False
+    elif fault == 'wrong_page': detail['page'] = 'battle'
+    elif fault == 'bad_damage': detail['damage'] = True
+    elif fault == 'wrong_target': detail['boss'] = plan['boss'] % 5 + 1
+    else: port.last_receipt = deepcopy(observed)
+    monkeypatch.setattr(port, 'run', lambda *args, **kwargs: pytest.fail('must not send return input'))
+    with pytest.raises(RuntimeError, match='clan_battle_(result_unknown|target_mismatch_or_not_simulation)'):
+        port.return_to_target(plan)
 
 
 def test_v2_team_star_animation_survives_slow_first_observation_without_input(calibration_v2, plan, tmp_path, monkeypatch):
@@ -380,13 +402,515 @@ def test_v2_team_star_animation_survives_slow_first_observation_without_input(ca
 
 def test_v2_missing_star_digits_stop_before_clearing_team(calibration_v2, plan, tmp_path, monkeypatch):
     port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    port.plan = plan
     calls = []
     monkeypatch.setattr(port, 'run', lambda node: calls.append(node) or receipt(dict(team(plan), stars=[None]*5)))
-    ticks = iter([10, 26])
+    ticks = iter([10, 10, 26])
     monkeypatch.setattr(module.time, 'monotonic', lambda: next(ticks))
     with pytest.raises(RuntimeError, match='stars_unreadable'):
         port.form_team()
+    assert calls == ['CBReadTeam', 'CBReadTeam']
+
+
+@pytest.fixture
+def formation_replay(calibration_v2, plan, tmp_path, monkeypatch):
+    class Replay(module.NativeClanBattle):
+        def __init__(self):
+            super().__init__(NS(resource=Registry(), controller=NS(
+                cached_image=np.zeros((720, 1280, 3), np.uint8))), tmp_path, calibration=calibration_v2)
+            self.plan, self.support_unit_id = plan, None
+            self.page = module.ClanBattlePage(plan, calibration_v2)
+            self.characters = NS(match=lambda image, uid, roi: dict(unit_id=uid, box=[roi[0],roi[1],126,126]))
+            self.selected, self.inputs, self.readings = [None]*5, [], []
+            self.clear_delta, self.add_change, self.final_change, self.full_reads = 1, None, None, 0
+
+        def _reset_list(self, section): pass
+
+        def checkpoint(self): pass  # Synthetic replay has no native tasker.
+
+        def run(self, node, *, click=False):
+            if node == 'CBReadTeam':
+                ids = self.selected+[None]*(5-len(self.selected))
+                stars = [None]*5
+                if len(self.selected) == 5 and all(uid is not None for uid in ids):
+                    self.full_reads += 1
+                    stars = list(plan['stars'])
+                    if self.full_reads > 1:
+                        if self.final_change == 'stars': stars[-1] = None
+                        elif self.final_change == 'unit': ids[-1] = 999901
+                        elif self.final_change == 'support':
+                            return receipt(dict(team(plan), support_unit_id=ids[-1]))
+                reading = dict(identity(plan), unit_ids=ids, stars=stars,
+                    member_count=len(self.selected), support_unit_id=None)
+                self.readings.append(deepcopy(reading))
+                return receipt(reading)
+            self.inputs.append(node)
+            assert node == 'CBEditTeam' and click
+            params = self.tasker.resource.nodes[node]['custom_recognition_param']
+            if params['mode'] == 'clear':
+                assert params['count'] == len(self.selected)
+                for _ in range(self.clear_delta): self.selected.pop()
+            else:
+                assert params['mode'] == 'add' and params['unit_id'] not in self.selected
+                if self.add_change != 'missing':
+                    self.selected.append(999901 if self.add_change == 'wrong_unit' else params['unit_id'])
+            return {}
+
+    # A failed strict observation reaches its deadline without slowing the regression check.
+    ticks = iter(range(0, 10000, 20))
+    monkeypatch.setattr(module.time, 'monotonic', lambda: next(ticks))
+    return Replay()
+
+
+def test_v2_form_team_clears_old_unknown_stars_then_strictly_verifies_target(formation_replay, plan):
+    port = formation_replay
+    port.form_team()
+    assert port.inputs == ['CBEditTeam']*10
+    assert [row['member_count'] for row in port.readings[:6]] == [5, 4, 3, 2, 1, 0]
+    assert port.selected == plan['unit_ids']
+    assert port.readings[-1]['stars'] == plan['stars']
+    assert port.full_reads == 2
+
+
+@pytest.mark.parametrize('support_mode', ['none', 'qsjs'])
+def test_partial_team_reuses_recognized_own_members_and_verifies_final_team(formation_replay, plan, support_mode):
+    plan['support_mode'] = support_mode
+    port = formation_replay
+    port.selected = [plan['unit_ids'][3], plan['unit_ids'][0], plan['unit_ids'][2], plan['unit_ids'][1]]
+    port.form_team()
+    assert port.inputs == ['CBEditTeam']
+    assert set(port.selected) == set(plan['unit_ids'])
+    assert port.readings[-1]['stars'] == plan['stars']
+    assert port.full_reads == 2
+
+
+@pytest.mark.parametrize('selected', ['unknown', 'non_target', 'duplicate'])
+def test_partial_team_does_not_reuse_unknown_non_target_or_duplicate_members(formation_replay, plan, selected):
+    port = formation_replay
+    port.selected = {'unknown': [plan['unit_ids'][0], None],
+        'non_target': [plan['unit_ids'][0], 999901],
+        'duplicate': [plan['unit_ids'][0], plan['unit_ids'][0]]}[selected]
+    port.form_team()
+    assert port.inputs == ['CBEditTeam'] * 7
+    assert port.selected == plan['unit_ids']
+
+
+def test_partial_team_does_not_change_support_path(formation_replay, plan, monkeypatch):
+    port = formation_replay
+    port.selected = plan['unit_ids'][:2]
+    port.plan = dict(plan, support_mode='specified', support_unit_id=plan['unit_ids'][-1])
+    port.support_unit_id = plan['unit_ids'][-1]
+    monkeypatch.setattr(port, '_reset_list', lambda _: (_ for _ in ()).throw(RuntimeError('after_clear')))
+    with pytest.raises(RuntimeError, match='after_clear'):
+        port.form_team()
+    assert port.inputs == ['CBEditTeam'] * 2
+    assert port.selected == []
+
+
+def test_partial_team_still_rejects_unreadable_final_stars(formation_replay, plan):
+    port = formation_replay
+    port.selected = plan['unit_ids'][:4]
+    port.final_change = 'stars'
+    with pytest.raises(RuntimeError, match='stars_unreadable'):
+        port.form_team()
+    assert port.inputs == ['CBEditTeam']
+    assert len(port.selected) == 5
+
+
+@pytest.mark.parametrize('delta', [0, 2])
+def test_v2_form_team_stops_when_clear_count_does_not_drop_by_one(formation_replay, delta):
+    port = formation_replay
+    port.clear_delta = delta
+    with pytest.raises(RuntimeError, match='clear_readback_unknown'):
+        port.form_team()
+    assert port.inputs == ['CBEditTeam']
+
+
+
+@pytest.mark.parametrize('change', ['missing', 'wrong_unit'])
+def test_v2_form_team_stops_when_added_member_is_not_confirmed(formation_replay, change):
+    port = formation_replay
+    port.add_change = change
+    with pytest.raises(RuntimeError, match='add_readback_unknown'):
+        port.form_team()
+    assert port.inputs == ['CBEditTeam']*6
+
+
+@pytest.mark.parametrize('change,error', [('stars', 'stars_unreadable'),
+    ('unit', 'team_or_support_mismatch'), ('support', 'team_or_support_mismatch')])
+def test_v2_form_team_final_unknown_or_wrong_party_never_starts(formation_replay, plan, change, error):
+    port = formation_replay
+    port.final_change = change
+    with pytest.raises(RuntimeError, match=error):
+        port.form_team()
+    assert port.inputs == ['CBEditTeam']*10
+    with pytest.raises(RuntimeError, match=error):
+        port.start_and_read(plan)
+    assert 'CBStart' not in port.inputs
+
+
+
+@pytest.mark.parametrize('adding', [False, True])
+def test_edit_readback_waits_for_click_effect_without_resending(plan, calibration_v2, tmp_path, monkeypatch, adding):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    uid = plan['unit_ids'][0] if adding else None
+    before = dict(member_count=0 if adding else 1, unit_ids=[None]*5, stars=[None]*5)
+    expected = dict(member_count=1 if adding else 0,
+        unit_ids=[uid]+[None]*4, stars=[None]*5)
+    # Add can show the new occupied slot before its portrait becomes readable.
+    in_between = dict(expected, unit_ids=[None]*5) if adding else before
+    frames = iter([before, in_between, expected])
+    calls = []
+    monkeypatch.setattr(port, 'run', lambda node: calls.append(node) or receipt(next(frames)))
+    monkeypatch.setattr(port, 'checkpoint', lambda: None)
+    monkeypatch.setattr(module.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(module.time, 'monotonic', lambda: 0)
+    actual = port._read_team_after_edit(before['member_count'], added_unit_id=uid)
+    assert actual == expected
+    assert calls == ['CBReadTeam']*3
+
+
+
+@pytest.mark.parametrize('adding', [False, True])
+@pytest.mark.parametrize('settles', [False, True])
+def test_slow_first_unchanged_edit_readback_is_observed_once_more(plan, calibration_v2, tmp_path, monkeypatch, adding, settles):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    uid = plan['unit_ids'][0] if adding else None
+    before = dict(member_count=0 if adding else 1, unit_ids=[None]*5, stars=[None]*5)
+    after = dict(member_count=1 if adding else 0, unit_ids=[uid]+[None]*4, stars=[None]*5)
+    frames = iter([before, after if settles else before])
+    reads = []
+    monkeypatch.setattr(port, 'read_team', lambda *, require_stars: reads.append(require_stars) or next(frames))
+    monkeypatch.setattr(port, 'run', lambda *args, **kwargs: pytest.fail('No input should be sent'))
+    monkeypatch.setattr(port, 'checkpoint', lambda: None)
+    monkeypatch.setattr(module.time, 'sleep', lambda _: None)
+    ticks = iter([0, 6, 12])
+    monkeypatch.setattr(module.time, 'monotonic', lambda: next(ticks))
+    if settles:
+        assert port._read_team_after_edit(before['member_count'], added_unit_id=uid) == after
+    else:
+        with pytest.raises(RuntimeError, match='add_readback_unknown' if adding else 'clear_readback_unknown'):
+            port._read_team_after_edit(before['member_count'], added_unit_id=uid)
+    assert reads == [False, False]
+
+
+@pytest.mark.parametrize('count', [2, 5])
+def test_slow_first_clear_readback_rejects_unexpected_count_without_another_read(plan, calibration_v2, tmp_path, monkeypatch, count):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    reads = []
+    monkeypatch.setattr(port, 'read_team', lambda *, require_stars: reads.append(require_stars) or dict(
+        member_count=count, unit_ids=[None]*5, stars=[None]*5))
+    monkeypatch.setattr(module.time, 'monotonic', lambda: 0)
+    with pytest.raises(RuntimeError, match='clear_readback_unknown'):
+        port._read_team_after_edit(1)
+    assert reads == [False]
+
+
+@pytest.mark.parametrize('settles', [True, False])
+def test_slow_first_add_readback_observes_animation_once_more(plan, calibration_v2, tmp_path, monkeypatch, settles):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    uid = plan['unit_ids'][3]
+    partial = dict(member_count=4, unit_ids=plan['unit_ids'][:3] + [None, None], stars=[5, 5, 5, None, None])
+    resolved = dict(partial, unit_ids=plan['unit_ids'][:4] + [None])
+    frames = iter([partial, resolved if settles else partial])
+    reads = []
+    monkeypatch.setattr(port, 'read_team', lambda *, require_stars: reads.append(require_stars) or next(frames))
+    monkeypatch.setattr(port, 'run', lambda *args, **kwargs: pytest.fail('No input should be sent'))
+    monkeypatch.setattr(port, 'checkpoint', lambda: None)
+    monkeypatch.setattr(module.time, 'sleep', lambda _: None)
+    ticks = iter([0, 6, 12])
+    monkeypatch.setattr(module.time, 'monotonic', lambda: next(ticks))
+    if settles:
+        assert port._read_team_after_edit(3, added_unit_id=uid) == resolved
+    else:
+        with pytest.raises(RuntimeError, match='add_readback_unknown'):
+            port._read_team_after_edit(3, added_unit_id=uid)
+    assert reads == [False, False]
+
+
+@pytest.mark.parametrize('count', [1, 5])
+def test_slow_add_readback_rejects_unexpected_count_without_another_read(plan, calibration_v2, tmp_path, monkeypatch, count):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    reads = []
+    monkeypatch.setattr(port, 'read_team', lambda *, require_stars: reads.append(require_stars) or dict(
+        member_count=count, unit_ids=[None]*5, stars=[None]*5))
+    monkeypatch.setattr(module.time, 'monotonic', lambda: 0)
+    with pytest.raises(RuntimeError, match='add_readback_unknown'):
+        port._read_team_after_edit(3, added_unit_id=plan['unit_ids'][3])
+    assert reads == [False]
+
+
+def test_edit_readback_rejects_known_wrong_new_member_immediately(plan, calibration_v2, tmp_path, monkeypatch):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    calls = []
+    reading = dict(member_count=1, unit_ids=[plan['unit_ids'][1]]+[None]*4, stars=[None]*5)
+    monkeypatch.setattr(port, 'run', lambda node: calls.append(node) or receipt(reading))
+    monkeypatch.setattr(module.time, 'monotonic', lambda: 0)
+    with pytest.raises(RuntimeError, match='add_readback_unknown'):
+        port._read_team_after_edit(0, added_unit_id=plan['unit_ids'][0])
     assert calls == ['CBReadTeam']
+
+
+@pytest.mark.parametrize('adding', [False, True])
+def test_edit_readback_does_not_retry_an_edit_when_animation_never_resolves(plan, calibration_v2, tmp_path, monkeypatch, adding):
+    port = module.NativeClanBattle(NS(), tmp_path, calibration=calibration_v2)
+    before = dict(member_count=0 if adding else 1, unit_ids=[None]*5, stars=[None]*5)
+    calls = []
+    monkeypatch.setattr(port, 'run', lambda node: calls.append(node) or receipt(before))
+    monkeypatch.setattr(port, 'checkpoint', lambda: None)
+    monkeypatch.setattr(module.time, 'sleep', lambda _: None)
+    ticks = iter([0, 0, 1, 1, 6])
+    monkeypatch.setattr(module.time, 'monotonic', lambda: next(ticks))
+    with pytest.raises(RuntimeError, match='add_readback_unknown' if adding else 'clear_readback_unknown'):
+        port._read_team_after_edit(before['member_count'], added_unit_id=plan['unit_ids'][0] if adding else None)
+    assert calls == ['CBReadTeam']*2
+
+
+
+@pytest.fixture
+def list_top_replay(tmp_path):
+    def build(positions, *, verified_top=None, direction='top', thumb_lengths=None):
+        frames = []
+        for index, position in enumerate(positions):
+            frame = np.zeros((720, 1280, 3), np.uint8)
+            if position is not None:
+                length = 30 if thumb_lengths is None else thumb_lengths[index]
+                frame[157+position:157+position+length, 1217:1236] = [220, 160, 70]
+            # Equipment/star badge animation must not count as scroll progress.
+            frame[250:280, 300:330] = index+1
+            frames.append(frame)
+        port = module.NativeClanBattle(NS(controller=NS(cached_image=frames[0])), tmp_path,
+            calibration={'version': 2})
+        state = dict(index=0, inputs=[], pages=[])
+        def page(section):
+            state['pages'].append(section)
+            port.tasker.controller.cached_image = frames[state['index']]
+            return {}, {}
+        def run(node, *, click=False):
+            assert node == 'CBAction_characters_'+direction and click
+            state['inputs'].append(node)
+            state['index'] = min(state['index']+1, len(frames)-1)
+        port.read_page, port.run = page, run
+        port._list_hit = lambda section, position: verified_top is not None and state['index'] == verified_top
+        return port, state
+    return build
+
+
+def test_formation_reset_list_moves_up_until_original_top_is_verified(list_top_replay):
+    port, state = list_top_replay([100, 50, 10], verified_top=2)
+    port._reset_list('formation')
+    assert state['inputs'] == ['CBAction_characters_top']*2
+    assert state['pages'] == ['formation']*4
+
+
+def test_formation_reset_list_already_top_sends_no_input(list_top_replay):
+    port, state = list_top_replay([10], verified_top=0)
+    port._reset_list('formation')
+    assert state['inputs'] == [] and state['pages'] == []
+
+
+@pytest.mark.parametrize('positions,error,inputs', [
+    ([100, 100], 'list_unchanged_no_retry', 1),
+    ([100, 150], 'list_unchanged_no_retry', 1),
+    ([None, 10], 'list_position_unknown', 0),
+    ([100, None], 'list_position_unknown', 1),
+])
+def test_formation_reset_list_stops_without_verified_scroll_progress(list_top_replay, positions, error, inputs):
+    port, state = list_top_replay(positions)
+    with pytest.raises(RuntimeError, match=error):
+        port._reset_list('formation')
+    assert state['inputs'] == ['CBAction_characters_top']*inputs
+
+
+def test_formation_reset_list_never_accepts_position_without_top_marker(list_top_replay):
+    port, state = list_top_replay(list(range(100, 83, -1)))
+    with pytest.raises(RuntimeError, match='list_top_not_verified'):
+        port._reset_list('formation')
+    assert state['inputs'] == ['CBAction_characters_top']*16
+
+
+
+@pytest.mark.parametrize('target_page', [16, 48, None])
+def test_v2_formation_scans_every_destination_without_exceeding_swipe_budget(formation_replay, plan, target_page):
+    port = formation_replay
+    port.selected = []
+    state = dict(page=0, swipes=0, scans=[])
+    target = plan['unit_ids'][0]
+    def reset(section):
+        assert section == 'formation'
+        state['page'] = 0
+    def next_page(section):
+        assert section == 'formation'
+        state['swipes'] += 1
+        state['page'] += 1
+        return True
+    def match(frame, uid, roi):
+        if uid == target:
+            state['scans'].append(state['page'])
+            if state['page'] != target_page:
+                return None
+        return dict(unit_id=uid, box=[roi[0],roi[1],126,126])
+    port._reset_list, port._next_list, port.characters.match = reset, next_page, match
+    if target_page is None:
+        with pytest.raises(RuntimeError, match='character_not_found:'+str(target)):
+            port.form_team()
+        assert port.inputs == []
+    else:
+        port.form_team()
+        assert port.selected == plan['unit_ids'] and port.inputs == ['CBEditTeam']*5
+    last = 48 if target_page is None else target_page
+    assert state['scans'] == list(range(last+1))
+    assert state['swipes'] == last
+
+
+
+@pytest.mark.parametrize('version', [1, 2])
+def test_formation_next_swipe_timing_is_optional_and_does_not_change_other_scrolls(calibration, calibration_v2, plan, version):
+    profile = deepcopy(calibration_v2 if version == 2 else calibration)
+    original = module.calibration_pipeline(profile, plan)
+    assert original['CBAction_characters_next']['duration'] == 400
+    assert original['CBAction_characters_next'].get('end_hold', 0) == 0
+    assert original['CBAction_characters_next']['post_delay'] == 200
+    profile['actions']['characters_next'].update(duration=700, end_hold=250, post_delay=350)
+    changed = module.calibration_pipeline(profile, plan)
+    assert {key: changed['CBAction_characters_next'][key] for key in ('duration', 'end_hold', 'post_delay')} == dict(
+        duration=700, end_hold=250, post_delay=350)
+    for name in ('characters_top', 'support_top', 'support_next'):
+        assert changed['CBAction_'+name] == original['CBAction_'+name]
+
+
+@pytest.mark.parametrize('key,value', [('duration', 0), ('duration', -1), ('duration', 5001),
+    ('duration', True), ('end_hold', -1), ('end_hold', 5001), ('end_hold', '250'),
+    ('post_delay', -1), ('post_delay', 5001), ('post_delay', True)])
+def test_formation_next_swipe_rejects_invalid_timing(calibration_v2, plan, key, value):
+    profile = deepcopy(calibration_v2)
+    profile['actions']['characters_next'][key] = value
+    with pytest.raises(ValueError, match='scroll_timing_invalid'):
+        module.calibration_pipeline(profile, plan)
+
+
+
+def test_formation_next_list_requires_actual_downward_scrollbar_progress(list_top_replay):
+    port, state = list_top_replay([100, 150], direction='next')
+    assert port._next_list('formation') is True
+    assert state['inputs'] == ['CBAction_characters_next']
+    assert state['pages'] == ['formation']*2
+
+
+def test_formation_next_list_at_original_bottom_sends_no_input(list_top_replay):
+    port, state = list_top_replay([100], direction='next')
+    port._list_hit = lambda section, position: position == 'bottom'
+    assert port._next_list('formation') is False
+    assert state['inputs'] == [] and state['pages'] == []
+
+
+@pytest.mark.parametrize('positions,error,inputs', [
+    ([100, 100], 'list_unchanged_no_retry', 1),
+    ([100, 50], 'list_unchanged_no_retry', 1),
+    ([None, 150], 'list_position_unknown', 0),
+    ([100, None], 'list_position_unknown', 1),
+])
+def test_formation_next_list_rejects_badge_only_or_unknown_scroll_changes(list_top_replay, positions, error, inputs):
+    port, state = list_top_replay(positions, direction='next')
+    with pytest.raises(RuntimeError, match=error):
+        port._next_list('formation')
+    assert state['inputs'] == ['CBAction_characters_next']*inputs
+
+
+
+@pytest.mark.parametrize('band,expected_top,expected', [
+    (None, None, dict(visible=False, position=None, can_scroll=None)),
+    ((0, 333), None, dict(visible=True, position=None, can_scroll=False)),
+    ((8, 31), 165, dict(visible=True, position=8/302, can_scroll=True)),
+])
+def test_scrollbar_absolute_geometry_is_optional_and_preserves_default_results(band, expected_top, expected):
+    from pcr_maa.labyrinth.character_recognition import scrollbar
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    if band is not None:
+        top, length = band
+        frame[157+top:157+top+length, 1217:1236] = [220, 160, 70]
+    assert scrollbar(frame, 'battle') == expected
+    assert scrollbar(frame, 'battle', include_geometry=True) == dict(expected, absolute_top=expected_top)
+
+
+@pytest.mark.parametrize('direction,lengths', [('top', [31, 28]), ('next', [28, 31])])
+def test_formation_scroll_thumb_length_jitter_is_not_movement(list_top_replay, direction, lengths):
+    port, state = list_top_replay([8, 8], direction=direction, thumb_lengths=lengths)
+    with pytest.raises(RuntimeError, match='list_unchanged_no_retry'):
+        if direction == 'top':
+            port._reset_list('formation')
+        else:
+            port._next_list('formation')
+    assert state['inputs'] == ['CBAction_characters_'+direction]
+
+
+@pytest.mark.parametrize('direction,positions', [('top', [9, 8]), ('next', [8, 9])])
+def test_formation_scroll_accepts_one_actual_pixel_of_progress(list_top_replay, direction, positions):
+    port, state = list_top_replay(positions, direction=direction, verified_top=1 if direction == 'top' else None)
+    if direction == 'top':
+        port._reset_list('formation')
+    else:
+        assert port._next_list('formation') is True
+    assert state['inputs'] == ['CBAction_characters_'+direction]
+
+
+
+def test_v2_formation_bottom_clipped_target_is_added_only_after_complete_readback(formation_replay, plan):
+    port = formation_replay
+    port.selected = []
+    state = dict(page=0, next_calls=0)
+    target = plan['unit_ids'][0]
+    def match(frame, uid, roi):
+        box = [roi[0], roi[1]+roi[3]-30, 126, 126] if uid == target and state['page'] == 0 else [roi[0], roi[1], 126, 126]
+        return dict(unit_id=uid, box=box)
+    def next_page(section):
+        assert section == 'formation' and port.inputs == []
+        state['next_calls'] += 1
+        state['page'] += 1
+        return True
+    port.characters.match, port._next_list = match, next_page
+    port.form_team()
+    assert state['next_calls'] == 1
+    assert port.selected == plan['unit_ids'] and port.inputs == ['CBEditTeam']*5
+
+
+@pytest.mark.parametrize('next_result,error', [(False, 'character_not_found'),
+    ('clan_battle_list_position_unknown', 'list_position_unknown'),
+    ('clan_battle_list_unchanged_no_retry', 'list_unchanged_no_retry')])
+def test_v2_formation_bottom_clipped_target_never_adds_without_safe_next_step(formation_replay, next_result, error):
+    port = formation_replay
+    port.selected = []
+    port.characters.match = lambda frame, uid, roi: dict(unit_id=uid,
+        box=[roi[0], roi[1]+roi[3]-30, 126, 126])
+    calls = []
+    def next_page(section):
+        calls.append(section)
+        if isinstance(next_result, str):
+            raise RuntimeError(next_result)
+        return next_result
+    port._next_list = next_page
+    with pytest.raises(RuntimeError, match=error):
+        port.form_team()
+    assert calls == ['formation'] and port.inputs == []
+
+
+@pytest.mark.parametrize('kind', ['top', 'left', 'right', 'wrong_uid', 'ambiguous'])
+def test_v2_formation_other_clipping_or_identity_doubt_never_scrolls_or_adds(formation_replay, kind):
+    port = formation_replay
+    port.selected = []
+    if kind == 'ambiguous':
+        port.calibration['formation']['candidates'].append([300, 100, 130, 130])
+    def match(frame, uid, roi):
+        x, y = roi[0], roi[1]+roi[3]-30
+        if kind == 'top': y = roi[1]-1
+        elif kind == 'left': x -= 1
+        elif kind == 'right': x += 5
+        return dict(unit_id=999901 if kind == 'wrong_uid' else uid, box=[x, y, 126, 126])
+    port.characters.match = match
+    port._next_list = lambda _: pytest.fail('Uncertain candidate must not advance the list')
+    with pytest.raises(RuntimeError, match='candidate_ambiguous' if kind == 'ambiguous' else 'candidate_clipped'):
+        port.form_team()
+    assert port.inputs == []
 
 
 def test_v2_formation_uses_observed_slots_without_invented_owned_label(calibration_v2, plan):
@@ -535,6 +1059,12 @@ class Registry:
 
 def receipt(detail):
     return dict(native_ok=True, nodes=[dict(name='CBRead', recognition=dict(best=dict(detail=detail)))])
+
+
+def result_page_receipt(detail):
+    value = receipt(dict(detail, page='result'))
+    value['nodes'][-1].update(name='CBPage_result', completed=True)
+    return value
 
 
 def context_for(nodes, texts, hits=None):
@@ -832,7 +1362,7 @@ def test_form_team_does_not_dispatch_add_for_clipped_or_ambiguous_card(plan, cal
     port.page = module.ClanBattlePage(plan, calibration)
     port.characters = NS(match=lambda image, uid, roi: dict(unit_id=uid,
         box=[roi[0] - (1 if kind == 'half' else 0), roi[1], 130, 130]))
-    monkeypatch.setattr(port, 'read_team', lambda: dict(identity(plan), unit_ids=[None]*5,
+    monkeypatch.setattr(port, 'read_team', lambda **kwargs: dict(identity(plan), unit_ids=[None]*5,
         stars=[None]*5, member_count=0, support_unit_id=None))
     monkeypatch.setattr(port, '_reset_list', lambda *_: None)
     clicks = []
@@ -1080,7 +1610,8 @@ def test_timing_requires_measured_one_speed_game_seconds(calibration, tmp_path, 
     assert module.timing_capability(calibration) == dict(validated=False)
 
 
-def test_start_waits_for_first_hud_once_then_passes_receipt(plan, tmp_path, monkeypatch):
+@pytest.mark.parametrize('target_matches', [True, False])
+def test_start_waits_for_first_hud_once_then_passes_receipt(plan, tmp_path, monkeypatch, target_matches):
     port = module.NativeClanBattle(NS(), tmp_path)
     calls = []
     ready = dict(team(plan), account_id=plan['account_id'], server=plan['server'], native_evidence=dict(ready=True))
@@ -1090,19 +1621,29 @@ def test_start_waits_for_first_hud_once_then_passes_receipt(plan, tmp_path, monk
         return dict(start=True)
     monkeypatch.setattr(port, 'run', run)
     hud = receipt(dict(auto=True, sets=[True]*5, unit_ids=plan['unit_ids']))
+    reading = dict(identity(plan), damage=123)
+    if not target_matches:
+        reading['boss'] = plan['boss'] % 5 + 1
+    result_receipt = result_page_receipt(reading)
     def wait(names, *, seconds):
         calls.append((names, seconds))
-        port.last_receipt = hud
+        port.last_receipt = hud if names[0] == 'CBReadSettings' else result_receipt
         return names[0]
     monkeypatch.setattr(port, 'wait', wait)
-    monkeypatch.setattr(port, 'read_page', lambda page: (dict(identity(plan), damage=123), dict(result=True)))
+    monkeypatch.setattr(port, 'read_page', lambda *_: pytest.fail('must not recapture result'))
     def execute(_, __, initial=None):
         assert initial is hud
         return dict(settings_verified=True)
     monkeypatch.setattr(clan_battle, 'execute_switches', execute)
-    result = port.start_and_read(plan)
-    assert calls == ['CBStart', (['CBReadSettings', 'CBPage_result'], 30), (['CBPage_result'], 180)]
-    assert result['damage'] == 123 and result['result_verified'] is True
+    if target_matches:
+        result = port.start_and_read(plan)
+        assert result['damage'] == 123 and result['result_verified'] is True
+        assert result['result_evidence'] is result_receipt
+        assert result['native_evidence']['result'] is result_receipt
+    else:
+        with pytest.raises(RuntimeError, match='clan_battle_target_mismatch_or_not_simulation'):
+            port.start_and_read(plan)
+    assert calls == ['CBStart', (['CBReadSettings', 'CBPage_result'], 30), (['CBPage_result'], 360)]
 
 
 @pytest.mark.parametrize('failure', ['stopped', '6002', 'early_result'])
@@ -1139,7 +1680,7 @@ def test_form_team_borrows_exact_star_on_second_page_or_stops_at_bottom(plan, ca
             assert section == 'support'
             self.page_index += 1
             return self.page_index < 2
-        def read_team(self):
+        def read_team(self, *, require_stars=True):
             ids = self.chosen+[None]*(5-len(self.chosen))
             return dict(identity(plan), unit_ids=ids, stars=[5 if uid else None for uid in ids],
                 member_count=len(self.chosen), support_unit_id=support if support in self.chosen else None)
@@ -1263,3 +1804,113 @@ def test_real_sdk_final_callback_84_after_preread_85_has_zero_clicks(calibration
     with pytest.raises(native.NativeInputNotSent):
         port.toggle_auto(True, False, remaining_seconds=85)
     assert len(reads) >= 2 and controller.clicks == []
+
+
+@pytest.mark.parametrize('box,score,needs_scroll', [
+    ([224,369,126,126], .9514822363853455, True),  # GUI25 frame 152: exactly at bottom 495.
+    ([225,370,126,126], .9315864443778992, True),  # GUI25 frame 153: one pixel beyond.
+    ([224,368,126,126], .9514822363853455, False),
+])
+def test_v2_gui25_bottom_boundary_scrolls_before_the_first_add(formation_replay,plan,box,score,needs_scroll):
+    port = formation_replay
+    plan['unit_ids'][:2] = [118101,132001]
+    port.selected = [118101]
+    port.calibration['formation']['candidates'] = [[80,153,1120,342]]
+    state = {'scrolled':False,'next_calls':0}
+    run = port.run
+    def match(frame,uid,roi):
+        return dict(unit_id=uid,score=score,box=box if uid==132001 and not state['scrolled'] else [224,220,126,126])
+    def next_page(section):
+        assert section=='formation' and port.inputs==[]
+        state.update(scrolled=True,next_calls=state['next_calls']+1)
+        return True
+    def guarded_run(node,**kwargs):
+        if node=='CBEditTeam' and needs_scroll:
+            assert state['scrolled'], 'edge candidate must not dispatch an add before scrolling'
+        return run(node,**kwargs)
+    port.characters.match,port._next_list,port.run = match,next_page,guarded_run
+    port.form_team()
+    assert state['next_calls']==int(needs_scroll)
+    assert port.selected==plan['unit_ids'] and port.inputs==['CBEditTeam']*4
+
+
+@pytest.mark.parametrize('next_result,error',[(False,'character_not_found'),
+    ('clan_battle_list_unchanged_no_retry','list_unchanged_no_retry')])
+def test_v2_gui25_touching_bottom_never_adds_after_failed_scroll(formation_replay,plan,next_result,error):
+    port = formation_replay
+    plan['unit_ids'][:2] = [118101,132001]
+    port.selected = [118101]
+    port.calibration['formation']['candidates'] = [[80,153,1120,342]]
+    port.characters.match = lambda frame,uid,roi: dict(unit_id=uid,score=.9514822363853455,box=[224,369,126,126])
+    def next_page(section):
+        assert section=='formation' and port.inputs==[]
+        if isinstance(next_result,str): raise RuntimeError(next_result)
+        return next_result
+    port._next_list = next_page
+    with pytest.raises(RuntimeError,match=error): port.form_team()
+    assert port.selected==[118101] and port.inputs==[]
+
+
+@pytest.fixture
+def paused_control_reader(tmp_path,monkeypatch):
+    port = module.NativeClanBattle(NS(resource=Registry()),tmp_path)
+    port.opening_paused = True
+    clock,calls = [0.0],[]
+    monkeypatch.setattr(module.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(module.time,'sleep',lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+    port.run = lambda *args,**kwargs: pytest.fail('read-only wait must not dispatch input')
+    state = dict(auto=True,sets=[False]*5,unit_ids=[118101,132001,180601,106701,133101],
+        paused=True,same_frame=True,battle_speed=2,remaining_seconds=88,opening_start_token='synthetic-intent',
+        first_ub_evidence={'source':'synthetic-unchanged-proof'},first_ub_observation=None)
+    def choose(names,**kwargs):
+        calls.append(list(names))
+        port.last_receipt = receipt(deepcopy(state))
+        return names[0] if len(calls)>1 else 'GTUnknown'
+    port.choose = choose
+    return port,state,clock,calls
+
+
+def test_paused_controls_wait_for_a_qualified_read_without_input(paused_control_reader):
+    port,state,clock,calls = paused_control_reader
+    assert port.read_battle_settings()==state
+    assert calls==[['CBOpeningRead'],['CBOpeningRead']] and clock[0]==.3
+    assert port.last_controls==state
+
+
+def test_paused_controls_unknown_remains_bounded_and_read_only(paused_control_reader):
+    port,_,clock,calls = paused_control_reader
+    port.choose = lambda names,**kwargs: calls.append(list(names)) or 'GTUnknown'
+    with pytest.raises(RuntimeError,match='guide_trial_page_timeout'):
+        port.read_battle_settings()
+    assert 5<=clock[0]<5.5 and calls and all(names==['CBOpeningRead'] for names in calls)
+    assert not hasattr(port,'last_controls')
+
+
+def test_paused_controls_stop_does_not_retry(paused_control_reader):
+    port,_,_,calls = paused_control_reader
+    def stopped(names,**kwargs):
+        calls.append(list(names))
+        raise RuntimeError('synthetic_owner_stopped')
+    port.choose = stopped
+    with pytest.raises(RuntimeError,match='synthetic_owner_stopped'):port.read_battle_settings()
+    assert calls==[['CBOpeningRead']]
+
+
+def test_running_controls_keep_single_read_for_timed_switches(paused_control_reader):
+    port,_,clock,calls = paused_control_reader
+    port.opening_paused = False
+    with pytest.raises(RuntimeError,match='clan_battle_controls_unknown'):port.read_battle_settings()
+    assert calls==[['CBReadSettings']] and clock[0]==0
+
+
+def test_paused_control_wait_still_rejects_changed_frozen_clock_before_toggle(paused_control_reader):
+    port,state,_,calls = paused_control_reader
+    port.last_controls = dict(deepcopy(state),remaining_seconds=89)
+    with pytest.raises(RuntimeError,match='clan_battle_opening_not_verified'):
+        port.toggle_set(0,False,True)
+    assert calls==[['CBOpeningRead'],['CBOpeningRead']]
+
+
+def test_supplied_control_receipt_does_not_poll_again(paused_control_reader):
+    port,state,_,calls = paused_control_reader
+    assert port.read_battle_settings(receipt(state))==state and calls==[]

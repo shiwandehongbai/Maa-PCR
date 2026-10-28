@@ -155,9 +155,12 @@ public partial class App : Application
             SystemSleepHelper.ApplyPreventSleep();
             FontService.Initialize();
 
-            // 保存引用以便在退出时正确释放
-            _memoryCracker = new AvaloniaMemoryCracker();
-            _memoryCracker.Cracker();
+            // PCR relies on normal CLR collection; forced compaction stalls active battles.
+            if (!MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled)
+            {
+                _memoryCracker = new AvaloniaMemoryCracker();
+                _memoryCracker.Cracker();
+            }
 
             if (!MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled) GlobalHotkeyService.Initialize();
             TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException; //Task线程内未捕获异常处理事件

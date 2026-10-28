@@ -758,7 +758,7 @@ def detect_grid(frame,viewport,*,card_size=130,pitch=141,row_pitch=141,max_colum
 
 
 
-def scrollbar(frame,page):
+def scrollbar(frame,page,*,include_geometry=False):
 
     reference=(1825,290,28,562) if page=='opening' else (1825,377,28,349) if page=='boss' else (1825,235,28,500)
 
@@ -770,13 +770,17 @@ def scrollbar(frame,page):
 
     change=np.diff(np.r_[False,rows,False].astype(int));bands=list(zip(np.flatnonzero(change==1),np.flatnonzero(change==-1)))
 
-    if not bands:return dict(visible=False,position=None,can_scroll=None)
+    geometry=dict(absolute_top=None) if include_geometry else {}
+
+    if not bands:return dict(visible=False,position=None,can_scroll=None,**geometry)
 
     first,last=max(bands,key=lambda v:v[1]-v[0]);length=int(last-first)
 
-    if length>=h*.92:return dict(visible=True,position=None,can_scroll=False)
+    if length>=h*.92:return dict(visible=True,position=None,can_scroll=False,**geometry)
 
-    return dict(visible=True,position=float(first/max(1,h-length)),can_scroll=True)
+    if include_geometry:geometry['absolute_top']=int(y+first)
+
+    return dict(visible=True,position=float(first/max(1,h-length)),can_scroll=True,**geometry)
 
 
 

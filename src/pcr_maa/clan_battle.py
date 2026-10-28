@@ -11,6 +11,7 @@ from uuid import uuid4
 
 OPERATION = 'clan_battle_simulation'
 HEX = re.compile(r'[0-9a-f]{64}')
+USER_CONFIRMED_OPENING_RULE = 'user_confirmed_90s_before_1m24'
 PLAN_KEYS = set('version server account_id content_version period phase round_min round_max boss boss_name package team_label unit_ids stars auto set_by_unit switches support_mode support_unit_id reference_damage source snapshot confirmed_for'.split())
 
 
@@ -77,7 +78,8 @@ def load_snapshot(plan):
 
 def account_battle_stars(plan):
     snapshot = load_snapshot(plan)
-    if plan['support_mode'] != 'none':
+    if plan['support_mode'] != 'none' and (plan['support_mode'] != 'qsjs'
+            or support_requirement(plan, snapshot) is not None):
         raise RuntimeError('clan_battle_account_stars_support_uncalibrated')
     units = {row['unit_id']: row for row in snapshot['units']}
     stars = {}
@@ -284,6 +286,97 @@ def require_timing(port, plan):
             sets.update(switch['set_by_unit'])
 
 
+def _units_before_first_ub(evidence, token, *, state=None):
+    if (type(evidence) is not dict or type(token) is not str or not token
+            or evidence.get('start_token') != token
+            or type(evidence.get('initial_frame_pixel_sha256')) is not str
+            or re.fullmatch('[0-9a-f]{64}', evidence['initial_frame_pixel_sha256']) is None
+            or type(evidence.get('not_fired_unit_ids')) is not list
+            or any(type(uid) is not int for uid in evidence['not_fired_unit_ids'])):
+        return set()
+    if evidence.get('source') == 'controls_disabled_since_start':
+        policy = evidence.get('control_policy')
+        if (type(policy) is not dict or policy.get('auto_release_on_ub') is not False
+                or policy.get('source') != 'owner_account_bound_settings_readback'
+                or policy.get('same_frame') is not True or type(policy.get('frame_pixel_sha256')) is not str
+                or re.fullmatch('[0-9a-f]{64}', policy['frame_pixel_sha256']) is None):
+            return set()
+    elif evidence.get('source') == USER_CONFIRMED_OPENING_RULE:
+        if (type(state) is not dict or evidence.get('basis') != 'user_confirmed_game_rule'
+                or evidence.get('owner_bound') is not True or evidence.get('first_pause') is not True
+                or type(evidence.get('start_seconds')) is not int or evidence['start_seconds'] != 90
+                or evidence.get('action_kind') not in ('simulation', 'regular')
+                or type(evidence.get('remaining_seconds')) is not int or not 84 < evidence['remaining_seconds'] <= 90
+                or state.get('paused') is not True or state.get('same_frame') is not True or state.get('source') != 'maa'
+                or state.get('opening_owner_bound') is not True
+                or type(state.get('opening_start_seconds')) is not int or state['opening_start_seconds'] != 90
+                or state.get('opening_action_kind') != evidence['action_kind']
+                or state.get('remaining_seconds') != evidence['remaining_seconds']
+                or state.get('opening_initial_frame_pixel_sha256') != evidence['initial_frame_pixel_sha256']
+                or type(state.get('frame_pixel_sha256')) is not str or HEX.fullmatch(state['frame_pixel_sha256']) is None
+                or type(state.get('unit_ids')) is not list or len(state['unit_ids']) != 5
+                or any(type(uid) is not int for uid in state['unit_ids']) or len(set(state['unit_ids'])) != 5
+                or evidence.get('unit_ids') != state['unit_ids']
+                or set(evidence['not_fired_unit_ids']) != set(state['unit_ids'])):
+            return set()
+    elif evidence.get('source') == 'continuous_opening_observation':
+        calibration = evidence.get('calibration')
+        if (evidence.get('coverage') != 'complete' or evidence.get('owner_bound') is not True
+                or evidence.get('reasons') != [] or type(evidence.get('frame_count')) is not int
+                or evidence['frame_count'] < 2 or type(calibration) is not dict
+                or calibration.get('source') != 'adb_command_screencap'
+                or calibration.get('pause_keeps_event_visible') is not True
+                or type(evidence.get('max_gap_ns')) is not int or type(calibration.get('min_visible_ns')) is not int
+                or not 0 <= evidence['max_gap_ns'] < calibration['min_visible_ns']
+                or evidence.get('scope_sha256') != calibration.get('scope_sha256')
+                or type(evidence.get('battle_speed')) is not int or type(calibration.get('speeds')) is not list
+                or evidence['battle_speed'] not in calibration['speeds']
+                or any(type(evidence.get(key)) is not str or re.fullmatch('[0-9a-f]{64}', evidence[key]) is None
+                    for key in ('scope_sha256', 'before_start_frame_sha256', 'paused_frame_sha256'))
+                or any(type(calibration.get(key)) is not str or re.fullmatch('[0-9a-f]{64}', calibration[key]) is None
+                    for key in ('capture_calibration_sha256', 'marker_calibration_sha256'))):
+            return set()
+    else:
+        return set()
+    return set(evidence['not_fired_unit_ids'])
+
+
+def require_first_ub(state, units):
+    """Combine independent, bound per-role proofs; a witnessed UB always blocks that role."""
+    if not units:
+        return
+    token, observed = state.get('opening_start_token'), state.get('first_ub_observation')
+    if type(observed) is dict and observed.get('start_token') == token:
+        fired = observed.get('fired_unit_ids')
+        if type(fired) is not list or any(type(uid) is not int for uid in fired):
+            raise RuntimeError('clan_battle_first_ub_unverified')
+        if set(units).intersection(fired):
+            raise RuntimeError('clan_battle_first_ub_already_fired')
+    proven = _units_before_first_ub(state.get('first_ub_evidence'), token, state=state)
+    proven.update(_units_before_first_ub(observed, token, state=state))
+    if not set(units).issubset(proven):
+        raise RuntimeError('clan_battle_first_ub_unverified')
+
+
+def require_frozen_opening(state, previous, *, carryover=False):
+    if carryover:
+        if (state.get('paused') is not True or state.get('same_frame') is not True
+                or state.get('opening_action_kind') != 'carryover'
+                or previous.get('opening_action_kind') != 'carryover'
+                or not state.get('opening_start_token')
+                or state['opening_start_token'] != previous.get('opening_start_token')
+                or state.get('unit_ids') != previous.get('unit_ids')):
+            raise RuntimeError('clan_battle_opening_not_verified')
+        return
+    if (state.get('paused') is not True or state.get('same_frame') is not True
+            or type(state.get('remaining_seconds')) is not int
+            or state['remaining_seconds'] != previous.get('remaining_seconds')
+            or state.get('opening_start_token') != previous.get('opening_start_token')
+            or state.get('first_ub_evidence') != previous.get('first_ub_evidence')
+            or state.get('first_ub_observation') != previous.get('first_ub_observation')):
+        raise RuntimeError('clan_battle_opening_not_verified')
+
+
 def execute_switches(port, plan, initial=None):
     """Read before each single toggle and verify the full team afterwards."""
     require_timing(port, plan)
@@ -294,18 +387,36 @@ def execute_switches(port, plan, initial=None):
         if type(calibration) is dict and getattr(port, 'formal_opening', False) is True else None)
     paused = (getattr(port, 'opening_paused', False) is True and not plan['switches']
         and type(calibration) is dict and bool(calibration.get('auto_battle') or formal_opening) and state.get('paused') is True)
+    carryover = bool(formal_opening) and getattr(port, 'action', {}).get('kind') == 'carryover'
+    if carryover and (not paused or state.get('opening_action_kind') != 'carryover'
+            or not state.get('opening_start_token')):
+        raise RuntimeError('clan_battle_opening_not_verified')
     opening_second = state.get('remaining_seconds')
-    allowed_seconds = (getattr(port, 'start_seconds', None),) if formal_opening else (90, 89)
-    if getattr(port, 'opening_paused', False) and (not paused or type(opening_second) is not int or opening_second not in allowed_seconds
-            or state.get('zero_damage_verified') is not True or state.get('zero_tp_verified') is not True
+    start_seconds = getattr(port, 'start_seconds', 90)
+    if getattr(port, 'opening_paused', False) and (not paused or not _integer(start_seconds, 1, 90)
+            or not carryover and not _integer(opening_second, 1, start_seconds)
             or type(state.get('battle_speed')) is not int or state['battle_speed'] not in ((1, 2) if formal_opening else (1, 2, 4))):
         raise RuntimeError('clan_battle_opening_not_verified')
     opening_speed = state.get('battle_speed')
+    paused_origin = deepcopy(state)
+    if paused and not carryover:
+        affected = set(plan['unit_ids']) if state['auto'] != auto else set()
+        affected.update(uid for uid, value in zip(state['unit_ids'], state['sets']) if value != desired[str(uid)])
+        target_speed = getattr(port, 'battle_speed', state['battle_speed'])
+        if target_speed != state['battle_speed']:
+            affected.update(plan['unit_ids'])
+        require_first_ub(state, affected)
     if type(calibration) is dict and calibration.get('version') == 2:
         start_seconds = getattr(port, 'start_seconds', 90)
         if (not _integer(start_seconds, 1, 90) or state.get('same_frame') is not True
-                or type(state.get('remaining_seconds')) is not int
-                or not paused and state['remaining_seconds'] != start_seconds
+                or not carryover and type(state.get('remaining_seconds')) is not int
+                or not paused and state.get('opening_direct') is True
+                    and not 1 <= state['remaining_seconds'] <= start_seconds
+                or not paused and state.get('opening_direct') is not True
+                    and state['remaining_seconds'] != start_seconds
+                or not paused and state.get('opening_direct') is True
+                    and (type(state.get('battle_speed')) is not int or state['battle_speed'] != 2
+                        or type(getattr(port, 'battle_speed', None)) is not int or port.battle_speed != 2)
                 or not paused and (state['auto'] != auto
                     or {str(uid): value for uid, value in zip(state['unit_ids'], state['sets'])} != desired)):
             raise RuntimeError('clan_battle_opening_not_verified')
@@ -328,11 +439,10 @@ def execute_switches(port, plan, initial=None):
             check_window(second)
             expected = dict(zip(state['unit_ids'], state['sets']))
             reading = _controls(port.toggle_auto(state['auto'], target_auto, **toggle_options), plan)
-            if paused and (reading.get('paused') is not True or reading.get('remaining_seconds') != opening_second
-                    or reading.get('zero_damage_verified') is not True or reading.get('zero_tp_verified') is not True
-                    or reading.get('same_frame') is not True or type(reading.get('battle_speed')) is not int
-                    or reading['battle_speed'] != opening_speed):
-                raise RuntimeError('clan_battle_opening_not_verified')
+            if paused:
+                require_frozen_opening(reading, paused_origin, carryover=carryover)
+                if type(reading.get('battle_speed')) is not int or reading['battle_speed'] != opening_speed:
+                    raise RuntimeError('clan_battle_opening_not_verified')
             if reading['auto'] != target_auto or dict(zip(reading['unit_ids'], reading['sets'])) != expected:
                 raise RuntimeError('clan_battle_controls_not_applied')
             check_window(second)
@@ -350,11 +460,10 @@ def execute_switches(port, plan, initial=None):
             expected = dict(zip(state['unit_ids'], state['sets']))
             expected[uid] = target_sets[str(uid)]
             reading = _controls(port.toggle_set(slot, state['sets'][slot], target_sets[str(uid)], **toggle_options), plan)
-            if paused and (reading.get('paused') is not True or reading.get('remaining_seconds') != opening_second
-                    or reading.get('zero_damage_verified') is not True or reading.get('zero_tp_verified') is not True
-                    or reading.get('same_frame') is not True or type(reading.get('battle_speed')) is not int
-                    or reading['battle_speed'] != opening_speed):
-                raise RuntimeError('clan_battle_opening_not_verified')
+            if paused:
+                require_frozen_opening(reading, paused_origin, carryover=carryover)
+                if type(reading.get('battle_speed')) is not int or reading['battle_speed'] != opening_speed:
+                    raise RuntimeError('clan_battle_opening_not_verified')
             if reading['auto'] != state['auto'] or dict(zip(reading['unit_ids'], reading['sets'])) != expected:
                 raise RuntimeError('clan_battle_controls_not_applied')
             check_window(second)
@@ -399,6 +508,94 @@ def execute_switches(port, plan, initial=None):
                 opening_evidence=opening, observation=state, actions=actions, switch_evidence=switch_evidence)
 
 
+def is_simulation_user_exit_history(event, intent):
+    if type(event) is not dict or type(intent) is not dict:
+        return False
+    confirmation, evidence = event.get('confirmation'), event.get('evidence')
+    ready = intent.get('team_evidence')
+    return (intent.get('state') == 'in_flight' and intent.get('operation') == OPERATION
+        and type(intent.get('intent_id')) is str and re.fullmatch('[0-9a-f]{32}', intent['intent_id']) is not None
+        and type(intent.get('account_id')) is str and re.fullmatch('[1-9][0-9]{4,19}', intent['account_id']) is not None
+        and type(intent.get('confirmed_for')) is str and HEX.fullmatch(intent['confirmed_for']) is not None
+        and type(ready) is dict and ready.get('simulation') is True and ready.get('account_id') == intent['account_id']
+        and event.get('state') == 'historical_unknown'
+        and event.get('recovery_scope') == 'clan_battle_simulation_user_exit'
+        and event.get('resolution') == 'user_confirmed_exited'
+        and event.get('original_result_unknown') is True and event.get('replay_forbidden') is True
+        and event.get('outcome') == 'user_exited' and event.get('simulation') is True
+        and event.get('simulation_start_sent') is True and event.get('result_verified') is False
+        and event.get('damage') is None and event.get('damage_verified') is False
+        and event.get('settings_verified') is False
+        and all(event.get(key) == value for key, value in intent.items() if key != 'state')
+        and type(confirmation) is dict and confirmation.get('source') == 'direct_user_message'
+        and confirmation.get('exited') is True and confirmation.get('continue_remaining') is True
+        and type(confirmation.get('text')) is str and 0 < len(confirmation['text'].strip()) <= 2000
+        and type(evidence) is dict and evidence.get('scene') == 'CBPage_lobby'
+        and evidence.get('source') == 'maa_observation' and evidence.get('verified') is True
+        and evidence.get('intent_id') == intent['intent_id'] and evidence.get('start_sent') is True
+        and type(evidence.get('observed_at')) in (float, int)
+        and type(intent.get('at')) in (float, int) and evidence['observed_at'] >= intent['at']
+        and type(event.get('resolved_at')) in (float, int) and event['resolved_at'] >= evidence['observed_at']
+        and all(type(evidence.get(key)) is str and HEX.fullmatch(evidence[key]) is not None
+                for key in ('frame_sha256', 'receipt_sha256', 'start_receipt_sha256')))
+
+
+def record_simulation_user_exit(journal, *, intent_id, confirmation, evidence):
+    """Record a direct user's exited simulation without inventing a result."""
+    with journal.locked():
+        events = journal.events()
+        if not events or len(events) % 2 != 1 or events[-1].get('intent_id') != intent_id:
+            raise ValueError('clan_battle_exit_target_not_pending')
+        intent = events[-1]
+        event = dict(intent, state='historical_unknown', recovery_scope='clan_battle_simulation_user_exit',
+            resolution='user_confirmed_exited', original_result_unknown=True, replay_forbidden=True,
+            outcome='user_exited', simulation=True, simulation_start_sent=True, result_verified=False,
+            damage=None, damage_verified=False, settings_verified=False, resolved_at=time.time(),
+            confirmation=deepcopy(confirmation), evidence=deepcopy(evidence))
+        if not is_simulation_user_exit_history(event, intent):
+            raise ValueError('clan_battle_exit_evidence_invalid')
+        journal.append(event)
+        return event
+
+
+def _manual_visual_audit(intent, result):
+    evidence = result.get('result_evidence')
+    target, team = intent.get('target'), intent.get('team_evidence')
+    if type(evidence) is not dict or type(target) is not dict or type(team) is not dict:
+        return False
+    visual, review = evidence.get('manual_result'), evidence.get('continuity_review')
+    if type(visual) is not dict or type(review) is not dict:
+        return False
+    ids, stars, phase = team.get('unit_ids'), team.get('stars'), target.get('phase')
+    return (intent.get('state') == 'in_flight' and result.get('state') == 'settled'
+        and result.get('resolution_source') == 'manual_visual_result'
+        and all(result.get(key) == intent.get(key) for key in ('at', 'target', 'team_evidence'))
+        and team.get('account_id') == intent.get('account_id') and team.get('server') == target.get('server')
+        and team.get('period') == target.get('period') and type(team.get('boss')) is int and team.get('boss') == target.get('boss')
+        and phase in ('B', 'C', 'BC', 'D', 'E') and _integer(target.get('boss'), 1, 5)
+        and team.get('phase') in (('B', 'C', 'BC') if phase == 'BC' else (phase,))
+        and team.get('simulation') is True and type(visual.get('boss')) is int and visual.get('boss') == target.get('boss')
+        and visual.get('phase') == team.get('phase')
+        and type(ids) is list and len(ids) == 5 and all(type(uid) is int for uid in ids) and len(set(ids)) == 5
+        and type(stars) is list and len(stars) == 5 and all(_integer(star, 1, 6) for star in stars)
+        and evidence.get('continuity_review_required') is False and review.get('reviewer') == 'root'
+        and review.get('intent_id') == intent.get('intent_id')
+        and evidence.get('damage_verification_source') == 'manual_visual_result_and_hp_difference'
+        and evidence.get('native_result_verified') is False and evidence.get('native_readback') == 'unknown'
+        and evidence.get('simulation') is True and evidence.get('damage') == result.get('damage')
+        and type(evidence.get('manual_battle_intervention')) is bool and evidence.get('manual_return_observed') is True
+        and result.get('settings_verified') is False and result.get('normal_owner_acceptance') is False
+        and result.get('first_ub_verified') is False and result.get('normal_return_verified') is False
+        and evidence.get('settings_verified') is False and evidence.get('first_ub_verified') is False
+        and evidence.get('normal_return_verified') is False
+        and all(type(evidence.get(key)) is str and HEX.fullmatch(evidence[key]) is not None
+                for key in ('result_frame_sha256', 'returned_frame_sha256', 'result_return_manifest_sha256'))
+        and _integer(visual.get('hp_maximum'), 1, 10**15)
+        and _integer(visual.get('hp_current'), 0, visual['hp_maximum'])
+        and _integer(visual.get('value'), 0, 10**15)
+        and visual['hp_maximum'] - visual['hp_current'] == visual['value'] == result.get('damage'))
+
+
 def _simulation_report(plan):
     return dict(outcome='stopped', operation=OPERATION, account_id=plan['account_id'],
         period=plan['period'], phase=plan['phase'], round_min=plan['round_min'], round_max=plan['round_max'],
@@ -421,9 +618,12 @@ def execute_simulation(port, journal, plan):
             result = events[2 * index + 1]
             if any(result.get(key) != intent.get(key) for key in ('intent_id', 'operation', 'account_id', 'confirmed_for')):
                 raise ValueError('clan_battle_ledger_binding_invalid')
+            if is_simulation_user_exit_history(result, intent):
+                continue
             known_not_sent = result.get('input_execution') == 'not_sent' and result.get('consumption_sent') is False
             audited = (result.get('outcome') == 'manual_calibration_result'
-                and result.get('resolution_source') == 'manual_same_battle_saved_frame_replay'
+                and (result.get('resolution_source') == 'manual_same_battle_saved_frame_replay'
+                     or _manual_visual_audit(intent, result))
                 and type(result.get('result_evidence')) is dict and bool(result['result_evidence'])
                 and result['result_evidence'].get('intent_id') == intent['intent_id']
                 and result['result_evidence'].get('damage_verified') is True
@@ -487,6 +687,11 @@ def execute_simulation(port, journal, plan):
                 journal.append_not_sent(intent, exc.receipt)
                 report.update(simulation_started=False, consumption_sent=False)
         finally:
+            recovery = getattr(port, 'last_disconnect_recovery', None)
+            if type(recovery) is dict:
+                report['disconnect_recovery'] = dict(connection_verified=(recovery.get('account_id') == plan['account_id']
+                    and type(recovery.get('account_evidence')) is dict and bool(recovery['account_evidence'])),
+                    battle_result_verified=False)
             finish = getattr(port, 'finish_inheritance', None)
             if callable(finish):
                 try:

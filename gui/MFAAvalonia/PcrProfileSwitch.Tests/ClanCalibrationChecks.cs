@@ -47,6 +47,43 @@ internal static class ClanCalibrationChecks
             _ = Dependency("assets/resource/image/clan-synthetic/second.png", "synthetic template two");
             JObject Node() => new() { ["recognition"] = "TemplateMatch", ["roi"] = new JArray(1, 1, 8, 8),
                 ["template"] = "clan-synthetic/first.png", ["sha256"] = template["sha256"]!.DeepClone() };
+            JArray Roi() => new(1, 1, 8, 8);
+            JObject Page(params string[] fields) => new()
+            {
+                ["labels"] = new JArray(Node(), Node()), ["rejects"] = new JArray(Node()),
+                ["fields"] = new JObject(fields.Select(field => new JProperty(field, Roi())))
+            };
+            JObject Members(int size) => new()
+            {
+                ["slots"] = new JArray(Enumerable.Range(0, size).Select(_ => Roi())),
+                ["empty"] = new JArray(Enumerable.Range(0, size).Select(_ => Node())),
+                ["borrowed"] = new JArray(Enumerable.Range(0, size).Select(_ => Node()))
+            };
+            var dailyPages = new JObject { ["lobby"] = Page("remaining_count", "carry_count", "cp", "period", "phase"),
+                ["target"] = Page("remaining_count", "cp", "health", "boss", "phase"), ["carry_empty"] = Page() };
+            var pages = new JObject { ["adventure"] = Page(), ["boss_detail"] = Page("boss", "phase"),
+                ["formation"] = Page(), ["support"] = Page(), ["battle"] = Page("remaining_seconds"),
+                ["result"] = Page("damage"), ["used_units"] = Page("game_day"), ["carry"] = Page() };
+            var actionPages = new (string Name, string Page)[] {
+                ("open_clan", "adventure"), ("open_boss", "lobby"), ("open_formal", "boss_detail"),
+                ("open_formation", "target"), ("cancel_formation", "formation"), ("back_to_lobby", "boss_detail"),
+                ("back_to_adventure", "lobby"), ("open_support", "formation"), ("support_back", "support"),
+                ("characters_top", "formation"), ("characters_next", "formation"), ("support_top", "support"),
+                ("support_next", "support"), ("start", "formation"), ("open_used", "lobby"), ("close_used", "used_units"),
+                ("open_carry", "lobby"), ("close_carry", "carry"), ("close_empty_carry", "carry_empty"),
+                ("open_carry_for_target", "target"), ("select_carry", "carry"), ("return_to_lobby", "result")
+            };
+            var actions = new JObject();
+            foreach (var (name, page) in actionPages)
+            {
+                var action = new JObject { ["page"] = page, ["label"] = Node(), ["target"] = Roi() };
+                if (name is "characters_top" or "characters_next" or "support_top" or "support_next")
+                { action["begin"] = Roi(); action["end"] = Roi(); }
+                actions[name] = action;
+            }
+            var bossSlots = new JObject();
+            foreach (var boss in new[] { "1", "2", "3", "4", "5" })
+                bossSlots[boss] = new JObject { ["round"] = Roi(), ["defeated"] = Node() };
             var profile = new JObject
             {
                 ["version"] = version, ["calibration_id"] = "synthetic-capabilities", ["server"] = "cn-bilibili",
@@ -56,12 +93,17 @@ internal static class ClanCalibrationChecks
                 ["samples"] = new JArray(Sample("main")),
                 ["daily"] = new JObject
                 {
-                    ["version"] = 2, ["samples"] = new JArray(Sample("daily")),
+                    ["version"] = 2, ["cp_semantics"] = "daily_earned", ["pages"] = dailyPages,
+                    ["samples"] = new JArray(dailyPages.Properties().Select(page => Sample(page.Name))),
                     ["execution"] = new JObject
                     {
-                        ["pages"] = new JObject(), ["actions"] = new JObject(), ["used_units"] = new JObject(), ["carry_slots"] = new JObject(),
-                        ["boss_slots"] = new JObject(), ["formation_owner"] = new JObject(), ["formation_mode"] = new JObject(), ["speed_one"] = new JObject(),
-                        ["samples"] = new JArray(Sample("execution"))
+                        ["pages"] = pages, ["actions"] = actions, ["used_units"] = Members(15),
+                        ["carry_slots"] = new JArray(new JObject { ["empty"] = Node(), ["occupied"] = Node(),
+                            ["stock_index"] = Roi(), ["time"] = Roi(), ["members"] = Members(5),
+                            ["support_owner"] = Roi(), ["target"] = Roi() }),
+                        ["boss_slots"] = bossSlots, ["formation_owner"] = Roi(),
+                        ["formation_mode"] = new JObject { ["regular"] = Node(), ["carryover"] = Node(), ["stock_index"] = Roi(), ["time"] = Roi() },
+                        ["speed_one"] = Node(), ["samples"] = new JArray(pages.Properties().Select(page => Sample(page.Name)))
                     }
                 }
             };
@@ -87,6 +129,40 @@ internal static class ClanCalibrationChecks
                 ["game_second_ms"] = new JArray(Enumerable.Repeat(1000, 20))
             };
             profile["timing_measurements"] = Dependency("assets/resource/clan-battle-calibrations/timing.json", measured.ToString(Formatting.None));
+            return profile;
+        }
+        JObject SetResetSpec() => new()
+        {
+            ["description"] = new JObject { ["recognition"] = "OCR", ["roi"] = new JArray(1, 1, 8, 8), ["expected"] = "^发动连结爆发时解除连结爆发立即发动模式$" },
+            ["on_label"] = new JObject { ["recognition"] = "OCR", ["roi"] = new JArray(1, 1, 8, 8), ["expected"] = "^开启$" },
+            ["off_label"] = new JObject { ["recognition"] = "OCR", ["roi"] = new JArray(1, 1, 8, 8), ["expected"] = "^关闭$" }
+        };
+        JObject AutoProfile(bool legacy = false)
+        {
+            var profile = Profile();
+            var opening = (JObject)profile["daily"]!["execution"]!["opening"]!;
+            var paused = (JArray)opening["paused_guards"]!.DeepClone();
+            paused[2] = new JObject { ["recognition"] = "OCR", ["roi"] = new JArray(1, 1, 8, 8),
+                ["expected"] = "^(?:1[:：](?:[0-2][0-9]|30)|0[:：][0-5][0-9])$" };
+            var auto = new JObject
+            {
+                ["speeds"] = new JArray(1, 2), ["opening_guards"] = opening["opening_guards"]!.DeepClone(),
+                ["paused_guards"] = paused, ["auto_on"] = opening["auto_on"]!.DeepClone(), ["auto_off"] = opening["auto_off"]!.DeepClone(),
+                ["speed"] = new JObject { ["1"] = opening["speed"]!["1"]!.DeepClone(), ["2"] = opening["speed"]!["2"]!.DeepClone(), ["4"] = opening["speed"]!["2"]!.DeepClone() },
+                ["set_badge"] = opening["set_badge"]!.DeepClone(), ["samples"] = new JArray(Sample("paused")),
+                ["inheritance"] = opening["inheritance"]!.DeepClone()
+            };
+            if (legacy)
+            {
+                var clock = (JObject)opening["set_badge"]!.DeepClone();
+                clock["template"] = new JArray(clock["template"]!.DeepClone(), clock["template"]!.DeepClone());
+                clock["sha256"] = new JArray(clock["sha256"]!.DeepClone(), clock["sha256"]!.DeepClone());
+                paused[2] = clock; paused.Add(opening["set_badge"]!.DeepClone());
+                auto["empty_tp"] = opening["empty_tp"]!.DeepClone();
+            }
+            if (!legacy) auto["inheritance"]!["ub_auto_clear"] = SetResetSpec();
+            profile["pages"]!["battle"] = new JObject { ["speed_two"] = opening["speed_two"]!.DeepClone() };
+            profile["auto_battle"] = auto;
             return profile;
         }
         JObject Index(int version, JObject profile, params string[] capabilities)
@@ -146,8 +222,242 @@ internal static class ClanCalibrationChecks
                 Reject(() => full.Require(Plan(), capability, speed), "formal_fixed_two_" + capability + speed, "daily_speed_invalid");
         }
         Check(full.FormalOpening, "formal_opening_is_separately_validated");
-        Check(full.Summary.Contains("模拟战：已校准") && full.Summary.Contains("秒数轴：测量资料齐全，开始前核对时限")
-            && full.Summary.Contains("正式三刀：已校准") && full.Summary.Contains("补偿刀：已校准"), "summary_describes_all_capabilities");
+        var noRecords = Profile(); var noRecordExecution = (JObject)noRecords["daily"]!["execution"]!;
+        noRecordExecution.Remove("used_units"); ((JObject)noRecordExecution["pages"]!).Remove("used_units");
+        foreach (var action in new[] { "open_used", "close_used" }) ((JObject)noRecordExecution["actions"]!).Remove(action);
+        noRecordExecution["samples"] = new JArray(((JArray)noRecordExecution["samples"]!).Where(row => (string?)row["page"] != "used_units").Select(row => row.DeepClone()));
+        var noRecordCalibration = Load(Index(2, noRecords, "formal", "carryover"));
+        Check(noRecordCalibration.FormalOpening && noRecordCalibration.Supports("formal") && noRecordCalibration.Supports("carryover"),
+            "formal_calibration_can_omit_whole_personal_record_group");
+        JObject RegularOnly(bool removeSupport, bool removeCarry)
+        {
+            var profile = Profile(); profile["support_modes"] = new JArray("none");
+            var execution = (JObject)profile["daily"]!["execution"]!;
+            var pages = (JObject)execution["pages"]!; var actions = (JObject)execution["actions"]!;
+            var removed = new HashSet<string>();
+            if (removeSupport)
+            {
+                pages.Remove("support"); removed.Add("support"); execution["formation_owner"] = JValue.CreateNull();
+                foreach (var action in new[] { "open_support", "support_back", "support_top", "support_next" }) actions.Remove(action);
+            }
+            if (removeCarry)
+            {
+                pages.Remove("carry"); removed.Add("carry"); execution["carry_slots"] = new JArray();
+                execution["formation_mode"]!["stock_index"] = JValue.CreateNull(); execution["formation_mode"]!["time"] = JValue.CreateNull();
+                foreach (var action in new[] { "close_carry", "open_carry_for_target", "select_carry" }) actions.Remove(action);
+            }
+            execution["samples"] = new JArray(((JArray)execution["samples"]!).Where(row => !removed.Contains((string)row["page"]!)).Select(row => row.DeepClone()));
+            return profile;
+        }
+        foreach (var (support, carry) in new[] { (true, false), (false, true), (true, true) })
+        {
+            var regularProfile = RegularOnly(support, carry);
+            var regular = Load(Index(2, regularProfile, "simulation", "formal"));
+            Check(regular.Supports("formal") && !regular.Supports("carryover"), "regular_only_groups_" + support + carry);
+            regular.Require(Plan(), "formal", 2); count++;
+            Reject(() => regular.Require(Plan(), "carryover", 2), "regular_does_not_grant_carryover_" + support + carry, "capability_missing:carryover");
+            if (carry)
+                Unavailable(Load(Index(2, regularProfile, "formal", "carryover")), "carryover_requires_carry_group_" + support + carry);
+            else
+            {
+                var ownCarry = Load(Index(2, regularProfile, "formal", "carryover"));
+                Check(ownCarry.OwnUnitsOnly && ownCarry.FormalOpening && ownCarry.Supports("carryover"),
+                    "own_carryover_can_omit_whole_support_group");
+                ownCarry.Require(Plan(), "carryover", 2); count++;
+                var borrowed = Plan(); borrowed["support_mode"] = "specified"; borrowed["support_unit_id"] = 1;
+                Reject(() => ownCarry.Require(borrowed, "carryover", 2), "own_carryover_rejects_borrowed_team", "support_mode_uncalibrated");
+            }
+            var borrowedScope = (JObject)regularProfile.DeepClone(); borrowedScope.Remove("support_modes");
+            Unavailable(Load(Index(2, borrowedScope, "formal")), "partial_requires_own_only_" + support + carry);
+            var simulation = Load(Index(2, regularProfile, "simulation"));
+            Check(simulation.Supports("simulation") && !simulation.Supports("formal"), "simulation_cannot_grant_formal_" + support + carry);
+            Reject(() => simulation.Require(Plan(), "formal", 2), "simulation_cannot_run_formal_" + support + carry, "capability_missing:formal");
+        }
+        foreach (var change in new (string Name, Action<JObject> Change)[]
+        {
+            ("support_action", value => value["daily"]!["execution"]!["actions"]!["support_next"] = new JObject()),
+            ("support_owner", value => value["daily"]!["execution"]!["formation_owner"] = new JArray(1, 1, 8, 8)),
+            ("carry_members", value => ((JArray)value["daily"]!["execution"]!["carry_slots"]![0]!["members"]!["slots"]!).RemoveAt(0)),
+            ("carry_owner", value => value["daily"]!["execution"]!["carry_slots"]![0]!["support_owner"] = JValue.CreateNull()),
+            ("carry_target", value => value["daily"]!["execution"]!["carry_slots"]![0]!["target"] = JValue.CreateNull()),
+            ("carry_mode", value => value["daily"]!["execution"]!["formation_mode"]!["carryover"] = JValue.CreateNull()),
+        })
+        {
+            var profile = RegularOnly(true, false); change.Change(profile);
+            Unavailable(Load(Index(2, profile, "formal", "carryover")), "own_carryover_scope_rejected_" + change.Name);
+        }
+        var borrowedCarryScope = RegularOnly(true, false); borrowedCarryScope.Remove("support_modes");
+        Unavailable(Load(Index(2, borrowedCarryScope, "formal", "carryover")), "carryover_without_support_requires_own_only");
+        JObject CarrySelection(bool ownScope = true, bool compact = true)
+        {
+            var profile = ownScope ? RegularOnly(true, false) : Profile();
+            var execution = (JObject)profile["daily"]!["execution"]!;
+            var stock = (JObject)execution["carry_slots"]![0]!;
+            var reuseOn = stock["occupied"]!.DeepClone(); var reuseOff = stock["empty"]!.DeepClone();
+            if (compact)
+            {
+                foreach (var field in new[] { "empty", "occupied", "support_owner" }) stock.Remove(field);
+                stock["members"] = new JObject { ["slots"] = stock["members"]!["slots"]!.DeepClone() };
+            }
+            execution["pages"]!["carry_selection"] = execution["pages"]!["carry"]!.DeepClone();
+            execution["carry_selection"] = new JObject { ["slots"] = execution["carry_slots"]!.DeepClone(),
+                ["reuse_on"] = reuseOn, ["reuse_off"] = reuseOff };
+            execution["actions"]!["select_carry"]!["page"] = "carry_selection";
+            execution["actions"]!["enable_carry_team"] = execution["actions"]!["select_carry"]!.DeepClone();
+            execution["actions"]!["close_carry_selection"] = execution["actions"]!["select_carry"]!.DeepClone();
+            ((JArray)execution["samples"]!).Add(Sample("carry_selection"));
+            return profile;
+        }
+        foreach (var (selectionOwnOnly, compact) in new[] { (true, true), (true, false), (false, false) })
+        {
+            var selectedCarry = Load(Index(2, CarrySelection(selectionOwnOnly, compact), "formal", "carryover"));
+            Check(selectedCarry.FormalOpening && selectedCarry.Supports("carryover"), "separate_carry_selection_" + selectionOwnOnly + compact);
+            selectedCarry.Require(Plan(), "carryover", 2); count++;
+        }
+        Unavailable(Load(Index(2, CarrySelection(false, true), "formal", "carryover")), "compact_carry_slots_require_own_scope");
+        var selectedFormationProfile = CarrySelection();
+        foreach (var key in new[] { "carryover", "stock_index", "time" }) selectedFormationProfile["daily"]!["execution"]!["formation_mode"]![key] = JValue.CreateNull();
+        var selectedFormation = Load(Index(2, selectedFormationProfile, "formal", "carryover"));
+        Check(selectedFormation.OwnUnitsOnly && selectedFormation.Supports("carryover"), "carry_selection_can_bind_unmarked_formation");
+        selectedFormation.Require(Plan(), "carryover", 2); count++;
+        foreach (var key in new[] { "carryover", "stock_index", "time" })
+        {
+            var mixed = (JObject)selectedFormationProfile.DeepClone();
+            mixed["daily"]!["execution"]!["formation_mode"]![key] = CarrySelection()["daily"]!["execution"]!["formation_mode"]![key]!.DeepClone();
+            Unavailable(Load(Index(2, mixed, "formal", "carryover")), "carry_selection_rejects_mixed_formation_null_" + key);
+        }
+        var borrowedUnmarked = CarrySelection(false, false);
+        foreach (var key in new[] { "carryover", "stock_index", "time" }) borrowedUnmarked["daily"]!["execution"]!["formation_mode"]![key] = JValue.CreateNull();
+        Unavailable(Load(Index(2, borrowedUnmarked, "formal", "carryover")), "unmarked_carry_formation_requires_own_scope");
+        foreach (var change in new (string Name, Action<JObject> Change)[]
+        {
+            ("group_missing", value => ((JObject)value["daily"]!["execution"]!).Remove("carry_selection")),
+            ("group_null", value => value["daily"]!["execution"]!["carry_selection"] = JValue.CreateNull()),
+            ("page_missing", value => ((JObject)value["daily"]!["execution"]!["pages"]!).Remove("carry_selection")),
+            ("sample_missing", value => value["daily"]!["execution"]!["samples"] = new JArray(((JArray)value["daily"]!["execution"]!["samples"]!).Where(row => (string?)row["page"] != "carry_selection").Select(row => row.DeepClone()))),
+            ("enable_missing", value => ((JObject)value["daily"]!["execution"]!["actions"]!).Remove("enable_carry_team")),
+            ("close_missing", value => ((JObject)value["daily"]!["execution"]!["actions"]!).Remove("close_carry_selection")),
+            ("close_wrong_page", value => value["daily"]!["execution"]!["actions"]!["close_carry_selection"]!["page"] = "carry"),
+            ("select_wrong_page", value => value["daily"]!["execution"]!["actions"]!["select_carry"]!["page"] = "carry"),
+            ("enable_wrong_page", value => value["daily"]!["execution"]!["actions"]!["enable_carry_team"]!["page"] = "carry"),
+            ("inventory_missing", value => ((JObject)value["daily"]!["execution"]!["pages"]!).Remove("carry")),
+            ("slots_empty", value => value["daily"]!["execution"]!["carry_selection"]!["slots"] = new JArray()),
+            ("members_short", value => ((JArray)value["daily"]!["execution"]!["carry_selection"]!["slots"]![0]!["members"]!["slots"]!).RemoveAt(0)),
+            ("target_missing", value => ((JObject)value["daily"]!["execution"]!["carry_selection"]!["slots"]![0]!).Remove("target")),
+            ("time_invalid", value => value["daily"]!["execution"]!["carry_selection"]!["slots"]![0]!["time"] = JValue.CreateNull()),
+            ("reuse_invalid", value => value["daily"]!["execution"]!["carry_selection"]!["reuse_on"] = new JObject()),
+            ("group_extra", value => value["daily"]!["execution"]!["carry_selection"]!["extra"] = true),
+            ("inventory_members_short", value => ((JArray)value["daily"]!["execution"]!["carry_slots"]![0]!["members"]!["slots"]!).RemoveAt(0)),
+        })
+        {
+            var profile = CarrySelection(); change.Change(profile);
+            Unavailable(Load(Index(2, profile, "formal", "carryover")), "carry_selection_rejected_" + change.Name);
+        }
+        var regularNullProfile = RegularOnly(true, true);
+        regularNullProfile["daily"]!["execution"]!["formation_mode"]!["carryover"] = JValue.CreateNull();
+        var regularNull = Load(Index(2, regularNullProfile, "simulation", "formal"));
+        Check(regularNull.OwnUnitsOnly && regularNull.FormalOpening && regularNull.Supports("formal")
+            && !regularNull.Supports("carryover"), "explicit_null_carry_marker_is_regular_own_only");
+        regularNull.Require(Plan(), "formal", 2); count++;
+        Reject(() => regularNull.Require(Plan(), "carryover", 2), "null_carry_marker_does_not_grant_carryover", "capability_missing:carryover");
+        Unavailable(Load(Index(2, regularNullProfile, "formal", "carryover")), "null_carry_marker_cannot_claim_carryover");
+        foreach (var (support, carry) in new[] { (false, false), (true, false), (false, true) })
+        {
+            var profile = RegularOnly(support, carry);
+            profile["daily"]!["execution"]!["formation_mode"]!["carryover"] = JValue.CreateNull();
+            Unavailable(Load(Index(2, profile, "formal")), "null_carry_marker_requires_both_groups_omitted_" + support + carry);
+        }
+        foreach (var change in new (string Name, Action<JObject> Change)[]
+        {
+            ("missing_carry_key", value => ((JObject)value["daily"]!["execution"]!["formation_mode"]!).Remove("carryover")),
+            ("missing_regular_key", value => ((JObject)value["daily"]!["execution"]!["formation_mode"]!).Remove("regular")),
+            ("null_regular", value => value["daily"]!["execution"]!["formation_mode"]!["regular"] = JValue.CreateNull()),
+            ("malformed_regular", value => value["daily"]!["execution"]!["formation_mode"]!["regular"] = new JObject()),
+            ("missing_own_scope", value => value.Remove("support_modes")),
+            ("non_exact_own_scope", value => value["support_modes"] = new JArray("none", "qsjs")),
+            ("null_own_scope", value => value["support_modes"] = JValue.CreateNull()),
+        })
+        {
+            var profile = (JObject)regularNullProfile.DeepClone(); change.Change(profile);
+            Unavailable(Load(Index(2, profile, "formal")), "null_carry_marker_rejected_" + change.Name);
+        }
+        foreach (var malformed in new JToken[] { new JValue(false), new JValue(0), new JValue(""), new JObject(), new JArray() })
+        {
+            var profile = (JObject)regularNullProfile.DeepClone();
+            profile["daily"]!["execution"]!["formation_mode"]!["carryover"] = malformed;
+            Unavailable(Load(Index(2, profile, "formal")), "malformed_null_carry_marker_" + malformed.ToString(Formatting.None));
+        }
+        var nullSimulation = Load(Index(2, regularNullProfile, "simulation"));
+        Check(nullSimulation.Supports("simulation") && !nullSimulation.Supports("formal"), "null_carry_marker_simulation_cannot_grant_formal");
+        Reject(() => nullSimulation.Require(Plan(), "formal", 2), "null_carry_marker_simulation_cannot_run_formal", "capability_missing:formal");
+        var nullLegacy = Load(Index(1, regularNullProfile));
+        Check(nullLegacy.Version == 1 && !nullLegacy.Supports("formal"), "null_carry_marker_cannot_upgrade_v1_index");
+        Reject(() => nullLegacy.Require(Plan(), "formal", 2), "null_carry_marker_v1_cannot_run_formal", "capability_missing:formal");
+        foreach (var change in new (string Name, Action<JObject> Change)[]
+        {
+            ("support_page_only", value => ((JObject)value["daily"]!["execution"]!["pages"]!).Remove("support")),
+            ("support_action", value => ((JObject)value["daily"]!["execution"]!["actions"]!).Remove("support_next")),
+            ("support_sample", value => value["daily"]!["execution"]!["samples"] = new JArray(((JArray)value["daily"]!["execution"]!["samples"]!).Where(row => (string?)row["page"] != "support").Select(row => row.DeepClone()))),
+            ("support_owner", value => value["daily"]!["execution"]!["formation_owner"] = JValue.CreateNull()),
+            ("carry_page_only", value => ((JObject)value["daily"]!["execution"]!["pages"]!).Remove("carry")),
+            ("carry_action", value => ((JObject)value["daily"]!["execution"]!["actions"]!).Remove("select_carry")),
+            ("carry_sample", value => value["daily"]!["execution"]!["samples"] = new JArray(((JArray)value["daily"]!["execution"]!["samples"]!).Where(row => (string?)row["page"] != "carry").Select(row => row.DeepClone()))),
+            ("carry_slots", value => value["daily"]!["execution"]!["carry_slots"] = new JArray()),
+            ("carry_time", value => value["daily"]!["execution"]!["formation_mode"]!["time"] = JValue.CreateNull()),
+        })
+        {
+            var profile = Profile(); profile["support_modes"] = new JArray("none"); change.Change(profile);
+            Unavailable(Load(Index(2, profile, "formal")), "partial_group_rejected_" + change.Name);
+        }
+        foreach (var change in new (string Name, Action<JObject> Change)[]
+        {
+            ("support_owner", value => value["daily"]!["execution"]!["formation_owner"] = new JArray(1, 1, 8, 8)),
+            ("support_action", value => value["daily"]!["execution"]!["actions"]!["support_next"] = new JObject()),
+            ("carry_slots", value => value["daily"]!["execution"]!["carry_slots"] = new JArray(new JObject())),
+            ("carry_time", value => value["daily"]!["execution"]!["formation_mode"]!["time"] = new JArray(1, 1, 8, 8)),
+            ("carry_action", value => value["daily"]!["execution"]!["actions"]!["select_carry"] = new JObject()),
+        })
+        {
+            var profile = RegularOnly(true, true); change.Change(profile);
+            Unavailable(Load(Index(2, profile, "formal")), "orphan_group_rejected_" + change.Name);
+        }
+        var regularLegacyIndex = Load(Index(1, RegularOnly(true, true)));
+        Check(regularLegacyIndex.Version == 1 && !regularLegacyIndex.Supports("formal"), "regular_groups_cannot_change_v1_index");
+        Reject(() => regularLegacyIndex.Require(Plan(), "formal", 2), "v1_regular_cannot_run_formal", "capability_missing:formal");
+        var noTp = Profile(); ((JObject)noTp["daily"]!["execution"]!["opening"]!).Remove("empty_tp");
+        Check(Load(Index(2, noTp, "formal", "carryover")).FormalOpening, "formal_opening_does_not_require_empty_tp");
+        Check(Load(Index(2, AutoProfile(), "simulation")).AutoBattleSpeeds?.SetEquals(new[] { 1, 2 }) == true,
+            "dynamic_pause_clock_without_zero_damage_or_empty_tp");
+        Check(Load(Index(2, AutoProfile(true), "simulation")).Supports("simulation"), "legacy_pause_clock_and_tp_key_remain_readable");
+        foreach (var change in new (string Name, Action<JObject> Change)[]
+        {
+            ("clock_kind", value => value["paused_guards"]![2]!["recognition"] = "Unknown"),
+            ("clock_roi", value => value["paused_guards"]![2]!["roi"] = new JArray(-1, 1, 8, 8)),
+            ("clock_pattern", value => value["paused_guards"]![2]!["expected"] = "unanchored"),
+            ("guard_count", value => ((JArray)value["paused_guards"]!).RemoveAt(2)),
+            ("optional_tp_type", value => value["empty_tp"] = true)
+        })
+        {
+            var profile = AutoProfile(); change.Change((JObject)profile["auto_battle"]!);
+            Unavailable(Load(Index(2, profile, "simulation")), "auto_opening_" + change.Name);
+        }
+        var formalSetReset = Profile(); formalSetReset["daily"]!["execution"]!["opening"]!["inheritance"]!["ub_auto_clear"] = SetResetSpec();
+        Check(Load(Index(2, formalSetReset, "formal", "carryover")).FormalOpening, "formal_optional_set_reset_is_read_only_calibration");
+        foreach (var change in new (string Name, Action<JObject> Change)[]
+        {
+            ("missing_label", value => value.Remove("on_label")),
+            ("wrong_recognition", value => value["description"]!["recognition"] = "TemplateMatch"),
+            ("outside_roi", value => value["off_label"]!["roi"] = new JArray(1280, 1, 8, 8)),
+            ("unknown_key", value => value["toggle"] = true)
+        })
+        {
+            var profile = AutoProfile(); change.Change((JObject)profile["auto_battle"]!["inheritance"]!["ub_auto_clear"]!);
+            Unavailable(Load(Index(2, profile, "simulation")), "set_reset_" + change.Name);
+        }
+        Check(full.Summary.Contains("模拟战：校准资料已登记") && full.Summary.Contains("秒数轴：测量资料齐全，开始前核对时限")
+            && full.Summary.Contains("正式三刀：校准资料已登记") && full.Summary.Contains("补偿刀：校准资料已登记"), "summary_describes_all_capabilities");
+        Check(full.Summary.Contains("不代表当前阶段已通过正常 Start 全程验收") && !full.Summary.Contains("：已校准"),
+            "calibration_registration_is_not_normal_owner_acceptance");
         var empty = Load(Index(2, Profile()));
         Check(empty.Error == null && !empty.Capabilities.Any(), "empty_capabilities_mean_not_open");
         Reject(() => empty.Require(Plan(), "simulation"), "empty_capabilities_stop_simulation", "capability_missing:simulation");
@@ -202,6 +512,36 @@ internal static class ClanCalibrationChecks
         Reject(() => accountCalibration.Require(AccountPlan(wrongStar), "simulation"), "account_stars_mismatch", "clan_battle_account_stars_mismatch");
         var unknownStar = (JObject)accountData.DeepClone(); unknownStar["unknown_fields"] = new JArray("units.1.battle_rarity");
         Reject(() => accountCalibration.Require(AccountPlan(unknownStar), "simulation"), "account_stars_unknown", "clan_battle_account_stars_unknown");
+        var ownQsjsPlan = AccountPlan(accountData); ownQsjsPlan["support_mode"] = "qsjs";
+        var originalQsjs = ownQsjsPlan.ToString(Formatting.None);
+        accountCalibration.Require(ownQsjsPlan, "simulation"); count++;
+        var ownFormal = Load(Index(2, accountProfile, "simulation", "formal", "carryover"));
+        foreach (var capability in new[] { "formal", "carryover" }) { ownFormal.Require(ownQsjsPlan, capability, 2); count++; }
+        Check(ownQsjsPlan.ToString(Formatting.None) == originalQsjs, "owned_qsjs_keeps_plan_and_confirmation_material");
+        var fourStar = (JObject)accountData.DeepClone(); fourStar["units"]![4]!["battle_rarity"] = 4;
+        var fourStarPlan = AccountPlan(fourStar); fourStarPlan["support_mode"] = "qsjs"; fourStarPlan["stars"]![4] = 4;
+        accountCalibration.Require(fourStarPlan, "simulation"); count++;
+        Check((int)fourStarPlan["stars"]![4]! == 4, "owned_qsjs_keeps_four_star");
+        var specifiedOwn = AccountPlan(accountData); specifiedOwn["support_mode"] = "specified"; specifiedOwn["support_unit_id"] = 1;
+        Reject(() => accountCalibration.Require(specifiedOwn, "simulation"), "owned_specified_still_borrowed", "support_mode_uncalibrated");
+        var missingOwned = (JObject)accountData.DeepClone(); missingOwned["ownership_complete"] = true; ((JArray)missingOwned["units"]!).RemoveAt(4);
+        var missingOwnPlan = AccountPlan(missingOwned); missingOwnPlan["support_mode"] = "qsjs";
+        Reject(() => accountCalibration.Require(missingOwnPlan, "simulation"), "qsjs_missing_unit_still_borrowed", "support_mode_uncalibrated");
+        void RejectSource(Action action, string name)
+        {
+            try { action(); } catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException) { count++; return; }
+            throw new InvalidOperationException("clan_calibration_expected_source_rejection_" + name);
+        }
+        var unknownOwned = (JObject)accountData.DeepClone(); unknownOwned["unknown_fields"] = new JArray("units.1.ownership");
+        var unknownOwnPlan = AccountPlan(unknownOwned); unknownOwnPlan["support_mode"] = "qsjs";
+        RejectSource(() => accountCalibration.Require(unknownOwnPlan, "simulation"), "qsjs_unknown_ownership");
+        var changedOwnPlan = AccountPlan(accountData); changedOwnPlan["support_mode"] = "qsjs"; File.AppendAllText((string)changedOwnPlan["snapshot"]!["path"]!, "\n");
+        RejectSource(() => accountCalibration.Require(changedOwnPlan, "simulation"), "qsjs_changed_source");
+        var wrongOwner = (JObject)accountData.DeepClone(); wrongOwner["account_id"] = "999000002";
+        var wrongOwnPlan = AccountPlan(wrongOwner); wrongOwnPlan["support_mode"] = "qsjs";
+        RejectSource(() => accountCalibration.Require(wrongOwnPlan, "simulation"), "qsjs_wrong_account");
+        var staleOwnPlan = AccountPlan(staleAccount); staleOwnPlan["support_mode"] = "qsjs";
+        Reject(() => accountCalibration.Require(staleOwnPlan, "simulation"), "qsjs_expired_source", "snapshot_expired");
         var ambiguousSource = Profile(); ambiguousSource["formation"]!["star_source"] = "account_snapshot";
         Unavailable(Load(Index(2, ambiguousSource, "simulation")), "account_star_source_requires_own_scope");
 
@@ -267,12 +607,76 @@ internal static class ClanCalibrationChecks
         }
         var noTiming = Profile(); noTiming.Remove("timing_measurements");
         Unavailable(Load(Index(2, noTiming, "simulation", "timed")), "missing_timing_binding");
+        JObject FormalPopup(string name) => new()
+        {
+            ["labels"] = new JArray(Enumerable.Range(0, name == "result_reward" ? 2 : 3)
+                .Select(_ => new JObject { ["recognition"] = "OCR", ["roi"] = new JArray(1, 1, 8, 8), ["expected"] = "^合成确认$" })),
+            ["target"] = new JArray(1, 1, 8, 8), ["samples"] = new JArray(Sample(name))
+        };
+        foreach (var group in new[] { "start_confirmation", "carry_start_confirmation", "result_reward" })
+        {
+            var profile = Profile(); var popup = FormalPopup(group);
+            profile["daily"]!["execution"]![group] = popup;
+            var popupCalibration = Load(Index(2, profile, "formal", "carryover"));
+            Check(popupCalibration.FormalOpening && popupCalibration.Supports("formal") && popupCalibration.Supports("carryover"),
+                "optional_formal_popup_" + group);
+            var nullGroup = (JObject)profile.DeepClone(); nullGroup["daily"]!["execution"]![group] = JValue.CreateNull();
+            Unavailable(Load(Index(2, nullGroup, "formal", "carryover")), "null_formal_popup_" + group);
+            foreach (var change in new (string Name, Action<JObject> Change)[]
+            {
+                ("extra_key", value => value["extra"] = true),
+                ("missing_key", value => value.Remove("target")),
+                ("labels_count", value => ((JArray)value["labels"]!).RemoveAt(0)),
+                ("label_kind", value => value["labels"]![0]!["recognition"] = "Unknown"),
+                ("label_roi", value => value["labels"]![0]!["roi"] = new JArray(-1, 1, 8, 8)),
+                ("label_anchor", value => value["labels"]![0] = new JObject { ["recognition"] = "OCR", ["roi"] = new JArray(1, 1, 8, 8), ["expected"] = "确认" }),
+                ("target_roi", value => value["target"] = new JArray(1, 1, 0, 8)),
+                ("sample_page", value => value["samples"]![0]!["page"] = "other"),
+                ("samples_count", value => ((JArray)value["samples"]!).Add(value["samples"]![0]!.DeepClone())),
+                ("sample_extra_key", value => value["samples"]![0]!["extra"] = true),
+                ("sample_missing_key", value => ((JObject)value["samples"]![0]!).Remove("sha256")),
+                ("sample_path_escape", value => value["samples"]![0]!["path"] = "../outside.sample"),
+                ("sample_hash", value => value["samples"]![0]!["sha256"] = new string('0', 64)),
+            })
+            {
+                var changed = (JObject)profile.DeepClone(); change.Change((JObject)changed["daily"]!["execution"]![group]!);
+                Unavailable(Load(Index(2, changed, "formal", "carryover")), "formal_popup_" + group + "_" + change.Name);
+            }
+            Load(Index(2, profile, "formal", "carryover"));
+            File.AppendAllText(Path.Combine(root, (string)popup["samples"]![0]!["path"]!), "changed", new UTF8Encoding(false));
+            Unavailable(Read(), "changed_formal_popup_sample_" + group);
+        }
+        var allPopupProfile = CarrySelection();
+        foreach (var group in new[] { "start_confirmation", "carry_start_confirmation", "result_reward" })
+            allPopupProfile["daily"]!["execution"]![group] = FormalPopup(group);
+        Check(Load(Index(2, allPopupProfile, "formal", "carryover")).Supports("carryover"),
+            "regular_and_carry_confirmations_are_independent_groups");
+        var wrongCarrySample = (JObject)allPopupProfile.DeepClone();
+        wrongCarrySample["daily"]!["execution"]!["carry_start_confirmation"]!["samples"]![0]!["page"] = "start_confirmation";
+        Unavailable(Load(Index(2, wrongCarrySample, "formal", "carryover")), "carry_confirmation_rejects_regular_sample_page");
+        var bothPopupProfile = (JObject)regularNullProfile.DeepClone();
+        foreach (var group in new[] { "start_confirmation", "result_reward" })
+            bothPopupProfile["daily"]!["execution"]![group] = FormalPopup(group);
+        var bothPopups = Load(Index(2, bothPopupProfile, "formal"));
+        Check(bothPopups.Supports("formal") && bothPopups.OwnUnitsOnly && !bothPopups.Supports("carryover"),
+            "both_optional_formal_popups_preserve_regular_null_scope");
+        var unknownPopup = (JObject)bothPopupProfile.DeepClone(); unknownPopup["daily"]!["execution"]!["unknown_popup"] = true;
+        Unavailable(Load(Index(2, unknownPopup, "formal")), "unknown_optional_execution_key_still_rejected");
+        var missingPopupRequired = (JObject)bothPopupProfile.DeepClone(); ((JObject)missingPopupRequired["daily"]!["execution"]!).Remove("speed_one");
+        Unavailable(Load(Index(2, missingPopupRequired, "formal")), "optional_popups_do_not_relax_required_execution_keys");
         foreach (var change in new (string Name, Action<JObject> Change)[]
         {
             ("daily", value => value.Remove("daily")),
             ("daily_version", value => value["daily"]!["version"] = 1),
             ("execution", value => ((JObject)value["daily"]!).Remove("execution")),
             ("execution_key", value => ((JObject)value["daily"]!["execution"]!).Remove("used_units")),
+            ("used_page", value => ((JObject)value["daily"]!["execution"]!["pages"]!).Remove("used_units")),
+            ("used_page_type", value => value["daily"]!["execution"]!["pages"]!["used_units"] = true),
+            ("used_open", value => ((JObject)value["daily"]!["execution"]!["actions"]!).Remove("open_used")),
+            ("used_close", value => ((JObject)value["daily"]!["execution"]!["actions"]!).Remove("close_used")),
+            ("used_sample", value => value["daily"]!["execution"]!["samples"] =
+                new JArray(((JArray)value["daily"]!["execution"]!["samples"]!).Where(row => (string?)row["page"] != "used_units").Select(row => row.DeepClone()))),
+            ("used_date", value => value["daily"]!["execution"]!["pages"]!["used_units"]!["fields"] = new JObject()),
             ("execution_extra", value => value["daily"]!["execution"]!["extra"] = true)
         })
         {
@@ -389,7 +793,11 @@ internal static class ClanCalibrationChecks
         {
             var shipped = PcrClanCalibration.Read(sourceRoot, (string?)shippedEntry["content_version"]);
             Check(shipped.Error == null && shipped.AutoBattleSpeeds?.SetEquals(new[] { 1, 2 }) == true, "shipped_opening_and_speed_dependencies_verified");
-            Check(shipped.ManageInheritance && shipped.AutoBattleSummary.Contains("自动记录"), "shipped_inheritance_preparation_and_restore");
+            Check(shipped.ManageInheritance && shipped.AutoBattleSummary.Contains("保留当前战斗继承")
+                && shipped.AutoBattleSummary.Contains("只调整与作业不同的项")
+                && shipped.AutoBattleSummary.Contains("正常流程不例行进入设置页检查继承")
+                && shipped.AutoBattleSummary.Contains("受影响角色首次 UB 前")
+                && !shipped.AutoBattleSummary.Contains("临时关闭"), "shipped_inheritance_preserved_and_first_ub_boundary");
         }
         Console.WriteLine($"clan_calibration_checks={count}; synthetic fixtures only, game input=0");
     }

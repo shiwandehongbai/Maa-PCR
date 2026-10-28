@@ -57,6 +57,54 @@ ActivityTaskSupervisor state:
             { Check(!expected, "channel mapping rejected"); }
         }
         Mapping(modernActivity, modernInput, package, activity, true);
+        const string bili = "com.bilibili.priconne";
+        var main = bili + "/.MainActivity";
+        var notice = bili + "/com.gsc.announcement.AnnouncementActivity";
+        var mainActivity = modernActivity.Replace(component, main);
+        var mainInput = modernInput.Replace(component, main);
+        var noticeActivity = modernActivity.Replace(component, notice);
+        var noticeInput = modernInput.Replace(component, notice);
+        Mapping(mainActivity, mainInput, bili, ".MainActivity", true);
+        Mapping(noticeActivity, noticeInput, bili, ".MainActivity", true);
+        Mapping(noticeActivity, noticeInput, bili, bili + ".MainActivity", true);
+        Mapping(noticeActivity, noticeInput, package, activity, false);
+        Mapping(noticeActivity, noticeInput, bili, ".DifferentActivity", false);
+        Mapping(noticeActivity.Replace(notice, bili + "/com.gsc.announcement.UnknownActivity"), noticeInput, bili, ".MainActivity", false);
+        Mapping(noticeActivity.Replace(notice, "example.other/com.gsc.announcement.AnnouncementActivity"), noticeInput, bili, ".MainActivity", false);
+        Mapping(noticeActivity, noticeInput.Replace(notice, "example.other/.MainActivity"), bili, ".MainActivity", false);
+        Mapping(noticeActivity, noticeInput.Replace(notice, main), bili, ".MainActivity", false);
+        Mapping(noticeActivity, noticeInput.Replace("FocusedDisplayId: 0", "FocusedDisplayId: 1"), bili, ".MainActivity", false);
+        Mapping(noticeActivity.Replace("topResumedActivity=ActivityRecord{fixture u0 " + notice + " t1}", "topResumedActivity=null"),
+            noticeInput, bili, ".MainActivity", false);
+        Mapping(noticeActivity.Replace("topResumedActivity=ActivityRecord{fixture u0 " + notice,
+            "topResumedActivity=ActivityRecord{fixture u0 " + main), noticeInput, bili, ".MainActivity", false);
+        Mapping(noticeActivity.Replace("topResumedActivity=ActivityRecord{fixture u0 " + notice,
+            "topResumedActivity=ActivityRecord{fixture u0 " + main + " t1}\n  topResumedActivity=ActivityRecord{fixture2 u0 " + notice),
+            noticeInput, bili, ".MainActivity", false);
+        Mapping(noticeActivity.Replace("ActivityTaskSupervisor state:", "Display #1 (activities from top to bottom):\n"
+            + "  topResumedActivity=ActivityRecord{fixture2 u0 " + main + " t2}\nActivityTaskSupervisor state:"),
+            noticeInput, bili, ".MainActivity", false);
+        var savedActivity = Path.Combine(fixtureDirectory, "real-mapping", "activity.txt");
+        var savedInput = Path.Combine(fixtureDirectory, "real-mapping", "input.txt");
+        if (File.Exists(savedActivity) && File.Exists(savedInput))
+        {
+            var recordedActivity = File.ReadAllText(savedActivity);
+            var recordedInput = File.ReadAllText(savedInput);
+            Check(recordedActivity.Contains("mLastPausedActivity: ActivityRecord{") && recordedActivity.Contains(notice), "historical fixture includes last paused notice");
+            Mapping(recordedActivity, recordedInput, bili, ".MainActivity", true, physical: true);
+            var syntheticNoticeActivity = recordedActivity.Replace(main, notice).Replace(bili + "/" + bili + ".MainActivity", notice);
+            var syntheticNoticeInput = recordedInput.Replace(main, notice).Replace(bili + "/" + bili + ".MainActivity", notice);
+            Mapping(syntheticNoticeActivity, syntheticNoticeInput, bili, ".MainActivity", true, physical: true);
+            Console.WriteLine("historical_main_mapping=passed; synthetic_notice_mapping=passed");
+        }
+        // Malformed bounded snapshots must still fail closed if regex timeouts repeat.
+        try
+        {
+            parse.Invoke(null, [modernActivity, new string('\n', 60_000) + "invalid", false, package, activity]);
+            throw new InvalidOperationException("malformed mapping accepted");
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException or RegexMatchTimeoutException)
+        { count++; }
         Mapping(modernActivity, modernInput, "com.bilibili.priconne", ".MainActivity", false);
         Mapping(modernActivity, modernInput, package, ".OtherActivity", false);
         Mapping(modernActivity, modernInput.Replace("FocusedDisplayId: 0", "FocusedDisplayId: 1"), package, activity, false);
@@ -92,6 +140,8 @@ ActivityStackSupervisor state:
 """;
         Mapping(a9, i9, package, activity, true);
         Mapping(a9, i9, package, ".OtherActivity", false);
+        Mapping(a9.Replace(component, notice), i9.Replace(component, notice), bili, ".MainActivity", true);
+        Mapping(a9.Replace(component, notice), i9.Replace(component, main), bili, ".MainActivity", false);
         Check(Regex.IsMatch("com.bilibili.priconne/.MainActivity", "^" + Pattern("com.bilibili.priconne", ".MainActivity") + "$"), "legacy short component");
         Check(Regex.IsMatch("com.bilibili.priconne/com.bilibili.priconne.MainActivity", "^" + Pattern("com.bilibili.priconne", ".MainActivity") + "$"), "legacy full component");
         Check(!Regex.IsMatch("comXbilibiliXpriconne/.MainActivity", "^" + Pattern("com.bilibili.priconne", ".MainActivity") + "$"), "package dots escaped");

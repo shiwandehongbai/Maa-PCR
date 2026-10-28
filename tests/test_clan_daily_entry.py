@@ -181,7 +181,8 @@ def formal_flow(daily_request,tmp_path,monkeypatch):
             if deny:raise ValueError('owner_denied')
             return entry.ExecutionContext(invocation_id=uuid4().hex,root_task_id=1,controller_uuid=owner.controller.uuid,
                 serial='emulator-5556',combination=selection,execute=True,game_day='',count_context='gui-current-state',
-                deadline=time.monotonic()+30,controller=controller)
+                deadline=time.monotonic()+30,controller=controller,
+                clan_consumption_consent=lambda *args:None,owner_core_sha256='a'*64)
         action=entry.AlphaEntry(NS(scope=scope),execution_context=authorize)
         ok=action.run(context,NS(custom_action_name=entry.ACTION,task_detail=NS(task_id=1),custom_action_param=json.dumps(selection)))
         assert old.read_bytes()==old_bytes

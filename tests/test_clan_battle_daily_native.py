@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from pcr_maa import clan_battle_daily_native as daily
-from test_clan_battle_native import calibration, calibration_v2, context_for, plan, Registry, receipt
+from test_clan_battle_native import calibration, calibration_v2, context_for, plan, Registry, receipt, result_page_receipt
 from test_clan_battle_batch import daily_request, Port
 from test_agent_callbacks import registry, FakeContext
 
@@ -52,7 +52,7 @@ def test_daily_profile_has_only_read_operations_and_zero_challenges_is_valid(pro
 
 
 @pytest.mark.parametrize('page_name', ['lobby', 'target'])
-@pytest.mark.parametrize('text,expected', [('已达今天的上限', 900), ('0/900', 0), ('900/900', 900), ('345 / 900', 345)])
+@pytest.mark.parametrize('text,expected', [('已达今天的上限', 900), ('已达今无的上限', 900), ('0/900', 0), ('900/900', 900), ('345 / 900', 345)])
 def test_daily_cp_numeric_and_exact_limit_message_share_the_earned_semantics(profile, plan, page_name, text, expected):
     page, context, image, _ = reading(profile, plan, page_name, cp=text)
     actual = page.read(context, image, page_name)
@@ -61,7 +61,8 @@ def test_daily_cp_numeric_and_exact_limit_message_share_the_earned_semantics(pro
 
 
 @pytest.mark.parametrize('text', ['901/900', '1000/900', '900/', '/900', '已达今天的上', '今天的上限',
-    '已达今日的上限', '已达今天的上限。', '其他文案', '已达今天的上限900'])
+    '已达今日的上限', '已达今天的上限。', '其他文案', '已达今天的上限900',
+    '没达到今天的上限', '未达今天的上限', '未达今无的上限', '已达今无上限', '已达今无的上限900'])
 def test_daily_cp_rejects_partial_different_or_out_of_range_text(profile, plan, text):
     page, context, image, _ = reading(profile, plan, 'lobby', cp=text)
     assert page.analyze(context, NS(image=image, custom_recognition_param='{"page":"lobby"}')) is None
@@ -182,6 +183,8 @@ def executable(profile):
         for name, page in daily.ACTION_PAGES.items()}
     for name in ('characters_top', 'characters_next', 'support_top', 'support_next'):
         actions[name].update(begin=[1000, 350, 1, 1], end=[1000, 180, 1, 1])
+    for name in ('characters_top', 'characters_next'):
+        actions[name].update({key: deepcopy(value['actions'][name][key]) for key in ('begin', 'end')})
     daily_spec['execution'] = dict(pages=pages, actions=actions,
         used_units=layout(15, 100), boss_slots={str(boss): dict(round=[100 * boss, 200, 90, 30],
             defeated=deepcopy(label)) for boss in range(1, 6)}, formation_owner=[600, 600, 120, 30],
@@ -217,6 +220,43 @@ def test_complete_execution_profile_adds_only_guarded_single_inputs(executable, 
     assert nodes['CBDailyPauseOpening']['recognition'] == 'And'
     assert 'CBDailyOpeningBinding' in nodes['CBDailyPauseOpening']['all_of']
     assert 'CBPauseOpening' not in nodes
+
+
+def test_formal_formation_scroll_reuses_shared_gesture_and_keeps_formal_guard(executable, plan):
+    from pcr_maa.clan_battle_native import calibration_pipeline
+    executable['actions']['characters_next'].update(begin=[1100, 465, 1, 1], end=[1100, 335, 1, 1],
+        duration=700, end_hold=250, post_delay=350)
+    for name in ('characters_top', 'characters_next'):
+        executable['daily']['execution']['actions'][name].update({
+            key: deepcopy(executable['actions'][name][key]) for key in ('begin', 'end')})
+    shared = calibration_pipeline(executable, plan)
+    nodes = daily.require_daily_execution(executable, plan)
+    for name in ('characters_top', 'characters_next'):
+        node, gesture = nodes['CBAction_' + name], shared['CBAction_' + name]
+        assert {key: node.get(key) for key in ('action', 'begin', 'end', 'duration', 'end_hold', 'post_delay')} == {
+            key: gesture.get(key) for key in ('action', 'begin', 'end', 'duration', 'end_hold', 'post_delay')}
+        assert node['custom_recognition'] == 'ClanBattleDailyPage'
+        assert node['custom_recognition_param'] == dict(page='formation', action=name)
+        assert node['max_hit'] == 1
+    assert nodes['CBAction_characters_next']['duration'] == 700
+    assert nodes['CBAction_characters_next']['end_hold'] == 250
+    assert nodes['CBAction_characters_next']['post_delay'] == 350
+    assert nodes['CBAction_support_next']['duration'] == 300
+    assert nodes['CBAction_support_next']['post_delay'] == 0
+
+
+@pytest.mark.parametrize('name', ['characters_top', 'characters_next'])
+def test_formal_formation_scroll_rejects_divergent_duplicate_geometry(executable, plan, name):
+    executable['daily']['execution']['actions'][name]['end'][1] += 1
+    with pytest.raises(ValueError, match='formation_scroll_mismatch:' + name):
+        daily.require_daily_execution(executable, plan)
+
+
+@pytest.mark.parametrize('key,value', [('duration', True), ('duration', 0), ('end_hold', -1), ('post_delay', -1)])
+def test_formal_formation_scroll_keeps_shared_timing_validation(executable, plan, key, value):
+    executable['actions']['characters_next'][key] = value
+    with pytest.raises(ValueError, match='scroll_timing_invalid'):
+        daily.require_daily_execution(executable, plan)
 
 
 @pytest.mark.parametrize('field', ['pages', 'actions', 'samples', 'boss_slots', 'used_units', 'carry_slots'])
@@ -285,6 +325,7 @@ def test_daily_native_start_receipt_is_bound_to_exact_formal_intent(tmp_path, mo
     from pcr_maa import native
     port = object.__new__(daily.NativeClanDailyAdapter)
     daily.NativeClanBattle.__init__(port, NS(), tmp_path)
+    port.calibration = {'daily': {'execution': {}}}
     port.pending, port.action = dict(intent_id='reserved'), dict(kind='regular')
     port.page = NS(expected=None)
     evidence = dict(input_execution='not_sent')
@@ -303,6 +344,7 @@ def test_daily_native_start_receipt_is_bound_to_exact_formal_intent(tmp_path, mo
 def test_daily_native_unknown_start_cannot_be_resent(tmp_path, monkeypatch):
     port = object.__new__(daily.NativeClanDailyAdapter)
     daily.NativeClanBattle.__init__(port, NS(), tmp_path)
+    port.calibration = {'daily': {'execution': {}}}
     port.pending, port.action = dict(intent_id='reserved'), dict(kind='carryover')
     monkeypatch.setattr(daily.NativeGuideTrial, 'run', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('unknown SDK outcome')))
     with pytest.raises(RuntimeError, match='unknown SDK'):
@@ -371,11 +413,13 @@ def test_empty_team_does_not_require_a_support_owner_before_support_is_selected(
     assert reader.formation(NS(), np.zeros((720, 1280, 3), np.uint8))['support_owner_viewer_id'] is None
 
 
-def test_native_observe_uses_actual_round_identity_and_only_verified_refresh_appearance(plan, monkeypatch):
+def test_native_observe_uses_actual_round_identity_and_only_verified_refresh_appearance(plan, executable, monkeypatch):
     from pcr_maa.game_day import current_game_day
     port = object.__new__(daily.NativeClanDailyAdapter)
     port.plan, port.last_bosses, port.boss_history = plan, {}, {}
+    port.calibration, port.tasker = executable, NS()
     port.account_receipt = {'account': plan['account_id']}
+    port.pending, port.started, port.battle_start = None, False, 'not_sent'
     clock = [daily.datetime.now(daily.timezone.utc)]
     bosses = [dict(boss=number, phase='B', round=1 if number == 3 else None, available=number == 3)
         for number in range(1, 6)]
@@ -384,13 +428,14 @@ def test_native_observe_uses_actual_round_identity_and_only_verified_refresh_app
     monkeypatch.setattr(port, 'recover_inheritance', lambda: None)
     monkeypatch.setattr(port, 'run', lambda *args, **kwargs: {})
     monkeypatch.setattr(port, 'wait', lambda names, **kwargs: names[0])
-    monkeypatch.setattr(port, 'inventory', lambda: ([], {'stock_empty': True}))
     def read(page):
         if page == 'used_units':
             return dict(game_day=current_game_day(clock[0]), used_unit=[]), {'record_day': current_game_day(clock[0])}
-        return dict(period=plan['period'], remaining_count=0, carry_count=0, cp=0, bosses=deepcopy(bosses)), {'frame': clock[0].isoformat()}
+        return dict(period=plan['period'], remaining_count=3, carry_count=0, cp=900, bosses=deepcopy(bosses)), {'frame': clock[0].isoformat()}
     monkeypatch.setattr(port, 'read_page', read)
+    monkeypatch.setattr(port, 'inventory', lambda: ([], {'stock_empty': True}, receipt(read('lobby')[0])))
     binding = dict(game_day=current_game_day(clock[0]))
+    port.bind_history(deepcopy(binding), {})
     first = port.observe(binding)['bosses'][2]
     assert first['instance_id'] and first['appeared_at'] is None
     clock[0] += timedelta(seconds=1)
@@ -408,13 +453,13 @@ def test_native_observe_uses_actual_round_identity_and_only_verified_refresh_app
 def test_native_prepare_uses_formal_target_and_distinct_regular_or_stock_entry(plan, monkeypatch, kind):
     port = object.__new__(daily.NativeClanDailyAdapter)
     action = dict(kind=kind, slot=1, boss=plan['boss'], round=5, phase='B', instance_id='five',
-        stock_index=None if kind == 'regular' else 2, start_seconds=90 if kind == 'regular' else 34)
+        stock_index=None if kind == 'regular' else 2, start_seconds=90 if kind == 'regular' else 49)
     port.pending, port.support_unit_id = None, None
     port.tasker = NS(resource=Registry())
     monkeypatch.setattr(port, 'prepare_inheritance', lambda: None)
     port.last_bosses = {plan['boss']: deepcopy(action)}
     port.account_receipt, port.calibration = {'account': plan['account_id']}, {
-        'calibration_id': 'offline', 'daily':{'execution':{'opening':{'start_seconds':[90,34]}}}}
+        'calibration_id': 'offline', 'daily':{'execution':{'opening':{'start_seconds':[90]}}}}
     port.page = NS(bound=None, require_team=lambda reading: None)
     calls = []
     monkeypatch.setattr(port, 'enter_lobby', lambda: calls.append('lobby'))
@@ -428,6 +473,19 @@ def test_native_prepare_uses_formal_target_and_distinct_regular_or_stock_entry(p
     assert calls[:4] == ['lobby', 'formal' if kind == 'regular' else 'carryover', 'CBAction_open_boss', 'CBAction_open_formal']
     assert ('form_team' in calls) == (kind == 'regular')
     assert ('CBAction_select_carry' in calls) == (kind == 'carryover')
+
+
+def test_one_second_regular_fails_before_opening_the_boss(plan, monkeypatch):
+    port = object.__new__(daily.NativeClanDailyAdapter)
+    port.pending = None
+    port.calibration = {'daily': {'execution': {'opening': {'start_seconds': [1, 90]}}}}
+    calls = []
+    monkeypatch.setattr(port, 'enter_lobby', lambda: calls.append('lobby'))
+    monkeypatch.setattr(port, 'configure_slot', lambda job, capability: calls.append(capability))
+    monkeypatch.setattr(port, 'run', lambda *args, **kwargs: pytest.fail('no battle input expected'))
+    with pytest.raises(RuntimeError, match='clan_battle_daily_start_time_uncalibrated'):
+        port._prepare_once(dict(kind='regular', start_seconds=1), plan, {})
+    assert calls == ['lobby', 'formal']
 
 
 def test_daily_adapter_callbacks_remain_on_real_owner_when_slot_reader_changes(executable, plan, tmp_path, monkeypatch):
@@ -474,6 +532,11 @@ def test_formal_slot_excludes_simulation_opening_without_changing_shared_calibra
     port.configure_slot(plan, capability=capability)
     assert resource.nodes['CBStart']['next'] == ['CBDailyPauseOpening']
     assert 'CBPauseOpening' not in resource.nodes and 'auto_battle' not in port.calibration
+    shared_scroll = calibration_pipeline(port.calibration, plan)['CBAction_characters_next']
+    actual_scroll = resource.nodes['CBAction_characters_next']
+    assert {key: actual_scroll.get(key) for key in ('begin', 'end', 'duration', 'end_hold', 'post_delay')} == {
+        key: shared_scroll.get(key) for key in ('begin', 'end', 'duration', 'end_hold', 'post_delay')}
+    assert actual_scroll['custom_recognition'] == 'ClanBattleDailyPage'
     assert executable == original and port.calibrations[plan['confirmed_for']] == original
     assert loaded == (['carryover'] if capability == 'carryover' else [])
     assert calibration_pipeline(executable, plan)['CBStart']['next'] == ['CBPauseOpening']
@@ -547,8 +610,18 @@ def native_protocol(tmp_path, daily_request, executable, monkeypatch):
             self.page = NS(require_team=lambda team: None)
             self.calibration = {'version': 2}
             self.timing_capability = self.state.timing_capability
-            self.calls = []
+            self.calls, self.result_fault = [], None
         def checkpoint(self): pass
+        def consumption_binding(self):
+            return dict(source_sha256='1'*64, calibration_sha256='2'*64,
+                owner_core_sha256='3'*64, authorization_generation='4'*32)
+        def request_consumption_consent(self, plan_hash, preview):
+            return dict(ok=True, request_id=('a' if preview['kind'] == 'regular' else 'b')*32,
+                daily_plan_hash=plan_hash, preview=deepcopy(preview))
+        def arm_opening_start(self, token, *, start_seconds, action_kind):
+            assert token == self.pending['intent_id']
+            assert type(start_seconds) is int and start_seconds == self.action['start_seconds'] == self.start_seconds
+            assert action_kind == self.action['kind']
         def after_settlement(self, intent, result): pass
         def configure_opening(self, job, initial): return self.finished['settings_evidence']
         def now(self): return self.state.now()
@@ -570,13 +643,30 @@ def native_protocol(tmp_path, daily_request, executable, monkeypatch):
                 self.stocks = [row for row in self.stocks if row['stock_index'] in self.state.inventory]
             if node == 'CBAction_return_to_lobby' and self.return_failure:
                 raise RuntimeError('synthetic_return_failed')
-            self.last_receipt = receipt({'node': node})
+            self.last_receipt = receipt({'node': node, **({'paused': True} if node == 'CBStart' else {})})
             return self.last_receipt
-        def wait(self, names, **kwargs): return names[0]
+        def wait(self, names, **kwargs):
+            if names == ['CBPage_result']:
+                reading = dict(period=self.plan['period'], formal=True, damage=self.finished['damage'],
+                    **{key: self.action[key] for key in ('boss', 'phase', 'round', 'instance_id')})
+                fault = self.result_fault
+                if fault == 'boss': reading['boss'] = self.action['boss'] % 5 + 1
+                elif fault == 'phase': reading['phase'] = 'E'
+                elif fault == 'round': reading['round'] += 1
+                elif fault == 'instance_id': reading['instance_id'] = 'different-instance'
+                elif fault == 'period': reading['period'] = '2000-01'
+                elif fault == 'formal': reading['formal'] = False
+                elif fault == 'damage': reading['damage'] = True
+                self.last_receipt = result_page_receipt(reading)
+                if fault == 'wrong_node': self.last_receipt['nodes'][-1]['name'] = 'CBReadSettings'
+                elif fault == 'failed': self.last_receipt['native_ok'] = False
+            return names[0]
         def read_page(self, name):
-            assert name == 'result'
-            return {'damage': self.finished['damage']}, receipt({'damage': self.finished['damage']})
-        def observe(self, binding):
+            pytest.fail('must not recapture result')
+        def observe_external_baseline(self, binding): return self.observe(binding)
+        def observe(self, binding, *, result_intent=None):
+            if result_intent is not None:
+                assert result_intent == self.pending
             row = self.state.observe(binding)
             row['reset_evidence']['inventory'] = {'source': 'synthetic_bound_stock_page'}
             if hasattr(self, 'finished') and self.finished['grant']:
@@ -602,6 +692,24 @@ def test_native_execute_protocol_settles_three_regular_and_bound_carryover(nativ
     assert len(list(native_protocol.directory.glob('result-*.json'))) == 4
 
 
+@pytest.mark.parametrize('fault', ['wrong_node', 'failed', 'boss', 'phase', 'round',
+    'instance_id', 'period', 'formal', 'damage'])
+def test_native_execute_rejects_unverified_or_unbound_result_without_return(native_protocol, daily_request, tmp_path, fault):
+    from pcr_maa.clan_battle_batch import execute_batch
+    from pcr_maa.preset_execution import Journal
+    native_protocol.result_fault = fault
+    journal = Journal(tmp_path / 'ledger')
+    result = execute_batch(native_protocol, journal, daily_request, now=native_protocol.now(), explicit_start=True)
+    assert result['outcome'] == 'stopped'
+    assert result['error'] in ('clan_battle_result_unknown', 'clan_battle_daily_result_binding_mismatch')
+    assert native_protocol.calls.count('CBStart') == 1
+    assert 'CBAction_return_to_lobby' not in native_protocol.calls
+    assert not list(native_protocol.directory.glob('result-*.json'))
+    again = execute_batch(native_protocol, journal, daily_request, now=native_protocol.now(), explicit_start=True)
+    assert again['error'] == 'daily_previous_result_unknown'
+    assert native_protocol.calls.count('CBStart') == 1
+
+
 def test_native_execute_persists_damage_before_return_failure_and_keeps_intent_pending(native_protocol, daily_request, tmp_path):
     from pcr_maa.clan_battle_batch import execute_batch
     from pcr_maa.preset_execution import Journal
@@ -614,3 +722,246 @@ def test_native_execute_persists_damage_before_return_failure_and_keeps_intent_p
     again = execute_batch(native_protocol, journal, daily_request, now=native_protocol.now(), explicit_start=True)
     assert again['error'] == 'daily_previous_result_unknown'
     assert native_protocol.calls.count('CBStart') == 1
+
+
+@pytest.mark.parametrize('start,paused', [(90, 84), (34, 29)])
+def test_regular_first_pause_freezes_actual_progress(plan, start, paused):
+    reader = object.__new__(daily._DailyTeamReader)
+    token = 'synthetic-regular' if start == 90 else 'synthetic-carry'
+    pending = dict(intent_id=token, action=dict(start_seconds=start))
+    port = NS(opening_binding=lambda: pending, opening_clock=None)
+    page = NS(port=port, current='battle', expected=None)
+    page.hit = lambda context, image, name: name != 'LabyDisconnect6002Observed'
+    clock = [paused]
+    page.word = lambda context, image, name, **options: f'{clock[0]//60}:{clock[0]%60:02d}'
+    reader.page, reader.plan, reader.team = page, plan, plan['unit_ids']
+    reader.calibration = {'daily':{'execution':{'opening':{'clock':[1080,21,43,26],'targets':{'resume':[1,2,3,4]}}}}}
+    reader.begin_opening(token)
+    reader.opening_started = True
+    def state(context, image, *, remaining_seconds, **kwargs):
+        return dict(unit_ids=plan['unit_ids'], sets=[True]*5, auto=True, battle_speed=2,
+            remaining_seconds=remaining_seconds, frame_pixel_sha256='a'*64, paused=True, same_frame=True)
+    reader.read_paused_controls = state
+    args = NS(image=np.zeros((720,1280,3),np.uint8))
+    context = NS(tasker=NS(stopping=False))
+    read = reader.opening_control(context,args,{'mode':'opening_read'})
+    assert read is not None and port.opening_clock == (token,paused)
+    assert reader.opening_control(context,args,dict(mode='opening_resume', unit_ids=plan['unit_ids'],
+        sets=[True]*5, auto=True, battle_speed=2, remaining_seconds=paused)) is not None
+    clock[0] -= 1
+    assert reader.opening_control(context,args,{'mode':'opening_read'}) is None
+    clock[0] = paused
+    pending['intent_id'] = 'another-intent'
+    assert reader.opening_control(context,args,{'mode':'opening_read'}) is None
+
+
+@pytest.mark.parametrize('inherited', [True, False])
+def test_formal_recovery_checks_simulation_and_daily_legacy_journals(tmp_path, monkeypatch, inherited):
+    from pcr_maa import clan_battle_inheritance as inheritance
+    from pcr_maa.preset_execution import Journal
+    port = object.__new__(daily.NativeClanDailyAdapter)
+    port.account = '123456789'
+    port.inheritance_recovered = False
+    own = inheritance.BattleInheritance(port,Journal(tmp_path/'daily-inheritance'))
+    legacy = inheritance.BattleInheritance(port,Journal(tmp_path/'simulation-inheritance'))
+    pending = dict(operation=inheritance.OPERATION,intent_id='legacy-simulation-pending',
+        account_id=port.account,original=True,state='in_flight')
+    with legacy.journal.locked():
+        legacy.journal.append(pending)
+    before = legacy.journal.events()
+    monkeypatch.setattr(port,'inheritance_manager',lambda:own)
+    monkeypatch.setattr(inheritance.BattleInheritance,'for_port',classmethod(lambda cls,p:legacy))
+    actions = []
+    monkeypatch.setattr(port,'inheritance_menu',lambda:actions.append('menu'))
+    monkeypatch.setattr(port,'inheritance_lobby',lambda:actions.append('lobby'))
+    monkeypatch.setattr(port,'read_inheritance',lambda:dict(inherit=inherited,same_frame=True,source='synthetic'))
+    if inherited:
+        port.recover_inheritance()
+        assert port.inheritance_recovered and len(legacy.journal.events()) == 2
+        assert legacy.journal.events()[0] == before[0]
+        assert legacy.journal.events()[1]['restore_evidence']['inherit'] is True
+        assert actions == ['menu','lobby']
+    else:
+        with pytest.raises(RuntimeError,match='user_state_confirmation_required'):
+            port.recover_inheritance()
+        assert not port.inheritance_recovered and legacy.journal.events() == before
+        assert actions == ['menu']
+    assert own.journal.events() == []
+
+
+def dialog_profile(executable, name):
+    value = deepcopy(executable)
+    count = 3 if name in ('start_confirmation','carry_start_confirmation') else 2
+    value['daily']['execution'][name] = dict(
+        labels=[dict(roi=[10,10,100,30], expected='^SyntheticDialog$') for _ in range(count)],
+        target=[639,226,2,2], samples=[dict(value['samples'][0], page=name)])
+    return value
+
+
+@pytest.mark.parametrize('name,count', [('start_confirmation',3),('carry_start_confirmation',3),('result_reward',2)])
+def test_formal_dialog_calibration_is_optional_exact_and_single_attempt(executable, plan, name, count):
+    value = dialog_profile(executable, name)
+    nodes = daily.require_daily_execution(value, plan)
+    assert all(f'CBDailyDialog_{name}_{i}' in nodes for i in range(count))
+    node = 'CBDailyStartConfirmation' if name in ('start_confirmation','carry_start_confirmation') else 'CBDailyResultRewardConfirm'
+    assert nodes[node]['max_hit'] == 1 and nodes[node]['action'] == 'Click'
+    for fault in ('extra', 'labels', 'target', 'sample_page', 'sample_hash'):
+        bad = deepcopy(value)
+        dialog = bad['daily']['execution'][name]
+        if fault == 'extra': dialog['enabled'] = True
+        elif fault == 'labels': dialog['labels'].pop()
+        elif fault == 'target': dialog['target'] = [0,0,0,0]
+        elif fault == 'sample_page': dialog['samples'][0]['page'] = 'simulation'
+        else: dialog['samples'][0]['sha256'] = '0'*64
+        with pytest.raises(ValueError): daily.require_daily_execution(bad, plan)
+
+
+@pytest.mark.parametrize('mode', ['formal_start_confirmation','result_reward_confirm'])
+@pytest.mark.parametrize('fault', [None, 'missing_guard', 'no_authority', 'wrong_intent', 'changed_source', 'changed_owner', 'carryover'])
+def test_formal_dialog_click_is_bound_to_original_authorized_intent_only_once(executable, plan, mode, fault):
+    name = 'start_confirmation' if mode == 'formal_start_confirmation' else 'result_reward'
+    value = dialog_profile(executable, name)
+    nodes = daily.require_daily_execution(value, plan)
+    count = 3 if name in ('start_confirmation','carry_start_confirmation') else 2
+    hits = {f'CBDailyDialog_{name}_{i}' for i in range(count)}
+    context = context_for(nodes, {}, hits)
+    fingerprint = dict(source_sha256='1'*64, calibration_sha256='2'*64, owner_core_sha256='3'*64,
+        authorization_generation='4'*32)
+    permission = dict(kind='clan_consumption', reserved_intent_id='a'*64,
+        preview=dict(kind='regular', **{key:fingerprint[key] for key in ('source_sha256','calibration_sha256','owner_core_sha256')}),
+        authorization_generation=fingerprint['authorization_generation'])
+    pending = dict(intent_id='a'*64, action={'kind':'regular'}, ready={'evidence':{'consumption_authorization':permission}})
+    port = NS(opening_binding=lambda **_:pending, battle_start='sent', consumption_binding=lambda:deepcopy(fingerprint))
+    page = daily.ClanBattleDailyExecutionPage(value, plan, port)
+    page.current = 'formation' if name == 'start_confirmation' else 'battle'
+    reader = daily._DailyTeamReader(plan,value,page)
+    if fault == 'missing_guard': hits.pop()
+    elif fault == 'no_authority': pending['ready']['evidence'].clear()
+    elif fault == 'wrong_intent': permission['reserved_intent_id'] = 'f'*64
+    elif fault == 'changed_source': fingerprint['source_sha256'] = 'e'*64
+    elif fault == 'changed_owner': fingerprint['authorization_generation'] = 'f'*32
+    elif fault == 'carryover': pending['action']['kind'] = 'carryover'
+    argv = NS(image=np.zeros((720,1280,3),np.uint8),custom_recognition_param=json.dumps({'mode':mode}))
+    first = reader.analyze(context,argv)
+    if fault:
+        assert first is None
+    else:
+        assert first is not None and list(first.box) == value['daily']['execution'][name]['target']
+        assert reader.analyze(context,argv) is None
+
+
+def test_registered_formal_damage_uses_same_frame_full_line_pair(executable,plan):
+    value = deepcopy(executable)
+    value['calibration_id'] = 'cn-bilibili-202610141448-clan-simulation'
+    value['frame_size'] = [1280,720]
+    value['daily']['execution']['pages']['result']['fields']['damage'] = [88,47,162,38]
+    nodes,texts,hits,context = execution_context(value,plan,'result',damage='265113492×4.5')
+    assert nodes['CBDaily_result_damage']['roi'] == [80,45,332,42]
+    assert nodes['CBDaily_result_damage_verify']['only_rec'] is True
+    texts['CBDaily_result_damage_verify'] = '265113492×4.5'
+    port = NS(pending={'intent_id':'test'},started=True,battle_start='sent')
+    page = daily.ClanBattleDailyExecutionPage(value,plan,port)
+    page.current = 'battle'
+    page.bound = dict(period=plan['period'],formal=True,boss=plan['boss'],phase='B',round=5,instance_id='actual')
+    image = np.zeros((720,1280,3),np.uint8)
+    assert page.read(context,image,'result')['damage'] == 265113492
+    texts['CBDaily_result_damage_verify'] = '26511349×4.5'
+    with pytest.raises(RuntimeError,match='damage_mismatch'): page.read(context,image,'result')
+
+
+def test_native_result_reward_is_dismissed_once_before_clear_result_and_return(native_protocol, daily_request, tmp_path):
+    from pcr_maa.clan_battle_batch import execute_batch
+    from pcr_maa.preset_execution import Journal
+    native_protocol.calibration = {'daily': {'execution': {'result_reward': {}}}}
+    original = native_protocol.wait
+    def wait(names, **kwargs):
+        if names == ['CBPage_result','CBDailyResultRewardObserved']:
+            return 'CBDailyResultRewardObserved'
+        return original(names,**kwargs)
+    native_protocol.wait = wait
+    result = execute_batch(native_protocol,Journal(tmp_path/'ledger'),daily_request,now=native_protocol.now(),explicit_start=True)
+    assert result.get('error') is None and result['regular_settled'] == 3, result
+    assert native_protocol.calls.count('CBStart') == 3
+    assert native_protocol.calls.count('CBDailyResultRewardConfirm') == 3
+    for index,name in enumerate(native_protocol.calls):
+        if name == 'CBDailyResultRewardConfirm':
+            assert native_protocol.calls[index+1] == 'CBAction_return_to_lobby'
+
+
+def test_unknown_result_reward_keeps_original_intent_without_new_start(native_protocol,daily_request,tmp_path):
+    from pcr_maa.clan_battle_batch import execute_batch
+    from pcr_maa.preset_execution import Journal
+    native_protocol.calibration = {'daily': {'execution': {'result_reward': {}}}}
+    wait,run = native_protocol.wait,native_protocol.run
+    native_protocol.wait = lambda names,**kwargs: 'CBDailyResultRewardObserved' if len(names)==2 else wait(names,**kwargs)
+    def unknown(node,**kwargs):
+        if node == 'CBDailyResultRewardConfirm': raise RuntimeError('unknown_reward_input')
+        return run(node,**kwargs)
+    native_protocol.run = unknown
+    journal = Journal(tmp_path/'ledger')
+    first = execute_batch(native_protocol,journal,daily_request,now=native_protocol.now(),explicit_start=True)
+    assert first['error'] == 'unknown_reward_input' and first['regular_settled'] == 0
+    second = execute_batch(native_protocol,journal,daily_request,now=native_protocol.now(),explicit_start=True)
+    assert second['error'] == 'daily_previous_result_unknown' and native_protocol.calls.count('CBStart') == 1
+
+
+@pytest.mark.parametrize('boss', [1, 2, 3, 4, 5])
+def test_final_boss_selection_clicks_the_center_of_the_bound_target(executable, plan, boss, monkeypatch):
+    from pcr_maa.clan_battle_batch import _hash
+    plan = dict(plan, boss=boss)
+    actual = dict(boss=boss, phase='B', round=5, available=True)
+    action = dict(actual, instance_id=_hash(dict(period=plan['period'], boss=boss, phase='B', round=5)))
+    page = daily.ClanBattleDailyExecutionPage(executable, plan, NS(action=action))
+    monkeypatch.setattr(page, 'read', lambda *args: dict(period=plan['period'], bosses=[actual]))
+    monkeypatch.setattr(page, 'hit', lambda *args: True)
+    x, y, w, h = executable['boss_targets'][str(boss)]['target']
+    assert page.action(NS(), np.zeros((720, 1280, 3), np.uint8), 'open_boss') == [x + w // 2, y + h // 2, 1, 1]
+
+
+@pytest.mark.parametrize('kind', ['regular','carryover'])
+@pytest.mark.parametrize('screen', ['regular','carryover'])
+def test_start_confirmation_selects_exact_intent_kind_and_never_falls_back(executable,plan,kind,screen):
+    value=dialog_profile(dialog_profile(executable,'start_confirmation'),'carry_start_confirmation')
+    value['daily']['execution']['start_confirmation']['target']=[10,20,2,2]
+    value['daily']['execution']['carry_start_confirmation']['target']=[30,40,2,2]
+    nodes=daily.require_daily_execution(value,plan)
+    name='carry_start_confirmation' if screen=='carryover' else 'start_confirmation'
+    hits={f'CBDailyDialog_{name}_{i}' for i in range(3)}
+    context=context_for(nodes,{},hits)
+    fingerprint=dict(source_sha256='1'*64,calibration_sha256='2'*64,owner_core_sha256='3'*64,authorization_generation='4'*32)
+    authorization=dict(reserved_intent_id='a'*64,preview=dict(kind=kind,**{k:fingerprint[k] for k in ('source_sha256','calibration_sha256','owner_core_sha256')}),authorization_generation=fingerprint['authorization_generation'])
+    pending=dict(intent_id='a'*64,action={'kind':kind},ready={'evidence':{'consumption_authorization':authorization}})
+    port=NS(opening_binding=lambda **_:pending,battle_start='sent',consumption_binding=lambda:deepcopy(fingerprint))
+    page=daily.ClanBattleDailyExecutionPage(value,plan,port)
+    page.current='formation'
+    reader=daily._DailyTeamReader(plan,value,page)
+    argv=NS(image=np.zeros((720,1280,3),np.uint8),custom_recognition_param=json.dumps({'mode':'formal_start_confirmation'}))
+    hit=reader.analyze(context,argv)
+    if kind!=screen:
+        assert hit is None and not hasattr(port,'_formal_start_confirmation_token')
+    else:
+        assert hit is not None and list(hit.box)==value['daily']['execution'][name]['target']
+        assert hit.detail==dict(page=name,intent_id='a'*64)
+        assert reader.analyze(context,argv) is None
+
+
+@pytest.mark.parametrize('fault', ['missing_guard','wrong_authority_kind','wrong_intent','changed_source','changed_owner'])
+def test_carry_confirmation_keeps_existing_single_intent_authority_guards(executable,plan,fault):
+    value=dialog_profile(executable,'carry_start_confirmation')
+    nodes=daily.require_daily_execution(value,plan)
+    hits={f'CBDailyDialog_carry_start_confirmation_{i}' for i in range(3)}
+    context=context_for(nodes,{},hits)
+    fingerprint=dict(source_sha256='1'*64,calibration_sha256='2'*64,owner_core_sha256='3'*64,authorization_generation='4'*32)
+    permission=dict(reserved_intent_id='a'*64,preview=dict(kind='carryover',**{k:fingerprint[k] for k in ('source_sha256','calibration_sha256','owner_core_sha256')}),authorization_generation=fingerprint['authorization_generation'])
+    pending=dict(intent_id='a'*64,action={'kind':'carryover'},ready={'evidence':{'consumption_authorization':permission}})
+    port=NS(opening_binding=lambda **_:pending,battle_start='sent',consumption_binding=lambda:deepcopy(fingerprint))
+    page=daily.ClanBattleDailyExecutionPage(value,plan,port);page.current='formation'
+    reader=daily._DailyTeamReader(plan,value,page)
+    if fault=='missing_guard':hits.pop()
+    elif fault=='wrong_authority_kind':permission['preview']['kind']='regular'
+    elif fault=='wrong_intent':permission['reserved_intent_id']='b'*64
+    elif fault=='changed_source':fingerprint['source_sha256']='b'*64
+    else:fingerprint['authorization_generation']='b'*32
+    argv=NS(image=np.zeros((720,1280,3),np.uint8),custom_recognition_param=json.dumps({'mode':'formal_start_confirmation'}))
+    assert reader.analyze(context,argv) is None
+    assert not hasattr(port,'_formal_start_confirmation_token')

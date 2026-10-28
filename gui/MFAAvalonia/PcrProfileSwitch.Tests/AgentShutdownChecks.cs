@@ -16,6 +16,7 @@ internal static class AgentShutdownChecks
 {
     internal static void Run(string[] args)
     {
+        Directory.CreateDirectory(args[1]);
         const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.Static | BindingFlags.NonPublic;
         var assembly = typeof(PcrAlphaOwner).Assembly;
         var type = assembly.GetType("MFAAvalonia.Pcr.PcrAgentShutdown", true)!;
@@ -70,7 +71,7 @@ internal static class AgentShutdownChecks
         cleanup.SetResult();
         CheckRetainedOwner(New(), cleanupUnconfirmed: true);
 
-        if (OperatingSystem.IsWindows()) CheckOwnedTcp(args);
+        if (OperatingSystem.IsWindows()) { CheckOwnedTcp(args); AgentConnectionMonitorChecks.Run(args); }
         Console.WriteLine($"PCR Agent shutdown checks passed: {count}; synthetic Stop/LinkStop faults, no device/game input");
 
         void CheckOwnedTcp(string[] arguments)

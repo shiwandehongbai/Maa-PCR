@@ -6,12 +6,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 import time
+from uuid import uuid4
 
 from maa.custom_recognition import CustomRecognition
 from copy import deepcopy
 
 from . import native
 from .guide_trial_native import NativeGuideTrial
+from .clan_battle_recovery import ClanDisconnected, observe_disconnect_after_failure, recover_disconnect
 from .labyrinth.game_session import game_session_pipeline
 from .labyrinth.profile import PROFILE_NODE, profile_player_id
 
@@ -27,6 +29,8 @@ FIELDS = {
     'damage': r'^[0-9][0-9,，\s]*$',
     'remaining_seconds': r'^(?:1[:：](?:[0-2][0-9]|30)|0[:：][0-5][0-9])$',
 }
+OPENING_CLOCK_PATTERN = r'^(?:1[:：]?(?:[0-2][0-9]|30)|0[:：]?[0-5][0-9])$'
+RESULT_DAMAGE_LINE_PATTERN = r'^\s*([0-9]+(?:[,，][0-9]{3})*)\s*[×xX]\s*([0-9]+[.．][0-9]+)\s*$'
 ACTION_PAGES = dict(open_clan='adventure', open_boss='lobby', open_simulation='target',
                     open_support='formation', support_back='support', start='formation',
                     characters_top='formation', characters_next='formation',
@@ -45,6 +49,31 @@ CALIBRATION_GAPS = (
     '编队空位、星级、自有/支援标记及列表翻页', '支援编号、星级及可用状态',
     '模拟结果伤害页及返回模拟目标后继', '会战HUD与秒级读取/输入延迟',
 )
+
+
+def result_damage_line(text, verify):
+    matches = [re.fullmatch(RESULT_DAMAGE_LINE_PATTERN, item) if type(item) is str else None
+        for item in (text, verify)]
+    if any(match is None for match in matches):
+        raise RuntimeError('clan_battle_result_damage_unknown')
+    readings = [(int(match.group(1).replace(',', '').replace('，', '')),
+        match.group(2).replace('．', '.')) for match in matches]
+    if readings[0] != readings[1]:
+        raise RuntimeError('clan_battle_result_damage_mismatch')
+    return readings[0][0]
+
+
+def result_damage_nodes(roi, name):
+    if roi != [88, 47, 162, 38]:
+        raise ValueError('clan_battle_result_damage_uncalibrated')
+    # The old damage box clips long numbers; compare two full same-frame reads.
+    x, y, w, h = roi
+    nodes = {
+        name: _node(dict(roi=[x-8, y-2, w*2+8, h+4]), expected=RESULT_DAMAGE_LINE_PATTERN),
+        name + '_verify': _node(dict(roi=[x, y, w*2, h]), expected=RESULT_DAMAGE_LINE_PATTERN),
+    }
+    nodes[name + '_verify']['only_rec'] = True
+    return nodes
 
 
 def _roi(value):
@@ -102,7 +131,7 @@ def auto_battle_pipeline(calibration, plan):
     if spec is None:
         return {}
     if (calibration.get('version') != 2 or type(spec) is not dict
-            or set(spec) - {'inheritance'} != {'speeds', 'opening_guards', 'paused_guards', 'auto_on', 'auto_off', 'speed', 'set_badge', 'empty_tp', 'samples'}
+            or set(spec) - {'inheritance', 'empty_tp'} != {'speeds', 'opening_guards', 'paused_guards', 'auto_on', 'auto_off', 'speed', 'set_badge', 'samples'}
             or type(spec['speeds']) is not list or not spec['speeds'] or 1 not in spec['speeds']
             or any(type(n) is not int or n not in (1, 2, 4) for n in spec['speeds'])
             or len(set(spec['speeds'])) != len(spec['speeds'])
@@ -112,17 +141,13 @@ def auto_battle_pipeline(calibration, plan):
         raise ValueError('clan_battle_auto_speed_calibration_missing')
     nodes = {}
     for group, count in (('opening_guards', 3), ('paused_guards', 4)):
-        if type(spec[group]) is not list or len(spec[group]) != count:
+        if type(spec[group]) is not list or len(spec[group]) not in ((3, 4) if group == 'paused_guards' else (count,)):
             raise ValueError('clan_battle_auto_calibration_invalid')
         for index, marker in enumerate(spec[group]):
             nodes[f'CBOpening_{group}_{index}'] = _node(marker)
     clock = spec['paused_guards'][2]
-    if (clock.get('recognition') != 'TemplateMatch' or type(clock.get('template')) is not list
-            or len(clock['template']) != 2 or type(clock.get('sha256')) is not list or len(clock['sha256']) != 2):
-        raise ValueError('clan_battle_auto_clock_calibration_invalid')
-    for index, second in enumerate((90, 89)):
-        marker = dict(clock, template=clock['template'][index], sha256=clock['sha256'][index])
-        nodes['CBOpeningClock'+str(second)] = _node(marker)
+    nodes['CBOpeningClock'] = _node({'roi': _roi(clock['roi'])}, expected=OPENING_CLOCK_PATTERN)
+    nodes['CBOpeningClockScaled'] = _node({'roi': [0, 0, clock['roi'][2]*2, clock['roi'][3]*2]}, expected=OPENING_CLOCK_PATTERN)
     nodes['CBOpeningBoss'] = _node(dict(roi=[805, 160, 135, 33]),
         expected='^' + re.escape(calibration['boss_targets'][str(plan['boss'])]['name']) + '$')
     for name in ('auto_on', 'auto_off'):
@@ -134,10 +159,6 @@ def auto_battle_pipeline(calibration, plan):
         marker['roi'] = _roi(marker['roi']).copy()
         marker['roi'][0] += 116*index
         nodes['CBOpeningSet'+str(index)] = _node(marker)
-        marker = deepcopy(spec['empty_tp'])
-        marker['roi'] = _roi(marker['roi']).copy()
-        marker['roi'][0] += 116*index
-        nodes['CBOpeningEmptyTp'+str(index)] = _node(marker)
     for name, mode, click in (('CBOpeningRead', 'opening_read', False), ('CBOpeningConfirmed', 'opening_read', False),
             ('CBOpeningAuto', 'opening_auto', True), ('CBOpeningSet', 'opening_set', True),
             ('CBOpeningSpeed', 'opening_speed', True), ('CBResumeOpening', 'opening_resume', True)):
@@ -148,12 +169,29 @@ def auto_battle_pipeline(calibration, plan):
             on_error=['LabyDisconnect6002Observed'])
         if click:
             nodes[name]['max_hit'] = 1
-    # The fading intro already shows 90s but ignores Menu; only the bright button accepts input.
+    nodes['CBOpeningObserve'] = dict(recognition='Custom', custom_recognition='ClanBattleCharacters',
+        custom_recognition_param=dict(mode='opening_observe'), action='DoNothing', next=[],
+        timeout=1000, pre_delay=0, post_delay=0)
+    # Retain the existing Menu brightness check alongside the clock check.
     nodes['CBOpeningInputReady'] = dict(recognition='ColorMatch', roi=[1180, 22, 45, 24], method=4,
         lower=[220, 220, 220], upper=[255, 255, 255], count=400, action='DoNothing', next=[], pre_delay=0, post_delay=0)
-    # Native same-frame guards avoid three image IPC round trips in the short 4x opening.
+    # Wait for the clock to start; this does not prove anything about UB timing.
+    nodes['CBOpeningReadyClock'] = _node({'roi': calibration['pages']['battle']['fields']['remaining_seconds']},
+        expected=r'^(?:1[:：][0-2][0-9]|0[:：](?:0[1-9]|[1-5][0-9]))$')
+    nodes['CBOpeningMatch'] = dict(recognition='Custom', custom_recognition='ClanBattleCharacters',
+        custom_recognition_param=dict(mode='opening_match'), action='DoNothing', next=[],
+        timeout=1000, pre_delay=0, post_delay=0)
+    nodes['CBOpeningRetryGuard'] = dict(recognition='Custom', custom_recognition='ClanBattleCharacters',
+        custom_recognition_param=dict(mode='pause_retry'), action='DoNothing', next=[],
+        timeout=1000, pre_delay=0, post_delay=0)
     nodes['CBPauseOpening'] = dict(recognition='And',
-        all_of=['CBOpeningInputReady', *[f'CBOpening_opening_guards_{i}' for i in range(3)]], action='Click', target=[1204, 31, 6, 6],
+        all_of=['CBOpeningObserve', 'CBOpeningInputReady', *[f'CBOpening_opening_guards_{i}' for i in range(3)], 'CBOpeningReadyClock'], action='Click', target=[1204, 31, 6, 6],
+        max_hit=1, next=['CBOpeningRead', 'CBPauseRetry'], timeout=15000, rate_limit=1, pre_delay=0, post_delay=300,
+        on_error=['LabyDisconnect6002Observed'])
+    # Only reached after a successful first menu input and an unsuccessful paused read.
+    nodes['CBPauseRetry'] = dict(recognition='And',
+        all_of=['CBOpeningInputReady', *[f'CBOpening_opening_guards_{i}' for i in range(3)],
+            'CBOpeningReadyClock', 'CBOpeningRetryGuard'], action='Click', target=[1204, 31, 6, 6],
         max_hit=1, next=['CBOpeningRead'], timeout=15000, rate_limit=1, pre_delay=0, post_delay=300,
         on_error=['LabyDisconnect6002Observed'])
     if 'inheritance' in spec:
@@ -176,8 +214,106 @@ def require_battle_speed(calibration, plan, battle_speed):
         raise RuntimeError('clan_battle_auto_speed_uncalibrated')
 
 
-def calibration_pipeline(calibration, plan):
-    """Explicit injection for saved-frame checks; no discovered file enables it."""
+
+class _SimulationNavigationRestart(RuntimeError):
+    pass
+
+
+class _SimulationPopup(RuntimeError):
+    def __init__(self, reading):
+        super().__init__('clan_battle_navigation_popup')
+        self.reading = reading
+
+
+class _SimulationReward(_SimulationPopup):
+    pass
+
+
+class _SimulationDifficultyNotice(_SimulationPopup):
+    pass
+
+
+def _restart_navigation_budget(budget, popup):
+    now = time.monotonic()
+    owner_deadline = native.RUN_DEADLINE.get()
+    if now >= owner_deadline or (not isinstance(popup, _SimulationReward) and now >= budget['deadline']):
+        raise RuntimeError('clan_battle_simulation_navigation_timeout')
+    if isinstance(popup, _SimulationReward):
+        # Only a confirmed new reward starts a fresh navigation segment.
+        budget['deadline'] = min(now + 90, owner_deadline)
+
+
+# Real 2026-10-26 difficulty-increase popup, replayed with the shared OCR model.
+_DIFFICULTY_NOTICE_LABELS = (
+    ([458, 175, 194, 40], r'^首领魔物\s*等级$'),
+    ([638, 175, 120, 40], r'^[（(]难度[）)]$'),
+    ([747, 175, 75, 40], r'^提升$'),
+    ([480, 308, 310, 37], r'^魔物的等级\s*[（(]难度[）)]\s*提升了[。.]$'),
+    ([560, 372, 160, 35], r'^进行模拟战[。.]$'),
+)
+_DIFFICULTY_NOTICE_CONTENT_ROI = [330, 225, 610, 215]
+
+
+def _navigation_popup_key(reading):
+    page = reading.get('page', 'navigation_reward')
+    if page not in ('navigation_reward', 'difficulty_notice'):
+        raise RuntimeError('clan_battle_simulation_popup_unknown')
+    signature = reading['content_sha256']
+    return ('difficulty_notice:' + signature) if page == 'difficulty_notice' else signature
+
+
+def simulation_navigation_pipeline(calibration):
+    slots = calibration['pages']['lobby'].get('boss_slots')
+    arrows = calibration['pages']['boss_detail'].get('navigation')
+    reward = calibration['pages']['lobby'].get('navigation_reward')
+    if slots is None and arrows is None and reward is None:
+        return {}
+    if (type(slots) is not dict or set(slots) != set('12345')
+            or type(arrows) is not dict or set(arrows) != {'previous', 'next'}):
+        raise ValueError('clan_battle_simulation_navigation_invalid')
+    nodes = {}
+    for boss, spec in slots.items():
+        if type(spec) is not dict or set(spec) != {'round', 'defeated'}:
+            raise ValueError('clan_battle_simulation_navigation_invalid')
+        nodes['CBNavRound'+boss] = _node(dict(roi=spec['round']), expected=r'^第\s*[1-9][0-9]*\s*轮$')
+        nodes['CBNavDefeated'+boss] = _node(spec['defeated'])
+    for direction, marker in arrows.items():
+        nodes['CBNavArrow_'+direction] = _node(marker)
+    names = [re.escape(row['name']) for row in calibration['boss_targets'].values()]
+    nodes['CBNavBoss'] = _node(dict(roi=calibration['pages']['boss_detail']['fields']['boss']),
+        expected='^(?:'+'|'.join(names)+')$')
+    nodes['CBNavSimulation'] = _node(dict(roi=calibration['pages']['target']['fields']['simulation']),
+        expected=r'^设定为模拟战[。.]?$')
+    modes = dict(CBNavDetail='read', CBNavOpenBoss='open_boss',
+                 CBNavSelectSimulation='select_simulation', CBNavStep='next')
+    if reward is not None:
+        if (type(reward) is not dict or set(reward) != {'labels', 'confirm', 'content_roi'}
+                or type(reward['labels']) is not list or len(reward['labels']) < 2):
+            raise ValueError('clan_battle_simulation_reward_invalid')
+        _roi(reward['content_roi'])
+        for index, marker in enumerate(reward['labels']):
+            nodes['CBNavRewardLabel'+str(index)] = _node(marker)
+        nodes['CBNavRewardConfirmLabel'] = _node(reward['confirm'])
+        modes.update(CBNavRewardObserved='reward_read', CBNavRewardConfirm='reward_confirm')
+    for index, (roi, expected) in enumerate(_DIFFICULTY_NOTICE_LABELS):
+        nodes['CBNavDifficultyNoticeLabel'+str(index)] = _node(dict(roi=roi), expected=expected)
+    nodes['CBNavDifficultyNoticeCloseLabel'] = _node(dict(roi=[595, 475, 90, 40]), expected=r'^关闭$')
+    modes.update(CBNavDifficultyNoticeObserved='difficulty_notice_read',
+                 CBNavDifficultyNoticeClose='difficulty_notice_close')
+    for name, mode in modes.items():
+        click = mode not in ('read', 'reward_read', 'difficulty_notice_read')
+        nodes[name] = dict(recognition='Custom', custom_recognition='ClanBattlePage',
+            custom_recognition_param=dict(navigation=mode), action='Click' if click else 'DoNothing',
+            target=True, next=[], timeout=1000, pre_delay=0, post_delay=200 if click else 0)
+        if click:
+            nodes[name]['max_hit'] = 1
+    return nodes
+
+
+def calibration_pipeline(calibration, plan, *, capability='simulation'):
+    """Build shared nodes for the internally selected battle capability."""
+    if capability not in ('simulation', 'formal', 'carryover'):
+        raise ValueError('clan_battle_pipeline_capability_invalid')
     if calibration is None:
         raise RuntimeError('clan_battle_calibration_missing:' + '、'.join(CALIBRATION_GAPS))
     if (type(calibration) is not dict or type(calibration.get('version')) is not int
@@ -189,12 +325,15 @@ def calibration_pipeline(calibration, plan):
             or calibration.get('evidence_kind') not in ('offline_replay', 'device_saved_frame')):
         raise ValueError('clan_battle_calibration_invalid')
     modern = calibration['version'] == 2
+    simulation = not modern or capability == 'simulation'
     support_scope = calibration.get('support_modes')
     if 'support_modes' in calibration and (not modern or support_scope != ['none']):
         raise ValueError('clan_battle_calibration_support_scope_invalid')
     own_only = support_scope == ['none']
     if own_only and plan.get('support_mode') != 'none':
-        raise RuntimeError('clan_battle_support_mode_uncalibrated')
+        from .clan_battle import load_snapshot, support_requirement
+        if plan.get('support_mode') != 'qsjs' or support_requirement(plan, load_snapshot(plan)) is not None:
+            raise RuntimeError('clan_battle_support_mode_uncalibrated')
     page_names = V2_PAGES if modern else PAGES
     action_pages = V2_ACTION_PAGES if modern else ACTION_PAGES
     if own_only:
@@ -281,8 +420,17 @@ def calibration_pipeline(calibration, plan):
                     expected = (r'^模拟战的战斗结果不会显示在团队战成绩中[。.]?$' if page == 'result'
                                 else r'^设定为模拟战[。.]?$')
                 elif field == 'period':
-                    expected = r'^(?:20[0-9]{2}[-年](?:0[1-9]|1[0-2])月?|[0-1]?[0-9]/[0-3]?[0-9]\s*[0-2][0-9]:[0-5][0-9]\s*[~～〜至—－-]\s*[0-1]?[0-9]/[0-3]?[0-9]\s*[0-2][0-9]:[0-5][0-9])$'
+                    expected = r'^(?:20[0-9]{2}[-年](?:0[1-9]|1[0-2])月?|[0-1]?[0-9]/[0-3]?[0-9]\s*[:：]?\s*[0-2][0-9]:[0-5][0-9]\s*[~～〜至—－-]\s*[0-1]?[0-9]/[0-3]?[0-9]\s*[:：]?\s*[0-2][0-9]:[0-5][0-9])$'
+            if modern and simulation and page == 'result' and field == 'damage':
+                if (calibration['evidence_kind'] == 'device_saved_frame'
+                        and calibration['calibration_id'] != 'cn-bilibili-202610141448-clan-simulation'):
+                    raise ValueError('clan_battle_result_damage_uncalibrated')
+                nodes.update(result_damage_nodes(roi, 'CBField_result_damage'))
+                continue
             nodes[f'CBField_{page}_{field}'] = _node(dict(roi=roi), expected=expected)
+            if modern and page == 'lobby' and field == 'period':
+                # Read the whole date row; detector splits can duplicate boundary digits.
+                nodes[f'CBField_{page}_{field}']['only_rec'] = True
         if modern and page == 'battle':
             nodes['CBOneSpeed'] = _node(spec.get('speed_one'))
             for speed, key in ((2, 'speed_two'), (4, 'speed_four')):
@@ -302,20 +450,36 @@ def calibration_pipeline(calibration, plan):
         if modern and page in ('lobby', 'boss_detail'):
             nodes['CBObserve_'+page] = dict(nodes['CBPage_'+page],
                 custom_recognition_param=dict(page=page, observe_only=True))
+    if modern and not simulation:
+        # Daily execution supplies formal page/navigation guards; keep validation above.
+        nodes = {}
+    elif modern:
+        nodes.update(simulation_navigation_pipeline(calibration))
     actions = calibration.get('actions')
     if type(actions) is not dict or set(actions) != set(action_pages):
         raise ValueError('clan_battle_calibration_actions_missing')
-    if modern:
+    if modern and simulation:
         selected = _difficulty_choice(calibration, plan)
         nodes['CBDifficultySelected'] = _node(selected['selected'])
     for name, page in action_pages.items():
+        if not simulation and name not in ('characters_top', 'characters_next', 'support_top', 'support_next'):
+            continue
         spec = actions[name]
+        post_delay = 200
         if type(spec) is not dict or spec.get('page') != page:
             raise ValueError('clan_battle_calibration_action_page_invalid')
         if name in ('characters_top', 'characters_next', 'support_top', 'support_next'):
             begin, end = spec.get('begin'), spec.get('end')
             _roi(begin); _roi(end)
             action = dict(action='Swipe', begin=begin, end=end, duration=400)
+            if name == 'characters_next':
+                timing = dict(duration=spec.get('duration', 400), end_hold=spec.get('end_hold', 0),
+                    post_delay=spec.get('post_delay', 200))
+                if any(type(value) is not int or not (1 if key == 'duration' else 0) <= value <= 5000
+                        for key, value in timing.items()):
+                    raise ValueError('clan_battle_calibration_scroll_timing_invalid')
+                action.update(duration=timing['duration'], end_hold=timing['end_hold'])
+                post_delay = timing['post_delay']
         elif modern and name in ('open_boss', 'back_to_lobby', 'back_to_adventure', 'disable_live_state'):
             _roi(targets[str(plan['boss'])]['target'] if name == 'open_boss' else spec.get('target'))
             action = dict(action='Click', target=True)
@@ -343,8 +507,8 @@ def calibration_pipeline(calibration, plan):
             params['observe_only'] = True
         nodes['CBAction_'+name] = dict(recognition='Custom', custom_recognition='ClanBattlePage',
             custom_recognition_param=params, next=[], timeout=1000,
-            max_hit=1, pre_delay=0, post_delay=200, **action)
-    if modern:
+            max_hit=1, pre_delay=0, post_delay=post_delay, **action)
+    if modern and simulation:
         nodes['CBDifficultyChosen'] = dict(nodes['CBPage_difficulty'],
             custom_recognition_param=dict(page='difficulty', require_selected_difficulty=True))
         nodes['CBFullSimulationReady'] = dict(nodes['CBPage_target'],
@@ -401,9 +565,11 @@ def calibration_pipeline(calibration, plan):
         if click:
             nodes[name]['max_hit'] = 1
     nodes['CBSettingsConfirmed']['on_error'] = ['LabyDisconnect6002Observed']
-    nodes.update(auto_battle_pipeline(calibration, plan))
-    if calibration.get('auto_battle') and not plan['switches']:
-        nodes['CBStart'].update(next=['CBPauseOpening'], timeout=30000, rate_limit=1)
+    if simulation:
+        nodes.update(auto_battle_pipeline(calibration, plan))
+        if calibration.get('auto_battle') and not plan['switches']:
+            # Read inherited settings only after the first guarded pause; the full HUD match is too slow here.
+            nodes['CBStart'].update(next=['CBPauseOpening'], timeout=30000, rate_limit=1)
     return nodes
 
 
@@ -425,8 +591,8 @@ def require_target_identity(plan, reading):
 def _current_period(text):
     if '/' not in text:
         return text.replace('年', '-').replace('月', '')
-    match = re.fullmatch(r'([0-1]?[0-9])/([0-3]?[0-9])\s*([0-2][0-9]):([0-5][0-9])\s*[~～〜至—－-]\s*'
-                         r'([0-1]?[0-9])/([0-3]?[0-9])\s*([0-2][0-9]):([0-5][0-9])', text)
+    match = re.fullmatch(r'([0-1]?[0-9])/([0-3]?[0-9])\s*[:：]?\s*([0-2][0-9]):([0-5][0-9])\s*[~～〜至—－-]\s*'
+                         r'([0-1]?[0-9])/([0-3]?[0-9])\s*[:：]?\s*([0-2][0-9]):([0-5][0-9])', text)
     if match is None:
         raise RuntimeError('clan_battle_period_unknown')
     now = datetime.now(timezone(timedelta(hours=8)))
@@ -459,8 +625,11 @@ class ClanBattlePage(CustomRecognition):
         seen = context.run_recognition(name, image)
         return seen is not None and seen.hit is True
 
-    def word(self, context, image, name):
+    def word(self, context, image, name, *, evidence=None):
         seen = context.run_recognition(name, image)
+        if evidence is not None:
+            evidence.update(node=name, hit=seen is not None and seen.hit is True,
+                raw=deepcopy(getattr(seen, 'raw_detail', None)))
         raw = getattr(seen, 'raw_detail', None) if seen is not None and seen.hit else None
         words = raw.get('filtered') if type(raw) is dict else None
         if (type(words) is not list or len(words) != 1 or type(words[0]) is not dict
@@ -522,6 +691,9 @@ class ClanBattlePage(CustomRecognition):
             if field == 'simulation':
                 value = (text.startswith('模拟战的战斗结果不会显示在团队战成绩中') if page == 'result'
                          else text.startswith('设定为模拟战')) if self.modern else text == '模拟战'
+            elif field == 'damage' and self.modern:
+                verify = self.word(context, image, 'CBField_result_damage_verify')
+                value = result_damage_line(text, verify)
             elif field == 'period':
                 value = _current_period(text) if self.modern else text.replace('年', '-').replace('月', '')
             elif field == 'phase':
@@ -559,6 +731,8 @@ class ClanBattlePage(CustomRecognition):
             require_target_identity(self.plan, values)
         if page == 'lobby' and not self.modern:
             require_target_identity(self.plan, dict(values, boss=self.plan['boss'], simulation=True))
+        if self.modern and page == 'lobby' and 'boss_slots' in spec:
+            values['bosses'] = self.read_boss_slots(context, image)
         if self.modern:
             self.bound.update(deepcopy(values))
             self.current_page, self.expected_page = page, None
@@ -576,6 +750,9 @@ class ClanBattlePage(CustomRecognition):
         if self.modern and name == 'confirm_difficulty' and not self.hit(context, image, 'CBDifficultySelected'):
             raise RuntimeError('clan_battle_difficulty_selection_unverified')
         if self.modern and name == 'open_boss':
+            rows = reading.get('bosses')
+            if type(rows) is not list or not any(row['boss'] == self.plan['boss'] and row['available'] for row in rows):
+                raise RuntimeError('clan_battle_simulation_boss_unavailable')
             return _roi(self.calibration['boss_targets'][str(self.plan['boss'])]['target'])
         if self.modern and name in ('back_to_lobby', 'back_to_adventure', 'disable_live_state'):
             return _roi(self.calibration['actions'][name]['target'])
@@ -584,8 +761,118 @@ class ClanBattlePage(CustomRecognition):
         node = 'CBActionLabel_'+name
         if not self.hit(context, image, node):
             raise RuntimeError('clan_battle_action_label_unknown:' + name)
+        if self.modern and name == 'select_difficulty':
+            x, y, width, height = _roi(_difficulty_choice(self.calibration, self.plan)['selected']['roi'])
+            return [x+width//2, y+height//2, 1, 1]
         result = context.run_recognition(node, image)
         return _roi(list(result.box))
+
+    def read_boss_slot(self, context, image, boss):
+        if 'boss_slots' not in self.calibration['pages']['lobby']:
+            raise RuntimeError('clan_battle_simulation_navigation_uncalibrated')
+        if type(boss) is not int or not 1 <= boss <= 5:
+            raise RuntimeError('clan_battle_simulation_boss_changed')
+        dead = self.hit(context, image, 'CBNavDefeated'+str(boss))
+        alive = self.hit(context, image, 'CBNavRound'+str(boss))
+        if dead == alive:
+            raise RuntimeError('clan_battle_simulation_boss_state_unknown')
+        round_ = None if dead else int(re.sub(r'\D', '', self.word(context, image, 'CBNavRound'+str(boss))))
+        return dict(boss=boss, round=round_, available=alive)
+
+    def read_boss_slots(self, context, image):
+        return [self.read_boss_slot(context, image, boss) for boss in range(1, 6)]
+
+    def read_navigation(self, context, image):
+        if 'navigation' not in self.calibration['pages']['boss_detail']:
+            raise RuntimeError('clan_battle_simulation_navigation_uncalibrated')
+        self.read(context, image, 'boss_detail', observe_only=True)
+        if (self.bound.get('period') != self.plan['period']
+                or self.current_page not in ('lobby', 'boss_detail', 'target')
+                or self.current_page == 'lobby' and self.expected_page != 'boss_detail'):
+            raise RuntimeError('clan_battle_simulation_navigation_unbound')
+        name = self.word(context, image, 'CBNavBoss')
+        matches = [int(boss) for boss, row in self.calibration['boss_targets'].items() if row['name'] == name]
+        phase = self.calibration['phase_labels'].get(self.word(context, image, 'CBField_boss_detail_phase'))
+        if len(matches) != 1 or phase is None:
+            raise RuntimeError('clan_battle_simulation_navigation_unknown')
+        simulation = self.hit(context, image, 'CBNavSimulation')
+        if simulation:
+            self.word(context, image, 'CBNavSimulation')
+        return dict(page='boss_detail', period=self.bound['period'], boss=matches[0],
+                    phase=phase, simulation=simulation)
+
+    def navigation_action(self, context, image, params):
+        mode = params['navigation']
+        if mode in ('difficulty_notice_read', 'difficulty_notice_close'):
+            if (not self.modern or 'boss_slots' not in self.calibration['pages']['lobby']
+                    or context.tasker.stopping or image is None or image.shape != (720, 1280, 3)
+                    or self.hit(context, image, 'LabyDisconnect6002Observed')):
+                raise RuntimeError('clan_battle_simulation_difficulty_notice_unknown')
+            for index in range(len(_DIFFICULTY_NOTICE_LABELS)):
+                self.word(context, image, 'CBNavDifficultyNoticeLabel'+str(index))
+            close = 'CBNavDifficultyNoticeCloseLabel'
+            self.word(context, image, close)
+            x, y, w, h = _DIFFICULTY_NOTICE_CONTENT_ROI
+            reading = dict(page='difficulty_notice', content_sha256=hashlib.sha256(image[y:y+h, x:x+w].tobytes()).hexdigest())
+            if mode == 'difficulty_notice_read':
+                return reading, [0, 0, 1, 1]
+            if params.get('expected_sha256') != reading['content_sha256']:
+                raise RuntimeError('clan_battle_simulation_difficulty_notice_changed')
+            return reading, _roi(list(context.run_recognition(close, image).box))
+        if mode in ('reward_read', 'reward_confirm'):
+            spec = self.calibration['pages']['lobby'].get('navigation_reward')
+            if (context.tasker.stopping or image is None or image.shape != (720, 1280, 3)
+                    or not spec or self.hit(context, image, 'LabyDisconnect6002Observed')
+                    or not all(self.hit(context, image, 'CBNavRewardLabel'+str(i)) for i in range(len(spec['labels'])))
+                    or not self.hit(context, image, 'CBNavRewardConfirmLabel')):
+                raise RuntimeError('clan_battle_simulation_reward_unknown')
+            x, y, w, h = _roi(spec['content_roi'])
+            reading = dict(page='navigation_reward', content_sha256=hashlib.sha256(image[y:y+h, x:x+w].tobytes()).hexdigest())
+            if mode == 'reward_read':
+                return reading, [0, 0, 1, 1]
+            if params.get('expected_sha256') != reading['content_sha256']:
+                raise RuntimeError('clan_battle_simulation_reward_changed')
+            return reading, _roi(list(context.run_recognition('CBNavRewardConfirmLabel', image).box))
+        if mode == 'open_boss':
+            expected = params.get('expected')
+            if (type(expected) is not dict or set(expected) != {'boss', 'round'}
+                    or type(expected['boss']) is not int or not 1 <= expected['boss'] <= 5
+                    or type(expected['round']) is not int or expected['round'] < 1):
+                raise RuntimeError('clan_battle_simulation_boss_changed')
+            rows = self.bound.get('bosses')
+            if (self.current_page != 'lobby' or self.bound.get('period') != self.plan['period']
+                    or type(rows) is not list or not any(row.get('available') is True
+                        and all(row.get(key) == expected[key] for key in expected) for row in rows)):
+                raise RuntimeError('clan_battle_simulation_navigation_unbound')
+            self.read(context, image, 'lobby', observe_only=True)
+            period = _current_period(self.word(context, image, 'CBField_lobby_period'))
+            if period != self.plan['period']:
+                raise RuntimeError('clan_battle_target_mismatch_or_not_simulation')
+            entry = self.read_boss_slot(context, image, expected['boss'])
+            if not entry['available'] or any(entry[key] != expected[key] for key in expected):
+                raise RuntimeError('clan_battle_simulation_boss_changed')
+            # Only this entry is fresh; keep the earlier complete lobby snapshot separate.
+            reading = dict(page='lobby', period=period, selected_entry=entry)
+            x, y, w, h = _roi(self.calibration['boss_targets'][str(expected['boss'])]['target'])
+            return reading, [x + w // 2, y + h // 2, 1, 1]
+        reading = self.read_navigation(context, image)
+        if mode == 'read':
+            return reading, [0, 0, 1, 1]
+        expected = params.get('expected')
+        if (type(expected) is not dict or set(expected) != {'period', 'boss', 'phase', 'simulation'}
+                or any(reading[key] != value for key, value in expected.items())):
+            raise RuntimeError('clan_battle_simulation_navigation_changed')
+        if mode == 'select_simulation':
+            if reading['simulation']:
+                raise RuntimeError('clan_battle_simulation_already_selected')
+            node = 'CBActionLabel_open_simulation'
+        elif mode in ('previous', 'next') and reading['simulation'] is True:
+            node = 'CBNavArrow_'+mode
+        else:
+            raise RuntimeError('clan_battle_simulation_navigation_forbidden')
+        if not self.hit(context, image, node):
+            raise RuntimeError('clan_battle_simulation_navigation_action_unknown')
+        return reading, _roi(list(context.run_recognition(node, image).box))
 
     def require_team(self, reading):
         ids, stars = reading.get('unit_ids'), reading.get('stars')
@@ -601,6 +888,9 @@ class ClanBattlePage(CustomRecognition):
     def analyze(self, context, argv):
         try:
             params = json.loads(argv.custom_recognition_param)
+            if 'navigation' in params:
+                detail, target = self.navigation_action(context, argv.image, params)
+                return None if context.tasker.stopping else self.AnalyzeResult(box=target, detail=detail)
             observed = params.get('observe_only', False)
             detail = self.read(context, argv.image, params.get('page'), observe_only=observed)
             if params.get('require_selected_difficulty') and not self.hit(context, argv.image, 'CBDifficultySelected'):
@@ -624,6 +914,19 @@ def _detail(receipt):
         return detail
     except (KeyError, IndexError, TypeError, ValueError):
         raise RuntimeError('clan_battle_native_detail_unknown') from None
+
+
+def _result_detail(receipt):
+    try:
+        node = receipt['nodes'][-1]
+        if receipt['native_ok'] is not True or node['name'] != 'CBPage_result' or node['completed'] is not True:
+            raise ValueError()
+        result = _detail(receipt)
+        if result.get('page') != 'result' or type(result.get('damage')) is not int or not 0 <= result['damage'] <= 10**15:
+            raise ValueError()
+        return result
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise RuntimeError('clan_battle_result_unknown') from None
 
 
 def timing_capability(calibration):
@@ -666,6 +969,9 @@ class NativeClanBattle(NativeGuideTrial):
         self.timing_capability = dict(validated=False)
         self.started = False
         self.inheritance = None
+        self.inheritance_managers = []
+        self._account_binding = None
+        self._opening_control_binding, self._opening_control_policy = None, None
         self.battle_speed, self.opening_paused = battle_speed, False
 
     def configure(self, plan):
@@ -701,10 +1007,32 @@ class NativeClanBattle(NativeGuideTrial):
     def choose(self, names, *, timeout=1000):
         try:
             return super().choose(names, timeout=timeout)
+        except ClanDisconnected:
+            raise
         except RuntimeError as exc:
+            self.invalidate_account_binding()
             if str(exc).startswith('guide_trial_disconnected_6002:'):
                 raise RuntimeError('clan_battle_disconnected_6002:battle_start=' + self.battle_start) from exc
             raise
+
+    def wait(self, names, *, seconds=30):
+        budget = getattr(self, '_simulation_navigation_budget', None)
+        if budget is None:
+            return super().wait(names, seconds=seconds)
+        allowed = {PROFILE_NODE, 'LabyClientGameHomeObserved', 'LabyClientAdventureObserved',
+            'LabyClientMainMenuObserved', 'CBObserve_boss_detail', 'CBObserve_lobby',
+            'CBInheritanceSettingsObserved', 'CBInheritanceFormationObserved',
+            'CBPage_closed', 'CBPage_lobby', 'CBPage_boss_detail', 'CBPage_target',
+            'CBPage_formation', 'CBPage_difficulty', 'CBDifficultyChosen', 'CBFullSimulationReady', 'CBNavDetail'}
+        if (self.started or self.battle_start != 'not_sent' or getattr(self, 'pending', None) is not None
+                or not names or not set(names) <= allowed):
+            raise RuntimeError('clan_battle_simulation_navigation_scope_invalid')
+        try:
+            return self._wait_simulation_page(names, deadline=budget['deadline'],
+                acknowledged=budget['acknowledged'], seconds=seconds)
+        except _SimulationPopup as exc:
+            self._confirm_navigation_popup(exc.reading, **budget)
+            raise _SimulationNavigationRestart() from exc
 
     def run(self, node, *, click=False):
         starting = click and node == 'CBStart'
@@ -712,22 +1040,48 @@ class NativeClanBattle(NativeGuideTrial):
             if self.started:
                 raise RuntimeError('clan_battle_start_already_attempted')
             self.started, self.battle_start = True, 'unknown'
+        capture = getattr(self, '_opening_capture', None)
+        if capture is not None:
+            capture.mark('dispatch', node, self.battle_start)
         try:
-            result = super().run(node, click=click)
-        except native.NativeInputNotSent as exc:
-            if starting:
+            if starting and self.calibration and self.calibration.get('auto_battle') and not self.plan['switches']:
+                # A borrowed Owner shares hit counts across knives; renew only this new opening's menu nodes.
+                result = super().run(node, click=click, reset_hits=('CBPauseOpening', 'CBPauseRetry'))
+            else:
+                result = super().run(node, click=click)
+        except Exception as exc:
+            self.invalidate_account_binding()
+            if isinstance(exc, ClanDisconnected):
+                raise
+            if starting and isinstance(exc, native.NativeInputNotSent):
                 self.battle_start = 'not_sent'
                 exc.receipt['clan_battle_phase'] = 'simulation_start'
+                raise
+            disconnected = observe_disconnect_after_failure(self, exc, input_attempted=click)
+            if disconnected is not None:
+                if click:
+                    disconnected.replay_forbidden = True
+                raise disconnected from exc
             raise
         if starting:
             self.battle_start = 'sent'
+            if capture is not None:
+                self._opening_anchor_start_receipt = deepcopy(result)
+                self._opening_anchor_start_receipt_path = self.directory / f'{self.sequence:03d}-CBStart.json'
         self.last_receipt = result
+        if capture is not None:
+            capture.mark('returned', node, self.battle_start)
         if any(row.get('name') == 'LabyDisconnect6002Observed' for row in result.get('nodes', [])):
-            raise RuntimeError('clan_battle_disconnected_6002:battle_start=' + self.battle_start)
+            self.invalidate_account_binding()
+            raise ClanDisconnected(result, self.battle_start)
+        if any(row.get('name') == 'LabyClientTitleObserved' for row in result.get('nodes', [])):
+            self.invalidate_account_binding()
         if click and getattr(getattr(self, 'page', None), 'modern', False):
             action = node.removeprefix('CBAction_') if node.startswith('CBAction_') else (
                 'start' if node == 'CBStart' else 'support_back' if node == 'CBAddSupport' else None)
-            if action in V2_DESTINATIONS:
+            if node == 'CBNavOpenBoss':
+                self.page.advance('open_boss')
+            elif action in V2_DESTINATIONS:
                 self.page.advance(action)
         return result
 
@@ -742,18 +1096,71 @@ class NativeClanBattle(NativeGuideTrial):
             if self.choose(['CBClosedReadOnly']) == 'CBClosedReadOnly':
                 raise RuntimeError('clan_battle_closed')
         self.configure(plan)
+        self._simulation_prepare_budget = self._new_simulation_navigation_budget()
+        try:
+            try:
+                self._prepare_from_current_page(plan)
+            except ClanDisconnected as exc:
+                recovery = recover_disconnect(self, plan, exc)
+                if not recovery['can_continue']:
+                    raise
+                self._prepare_from_current_page(plan)
+        finally:
+            self._simulation_prepare_budget = None
+
+    def _new_simulation_navigation_budget(self):
+        lobby = self.calibration.get('pages', {}).get('lobby', {})
+        if (self.calibration.get('version') == 2
+                and ('boss_slots' in lobby or 'navigation_reward' in lobby)):
+            return dict(deadline=time.monotonic()+90, acknowledged=set(), rewards=[])
+        return None
+
+    def _prepare_from_current_page(self, plan):
+        budget = getattr(self, '_simulation_prepare_budget', None)
+        if budget is None:
+            budget = self._new_simulation_navigation_budget()
+        if budget is not None and (self.started or self.battle_start != 'not_sent'
+                or getattr(self, 'pending', None) is not None):
+            raise RuntimeError('clan_battle_simulation_navigation_scope_invalid')
+        self._simulation_navigation_budget = budget
+        try:
+            while True:
+                try:
+                    self._prepare_navigation(plan)
+                    break
+                except _SimulationNavigationRestart as restart:
+                    # A confirmed popup invalidates the route; observe the actual page again.
+                    if budget is None:
+                        raise RuntimeError('clan_battle_simulation_navigation_timeout') from None
+                    _restart_navigation_budget(budget, restart.__cause__)
+        finally:
+            self._simulation_navigation_budget = None
+        self.form_team()
+
+    def _prepare_navigation(self, plan):
         self._main_menu()
         self._verify_account(plan)
         if self.calibration.get('auto_battle', {}).get('inheritance'):
             from .clan_battle_inheritance import BattleInheritance
-            self.inheritance = BattleInheritance.for_port(self)
-            self.open_inheritance()
-            self.inheritance.prepare()
-            self.close_inheritance()
+            from .preset_execution import Journal
+            if not self.inheritance_managers:
+                self.inheritance = BattleInheritance.for_port(self)
+                self.inheritance_managers = [self.inheritance,
+                    BattleInheritance(self, Journal(native.ROOT / '.runtime/clan-battle-daily-work/inheritance'))]
+            pending = []
+            for manager in self.inheritance_managers:
+                with manager.journal.locked():
+                    if manager._pending() is not None:
+                        pending.append(manager)
+            if pending:
+                self.open_inheritance()
+                for manager in pending:
+                    manager.recover()
+                self.close_inheritance()
         self.run('LabyClientMenuToAdventureOnce', click=True)
         self.wait(['LabyClientAdventureObserved'], seconds=10)
         self.run('CBAction_open_clan', click=True)
-        if self.wait(['CBPage_closed', 'CBPage_lobby'], seconds=15) == 'CBPage_closed':
+        if self.calibration.get('version') != 2 and self.wait(['CBPage_closed', 'CBPage_lobby'], seconds=15) == 'CBPage_closed':
             raise RuntimeError('clan_battle_closed')
         if self.calibration.get('version') == 2:
             self._open_simulation_target(plan)
@@ -765,16 +1172,19 @@ class NativeClanBattle(NativeGuideTrial):
             self.read_page('target')
             self.run('CBAction_open_simulation', click=True)
         self.wait(['CBPage_formation'], seconds=10)
-        self.form_team()
 
     def _main_menu(self):
         modern = self.calibration.get('version') == 2
         initial = ['LabyClientGameHomeObserved', 'LabyClientAdventureObserved', 'LabyClientMainMenuObserved']
         if modern:
-            initial = ['CBObserve_boss_detail', 'CBObserve_lobby', *initial]
+            initial = [PROFILE_NODE, 'CBObserve_boss_detail', 'CBObserve_lobby', *initial]
         if self.calibration.get('auto_battle', {}).get('inheritance'):
             initial = ['CBInheritanceSettingsObserved', 'CBInheritanceFormationObserved', *initial]
         hit = self.wait(initial, seconds=10)
+        if hit == PROFILE_NODE:
+            self.run('LabyClientProfileBackOnce', click=True)
+            self.wait(['LabyClientMainMenuObserved'], seconds=10)
+            hit = 'LabyClientMainMenuObserved'
         if hit == 'CBInheritanceSettingsObserved':
             self.close_inheritance()
             hit = 'LabyClientMainMenuObserved'
@@ -797,15 +1207,90 @@ class NativeClanBattle(NativeGuideTrial):
             self.run('LabyClientOpenMainMenuOnce', click=True)
             self.wait(['LabyClientMainMenuObserved'], seconds=10)
 
+    def invalidate_account_binding(self):
+        characters = getattr(self, 'characters', None)
+        if characters is not None and callable(getattr(characters, 'invalidate_opening', None)):
+            characters.invalidate_opening('owner_binding_invalidated')
+        self._account_binding = None
+        self._opening_control_binding, self._opening_control_policy = None, None
+        self.account, self.account_receipt = None, None
+
+    def _account_source(self):
+        source = getattr(self.tasker, 'observation_source', None)
+        # Only the live Owner can certify a reusable connection, not an SDK getter view.
+        return source() if callable(source) else None
+
+    def account_binding_valid(self, plan):
+        try:
+            source = self._account_source()
+        except Exception:
+            self.invalidate_account_binding()
+            raise
+        if (source is not None and self.account == plan['account_id']
+                and self._account_binding == (self.account, source)):
+            return True
+        self.invalidate_account_binding()
+        return False
+
     def _verify_account(self, plan):
-        self.run('LabyClientOpenProfileOnce', click=True)
-        self.wait([PROFILE_NODE], seconds=10)
-        self.account_receipt = self.run(PROFILE_NODE)
-        self.account = str(profile_player_id(self.account_receipt))
-        if self.account != plan['account_id']:
-            raise RuntimeError('clan_battle_account_mismatch')
-        self.run('LabyClientProfileBackOnce', click=True)
-        self.wait(['LabyClientMainMenuObserved'], seconds=10)
+        if self.account_binding_valid(plan):
+            return
+        source = self._account_source()
+        try:
+            self.run('LabyClientOpenProfileOnce', click=True)
+            self.wait([PROFILE_NODE], seconds=10)
+            receipt = self.run(PROFILE_NODE)
+            account = str(profile_player_id(receipt))
+            if account != plan['account_id']:
+                raise RuntimeError('clan_battle_account_mismatch')
+            self.run('LabyClientProfileBackOnce', click=True)
+            self.wait(['LabyClientMainMenuObserved'], seconds=10)
+            if self._account_source() != source:
+                raise RuntimeError('clan_battle_account_binding_changed')
+        except Exception:
+            self.invalidate_account_binding()
+            raise
+        self.account, self.account_receipt = account, receipt
+        self._account_binding = (account, source) if source is not None else None
+        # Optional settings evidence is unknown until explicitly read on its current page.
+        self._opening_control_binding, self._opening_control_policy = None, None
+
+    def _observe_opening_control_policy(self):
+        """Read only the current settings frame; never navigate for optional evidence."""
+        self._opening_control_binding, self._opening_control_policy = None, None
+        if not getattr(getattr(self, 'inheritance_page', None), 'ub_auto_clear', False):
+            return None
+        plan = dict(account_id=self.account)
+        if not self.account_binding_valid(plan):
+            return None
+        binding = self._account_binding
+        hit = self.choose(['CBSetResetRead'])
+        receipt = deepcopy(self.last_receipt)
+        reading = _detail(receipt) if hit == 'CBSetResetRead' else {}
+        known = (receipt.get('native_ok') is True and type(reading.get('auto_release_on_ub')) is bool
+            and reading.get('same_frame') is True and type(reading.get('frame_pixel_sha256')) is str
+            and re.fullmatch('[0-9a-f]{64}', reading['frame_pixel_sha256']) is not None)
+        if not self.account_binding_valid(plan) or self._account_binding != binding:
+            return None
+        if known:
+            policy = dict(reading, account_id=self.account, native_evidence=receipt,
+                source='owner_account_bound_settings_readback')
+            self._opening_control_binding, self._opening_control_policy = binding, policy
+            return deepcopy(policy)
+        return None
+
+    def freeze_opening_control_policy(self, plan):
+        """Reuse optional bound evidence without opening or reading any settings page."""
+        if not self.account_binding_valid(plan) or self._opening_control_binding != self._account_binding:
+            return None
+        policy = self._opening_control_policy
+        if (type(policy) is not dict or policy.get('account_id') != self.account
+                or type(policy.get('auto_release_on_ub')) is not bool or policy.get('same_frame') is not True
+                or type(policy.get('frame_pixel_sha256')) is not str
+                or re.fullmatch('[0-9a-f]{64}', policy['frame_pixel_sha256']) is None
+                or type(policy.get('native_evidence')) is not dict or not policy['native_evidence']):
+            return None
+        return deepcopy(policy)
 
     def open_inheritance(self):
         self.run('CBInheritanceOpen', click=True)
@@ -842,55 +1327,156 @@ class NativeClanBattle(NativeGuideTrial):
             raise RuntimeError('clan_battle_inheritance_readback_unknown')
         return state
 
-    def _restore_inheritance(self):
-        self._main_menu()
-        self._verify_account(self.plan)
-        self.open_inheritance()
-        evidence = self.inheritance.restore()
-        self.close_inheritance()
-        return evidence
-
     def finish_inheritance(self):
-        if self.inheritance is None or self.inheritance.intent is None and self.inheritance.evidence is None:
-            return None
-        if self.inheritance.intent is not None and self.battle_start == 'not_sent':
-            self._restore_inheritance()
-        return deepcopy(self.inheritance.evidence or dict(restored=False))
+        # Cleanup never adds inputs after a stop or an unresolved legacy readback.
+        managers = self.inheritance_managers or ([self.inheritance] if self.inheritance is not None else [])
+        evidence = [deepcopy(manager.evidence) for manager in managers if manager.evidence is not None]
+        if len(evidence) > 1:
+            return dict(restored=all(row.get('restored') is True for row in evidence), recoveries=evidence)
+        return evidence[0] if evidence else None
+
+    def _navigation_input(self, node, mode, **params):
+        if not self.tasker.resource.override_pipeline({node: dict(custom_recognition_param=dict(navigation=mode, **params))}):
+            raise RuntimeError('clan_battle_simulation_navigation_pipeline_rejected')
+        return self.run(node, click=True)
+
+    def _confirm_navigation_popup(self, reading, *, deadline, acknowledged, rewards):
+        prebattle = self.started is False and self.battle_start == 'not_sent'
+        settled = (self.battle_start == 'sent' and self.started is True
+            and getattr(self, '_simulation_result_return_verified', False) is True)
+        if not (prebattle or settled) or getattr(self, 'pending', None) is not None:
+            raise RuntimeError('clan_battle_simulation_navigation_scope_invalid')
+        signature, key = reading['content_sha256'], _navigation_popup_key(reading)
+        if len(rewards) >= 5 or time.monotonic() >= deadline or key in acknowledged:
+            raise RuntimeError('clan_battle_simulation_reward_limit')
+        node, mode = (('CBNavDifficultyNoticeClose', 'difficulty_notice_close')
+            if reading.get('page') == 'difficulty_notice' else ('CBNavRewardConfirm', 'reward_confirm'))
+        action = self._navigation_input(node, mode, expected_sha256=signature)
+        acknowledged.add(key)
+        rewards.append(dict(observed=reading, action=action))
+        self.page.reset_context()
+
+    def _wait_simulation_page(self, names, *, deadline, acknowledged=None, seconds=10):
+        end = min(deadline, time.monotonic()+seconds)
+        lobby = self.calibration['pages']['lobby']
+        popups = {}
+        if 'navigation_reward' in lobby:
+            popups['CBNavRewardObserved'] = _SimulationReward
+        if self.calibration.get('version') == 2 and 'boss_slots' in lobby:
+            popups['CBNavDifficultyNoticeObserved'] = _SimulationDifficultyNotice
+        previous, stabilizing_popup = None, False
+        while time.monotonic() < end:
+            hit = self.choose([*popups, *names])
+            observed_at = time.monotonic()
+            if observed_at >= deadline:
+                break
+            if hit in popups:
+                reading = _detail(self.last_receipt)
+                signature = reading.get('content_sha256')
+                key = _navigation_popup_key(reading) if signature else None
+                unacknowledged = key and key not in (acknowledged or set())
+                if unacknowledged and not stabilizing_popup:
+                    # A late first known popup gets one bounded second-read window.
+                    end = min(deadline, max(end, observed_at+seconds))
+                    stabilizing_popup = True
+                if unacknowledged and key == previous:
+                    raise popups[hit](reading)
+                previous = key
+            elif hit in names:
+                return hit
+            else:
+                previous = None
+            self.checkpoint()
+            time.sleep(.1)
+        raise RuntimeError('clan_battle_simulation_navigation_timeout')
+
+    def _navigation_detail(self, wait, *, expected=None, previous=None):
+        end = time.monotonic()+10
+        while time.monotonic() < end:
+            wait(['CBNavDetail'])
+            reading = _detail(self.last_receipt)
+            if expected is None or reading == expected:
+                return reading
+            if reading != previous:
+                raise RuntimeError('clan_battle_simulation_navigation_changed')
+            self.checkpoint()
+            time.sleep(.1)
+        raise RuntimeError('clan_battle_simulation_navigation_timeout')
 
     def _open_simulation_target(self, plan):
-        """Select and read the requested independent simulation from the lobby."""
-        _, lobby_receipt = self.read_page('lobby')
-        action = self.run('CBAction_open_boss', click=True)
-        self.wait(['CBPage_boss_detail'], seconds=10)
-        detail, _ = self.read_page('boss_detail')
-        phases = ('B', 'C') if plan['phase'] == 'BC' else (plan['phase'],)
-        if detail['phase'] not in phases:
-            self.run('CBAction_open_difficulty', click=True)
-            self.wait(['CBPage_difficulty'], seconds=10)
-            self.run('CBAction_select_difficulty', click=True)
-            self.wait(['CBDifficultyChosen'], seconds=10)
-            self.run('CBAction_confirm_difficulty', click=True)
-            self.wait(['CBPage_boss_detail'], seconds=10)
-            detail, _ = self.read_page('boss_detail')
-            if detail['phase'] not in phases:
-                raise RuntimeError('clan_battle_difficulty_selection_unverified')
-        if self.choose(['CBPage_target']) != 'CBPage_target':
-            self.run('CBAction_open_simulation', click=True)
-            self.wait(['CBPage_target'], seconds=10)
-        target, receipt = self.read_page('target')
-        if target['live_state'] == 'on':
-            self.run('CBAction_disable_live_state', click=True)
-            self.wait(['CBFullSimulationReady'], seconds=10)
-            target, receipt = self.read_page('target')
-        if target['live_state'] not in ('off', 'absent'):
-            raise RuntimeError('clan_battle_simulation_settings_not_ready')
-        return target, dict(lobby=lobby_receipt, select=action, target=receipt)
+        """Reach an independent simulation through verified live slots and detail arrows."""
+        shared = getattr(self, '_simulation_navigation_budget', None)
+        budget = shared if shared is not None else dict(deadline=time.monotonic()+90, acknowledged=set(), rewards=[])
+        deadline, acknowledged, rewards = (budget[key] for key in ('deadline', 'acknowledged', 'rewards'))
+        while True:
+            try:
+                wait = lambda names, seconds=10: self._wait_simulation_page(
+                    names, deadline=deadline, acknowledged=acknowledged, seconds=seconds)
+                if wait(['CBPage_closed', 'CBPage_lobby']) == 'CBPage_closed':
+                    raise RuntimeError('clan_battle_closed')
+                lobby, lobby_receipt = self.read_page('lobby')
+                rows = lobby.get('bosses')
+                if type(rows) is not list:
+                    raise RuntimeError('clan_battle_simulation_navigation_uncalibrated')
+                live = [row for row in rows if row['available']]
+                if not live:
+                    raise RuntimeError('clan_battle_simulation_boss_unavailable')
+                entry = min(live, key=lambda row: (abs(row['boss']-plan['boss']), row['boss']))
+                action = self._navigation_input('CBNavOpenBoss', 'open_boss',
+                    expected={key: entry[key] for key in ('boss', 'round')})
+                detail = self._navigation_detail(wait)
+                if detail['boss'] != entry['boss']:
+                    raise RuntimeError('clan_battle_simulation_navigation_changed')
+                path = [dict(detail)]
+                expected = lambda row: {key: row[key] for key in ('period', 'boss', 'phase', 'simulation')}
+                if not detail['simulation']:
+                    self._navigation_input('CBNavSelectSimulation', 'select_simulation', expected=expected(detail))
+                    detail = self._navigation_detail(wait, expected=dict(detail, simulation=True), previous=detail)
+                for _ in range(4):
+                    if detail['boss'] == plan['boss']:
+                        break
+                    direction = 'next' if detail['boss'] < plan['boss'] else 'previous'
+                    next_boss = detail['boss'] + (1 if direction == 'next' else -1)
+                    self._navigation_input('CBNavStep', direction, expected=expected(detail))
+                    detail = self._navigation_detail(wait, expected=dict(detail, boss=next_boss), previous=detail)
+                    path.append(dict(detail))
+                if detail['boss'] != plan['boss'] or detail['simulation'] is not True:
+                    raise RuntimeError('clan_battle_simulation_navigation_changed')
+                detail, _ = self.read_page('boss_detail')
+                phases = ('B', 'C') if plan['phase'] == 'BC' else (plan['phase'],)
+                if detail['phase'] not in phases:
+                    self.run('CBAction_open_difficulty', click=True)
+                    wait(['CBPage_difficulty'])
+                    self.run('CBAction_select_difficulty', click=True)
+                    wait(['CBDifficultyChosen'])
+                    self.run('CBAction_confirm_difficulty', click=True)
+                    wait(['CBPage_boss_detail'])
+                    detail, _ = self.read_page('boss_detail')
+                    if detail['phase'] not in phases:
+                        raise RuntimeError('clan_battle_difficulty_selection_unverified')
+                if wait(['CBPage_target', 'CBPage_boss_detail']) != 'CBPage_target':
+                    self.run('CBAction_open_simulation', click=True)
+                    wait(['CBPage_target'])
+                target, receipt = self.read_page('target')
+                if target['live_state'] == 'on':
+                    self.run('CBAction_disable_live_state', click=True)
+                    wait(['CBFullSimulationReady'])
+                    target, receipt = self.read_page('target')
+                if target['live_state'] not in ('off', 'absent'):
+                    raise RuntimeError('clan_battle_simulation_settings_not_ready')
+                return target, dict(lobby=lobby_receipt, select=action, navigation=path, rewards=rewards, target=receipt)
+            except _SimulationPopup as exc:
+                self._confirm_navigation_popup(exc.reading, **budget)
+                if shared is not None:
+                    raise _SimulationNavigationRestart() from exc
+                _restart_navigation_budget(budget, exc)
+                deadline = budget['deadline']
 
-    def read_team(self):
+    def read_team(self, *, require_stars=True):
         deadline = time.monotonic() + 15
         while True:
             reading = _detail(self.run('CBReadTeam'))
-            if (not self.calibration or self.calibration.get('version') != 2
+            if (not require_stars or not self.calibration or self.calibration.get('version') != 2
                     or sum(type(star) is int for star in reading.get('stars', [])) == reading.get('member_count')):
                 return reading
             # Cards alternate star digits and equipment badges; observation must not clear a valid team.
@@ -903,7 +1489,50 @@ class NativeClanBattle(NativeGuideTrial):
         # Read-only recognition is dispatched through the same Owner, never a controller shortcut.
         return self.choose([f'CBList_{section}_{position}']) == f'CBList_{section}_{position}'
 
+    def _read_team_after_edit(self, previous_count, *, added_unit_id=None):
+        adding = added_unit_id is not None
+        expected_count = previous_count + (1 if adding else -1)
+        error = 'clan_battle_add_readback_unknown' if adding else 'clan_battle_clear_readback_unknown'
+        # The card click effect can temporarily hide an empty slot or a newly added portrait.
+        # Observe it settling without resending the edit or accepting any other count change.
+        deadline = time.monotonic() + 5
+        first_read = True
+        while True:
+            reading = self.read_team(require_stars=False)
+            count = reading['member_count']
+            if count == expected_count:
+                if not adding or added_unit_id in reading['unit_ids']:
+                    return reading
+                if sum(type(uid) is int for uid in reading['unit_ids']) == count:
+                    raise RuntimeError(error)
+            first_unclear_read = first_read and (count == previous_count or (adding and count == expected_count))
+            if count not in (previous_count, expected_count) or (time.monotonic() >= deadline and not first_unclear_read):
+                raise RuntimeError(error)
+            first_read = False
+            self.checkpoint()
+            time.sleep(.05)
+
     def _reset_list(self, section):
+        if section == 'formation' and self.calibration.get('version') == 2:
+            from .labyrinth.character_recognition import scrollbar
+            for _ in range(16):
+                if self._list_hit(section, 'top'):
+                    return
+                self.read_page(section)
+                before = scrollbar(self.tasker.controller.cached_image, 'battle', include_geometry=True)['absolute_top']
+                if before is None:
+                    raise RuntimeError('clan_battle_list_position_unknown')
+                self.run('CBAction_characters_top', click=True)
+                self.read_page(section)
+                after = scrollbar(self.tasker.controller.cached_image, 'battle', include_geometry=True)['absolute_top']
+                if self._list_hit(section, 'top'):
+                    return
+                # Compare actual thumb pixels; a changing thumb length can also change its normalized ratio.
+                if after is None:
+                    raise RuntimeError('clan_battle_list_position_unknown')
+                if after >= before:
+                    raise RuntimeError('clan_battle_list_unchanged_no_retry')
+            raise RuntimeError('clan_battle_list_top_not_verified')
         if not self._list_hit(section, 'top'):
             name = 'characters_top' if section == 'formation' else 'support_top'
             self.run('CBAction_'+name, click=True)
@@ -913,11 +1542,25 @@ class NativeClanBattle(NativeGuideTrial):
     def _next_list(self, section):
         if self._list_hit(section, 'bottom'):
             return False
+        modern_formation = section == 'formation' and self.calibration.get('version') == 2
+        if modern_formation:
+            from .labyrinth.character_recognition import scrollbar
+            self.read_page(section)
+            before_position = scrollbar(self.tasker.controller.cached_image, 'battle', include_geometry=True)['absolute_top']
+            if before_position is None:
+                raise RuntimeError('clan_battle_list_position_unknown')
         before = self.tasker.controller.cached_image.copy()
         name = 'characters_next' if section == 'formation' else 'support_next'
         self.run('CBAction_'+name, click=True)
         self.read_page(section)
         after = self.tasker.controller.cached_image
+        if modern_formation:
+            after_position = scrollbar(after, 'battle', include_geometry=True)['absolute_top']
+            if after_position is None:
+                raise RuntimeError('clan_battle_list_position_unknown')
+            if after_position <= before_position:
+                raise RuntimeError('clan_battle_list_unchanged_no_retry')
+            return True
         rois = self.calibration[section]['candidates' if section == 'formation' else 'slots']
         def digest(frame):
             return [hashlib.sha256(frame[y:y+h, x:x+w].tobytes()).digest() for x,y,w,h in rois]
@@ -928,44 +1571,62 @@ class NativeClanBattle(NativeGuideTrial):
     def form_team(self):
         from .clan_battle import select_support
         from .clan_battle_characters import box_inside_roi
-        team = self.read_team()
+        team = self.read_team(require_stars=False)
+        if (team['member_count'] == 5 and set(team['unit_ids']) == set(self.plan['unit_ids'])
+                and sum(type(star) is int for star in team.get('stars', [])) != 5):
+            # A matching party with transient badges must be observed, never cleared for missing stars.
+            team = self.read_team()
         try:
             self.page.require_team(team)
             return
         except RuntimeError:
             pass
-        for _ in range(5):
-            if team['member_count'] == 0:
-                break
-            self.tasker.resource.override_pipeline({'CBEditTeam': dict(custom_recognition_param=dict(mode='clear', count=team['member_count']))})
-            self.run('CBEditTeam', click=True)
-            after = self.read_team()
-            if after['member_count'] != team['member_count']-1:
-                raise RuntimeError('clan_battle_clear_readback_unknown')
-            team = after
+        ids = team.get('unit_ids')
+        selected = [uid for uid in ids if type(uid) is int] if type(ids) is list else []
+        count = team.get('member_count')
+        reuse = (self.support_unit_id is None
+            and team.get('support_unit_id') is None and type(count) is int and 0 < count < 5
+            and type(ids) is list and len(ids) == 5 and len(selected) == len(set(selected)) == count
+            and set(selected) <= set(self.plan['unit_ids']))
+        if not reuse:
+            for _ in range(5):
+                if team['member_count'] == 0:
+                    break
+                self.tasker.resource.override_pipeline({'CBEditTeam': dict(custom_recognition_param=dict(mode='clear', count=team['member_count']))})
+                self.run('CBEditTeam', click=True)
+                team = self._read_team_after_edit(team['member_count'])
+        max_swipes = 48 if self.calibration.get('version') == 2 else 16
         for uid in self.plan['unit_ids']:
-            if uid == self.support_unit_id:
+            if uid == self.support_unit_id or uid in team['unit_ids']:
                 continue
             self._reset_list('formation')
             found = False
-            for _ in range(16):
-                self.read_team()
+            for page_index in range(max_swipes + 1):
+                self.read_team(require_stars=False)
                 frame = self.tasker.controller.cached_image
                 matches = [(row, roi) for roi in self.calibration['formation']['candidates']
                            if (row := self.characters.match(frame, uid, roi))]
                 if len(matches) > 1:
                     raise RuntimeError('clan_battle_candidate_ambiguous')
                 if matches:
-                    if not box_inside_roi(matches[0][0]['box'], matches[0][1]):
-                        raise RuntimeError('clan_battle_candidate_clipped')
+                    candidate, roi = matches[0]
+                    box = candidate['box']
+                    if (not box_inside_roi(box, roi) or self.calibration.get('version') == 2
+                            and box[1]+box[3] == roi[1]+roi[3]):
+                        visible = [box[0], box[1], box[2], roi[1]+roi[3]-box[1]]
+                        if (self.calibration.get('version') == 2 and candidate.get('unit_id') == uid
+                                and box[1]+box[3] >= roi[1]+roi[3] and box_inside_roi(visible, roi)):
+                            # A card touching or crossing the bottom needs the next guarded list step.
+                            matches = []
+                        else:
+                            raise RuntimeError('clan_battle_candidate_clipped')
+                if matches:
                     self.tasker.resource.override_pipeline({'CBEditTeam': dict(custom_recognition_param=dict(mode='add', unit_id=uid))})
                     self.run('CBEditTeam', click=True)
-                    after = self.read_team()
-                    if after['member_count'] != team['member_count']+1 or uid not in after['unit_ids']:
-                        raise RuntimeError('clan_battle_add_readback_unknown')
-                    team, found = after, True
+                    team = self._read_team_after_edit(team['member_count'], added_unit_id=uid)
+                    found = True
                     break
-                if not self._next_list('formation'):
+                if page_index == max_swipes or not self._next_list('formation'):
                     break
             if not found:
                 raise RuntimeError('clan_battle_character_not_found:' + str(uid))
@@ -1006,12 +1667,66 @@ class NativeClanBattle(NativeGuideTrial):
     def read_battle_settings(self, initial=None):
         if initial is None:
             node = 'CBOpeningRead' if self.opening_paused else 'CBReadSettings'
-            if self.choose([node]) != node:
+            hit = self.wait([node], seconds=5) if self.opening_paused else self.choose([node])
+            if hit != node:
                 raise RuntimeError('clan_battle_controls_unknown')
             initial = self.last_receipt
         state = _detail(initial)
+        state = self._opening_capture_before_change(initial, state)
         self.last_controls = deepcopy(state)
         return state
+
+    def _opening_capture_before_change(self, initial, state):
+        """Finish a qualified capture before a needed change, then re-read the pause."""
+        if (getattr(self, 'formal_opening', False) and getattr(self, 'action', {}).get('kind') == 'carryover'
+                and state.get('opening_action_kind') == 'carryover'):
+            return state
+        timed = getattr(self, '_opening_capture_timed_observer', None)
+        capture = getattr(self, '_opening_capture', None)
+        plan = getattr(self, 'plan', {})
+        units, sets = state.get('unit_ids'), state.get('sets')
+        desired = plan.get('set_by_unit')
+        from .clan_battle_opening_observation import OpeningCaptureMaterials
+        if (not getattr(self, 'opening_paused', False) or state.get('paused') is not True or capture is None or timed is None
+                or not isinstance(capture, OpeningCaptureMaterials)
+                or not timed.capture_qualified(getattr(self, 'battle_speed', None)) or plan.get('switches')
+                or type(units) is not list or len(units) != 5 or type(sets) is not list or len(sets) != 5
+                or type(desired) is not dict or any(str(uid) not in desired for uid in units)):
+            return state
+        affected = set(units) if state.get('auto') != plan.get('auto') else set()
+        affected.update(uid for uid, actual in zip(units, sets) if actual != desired[str(uid)])
+        if state.get('battle_speed') != getattr(self, 'battle_speed', None):
+            affected.update(units)
+        if not affected:
+            return state
+        from .clan_battle import require_first_ub, require_frozen_opening
+        try:
+            require_first_ub(state, affected)
+        except RuntimeError as exc:
+            if str(exc) != 'clan_battle_first_ub_unverified':
+                return state
+        else:
+            return state  # A separate causal proof already permits the affected roles.
+        if (initial != getattr(self, '_opening_anchor_start_receipt', None)
+                or self.battle_start != 'sent' or state.get('opening_start_token') != timed.start_token
+                or getattr(getattr(capture, 'directory', None), 'name', None) != timed.start_token
+                or timed.owner_source != self._opening_capture_expected[0]
+                or any(type(uid) is not int for uid in units) or len(set(units)) != 5
+                or type(plan.get('unit_ids')) is not list or set(units) != set(plan['unit_ids'])
+                or set(units) != set(timed.units)
+                or self._opening_capture_source() != self._opening_capture_expected):
+            raise RuntimeError('clan_battle_opening_capture_binding_changed')
+        result = self.finish_opening_capture()
+        if (not result or result.get('source_bound') is not True
+                or self._opening_capture_source() != self._opening_capture_expected):
+            raise RuntimeError('clan_battle_opening_capture_binding_changed')
+        if self.choose(['CBOpeningRead']) != 'CBOpeningRead':
+            raise RuntimeError('clan_battle_controls_unknown')
+        fresh = _detail(self.last_receipt)
+        require_frozen_opening(fresh, state)
+        if any(fresh.get(key) != state.get(key) for key in ('unit_ids', 'sets', 'auto', 'battle_speed')):
+            raise RuntimeError('clan_battle_switch_state_changed')
+        return fresh
 
     def _toggle(self, node, previous, desired, *, slot=None, remaining_seconds=None):
         before = getattr(self, 'last_controls', None)
@@ -1024,8 +1739,12 @@ class NativeClanBattle(NativeGuideTrial):
             raise RuntimeError('clan_battle_switch_window_missed')
         if before is not None and any(before.get(key) != state.get(key) for key in ('auto', 'sets', 'unit_ids')):
             raise RuntimeError('clan_battle_switch_state_changed')
-        if self.opening_paused and before is not None and before.get('battle_speed') != state.get('battle_speed'):
-            raise RuntimeError('clan_battle_switch_state_changed')
+        if self.opening_paused and before is not None:
+            from .clan_battle import require_frozen_opening
+            require_frozen_opening(state, before, carryover=bool(getattr(self, 'formal_opening', False)
+                and getattr(self, 'action', {}).get('kind') == 'carryover'))
+            if before.get('battle_speed') != state.get('battle_speed'):
+                raise RuntimeError('clan_battle_switch_state_changed')
         key = 'auto' if slot is None else 'sets'
         value = state['auto'] if slot is None else state['sets'][slot]
         if type(previous) is not bool or type(desired) is not bool or value is not previous or previous is desired:
@@ -1047,7 +1766,9 @@ class NativeClanBattle(NativeGuideTrial):
                 raise RuntimeError('clan_battle_switch_window_missed')
             node = 'CBOpeningAuto' if slot is None else 'CBOpeningSet'
             params.update(mode='opening_auto' if slot is None else 'opening_set', battle_speed=state['battle_speed'])
-            expected['battle_speed'] = state['battle_speed']
+            expected.update(battle_speed=state['battle_speed'])
+            if not (getattr(self, 'formal_opening', False) and getattr(self, 'action', {}).get('kind') == 'carryover'):
+                params['remaining_seconds'] = expected['remaining_seconds'] = state['remaining_seconds']
             confirmed = 'CBOpeningConfirmed'
         if self.tasker.resource.override_pipeline({node: dict(custom_recognition_param=params),
                 confirmed: dict(custom_recognition_param=dict(mode='opening_read' if self.opening_paused else 'battle_read', **expected))}) is False:
@@ -1088,14 +1809,160 @@ class NativeClanBattle(NativeGuideTrial):
         return dict(remaining_seconds=state['remaining_seconds'], state=state,
             same_frame=True, frame_pixel_sha256=state['frame_pixel_sha256'])
 
+    def _opening_capture_source(self):
+        self.checkpoint()
+        if not self.account_binding_valid(self.plan):
+            raise RuntimeError('clan_battle_opening_capture_source_changed')
+        context = getattr(self.tasker, '_context', None)
+        controller = context.tasker.controller if context is not None else self.tasker.controller
+        info = controller.info
+        if type(info) is not dict or info.get('type') != 'adb':
+            raise RuntimeError('clan_battle_opening_capture_adb_required')
+        return self._account_binding, info.get('adb_path'), info.get('adb_serial')
+
+    def capture_opening_frame(self, display_id, *, timeout=10):
+        """Collect a fresh-command interval; this alone cannot prove no UB history."""
+        from .clan_battle_opening_observation import capture_adb_png, decode_capture
+        expected = self._opening_capture_source()
+        data, packet = capture_adb_png(expected[1], expected[2], display_id, timeout=timeout)
+        if self._opening_capture_source() != expected:
+            raise RuntimeError('clan_battle_opening_capture_source_changed')
+        return decode_capture(data, packet)
+
+    def _start_opening_capture(self, token):
+        import os
+        if os.environ.get('PCR_CLAN_OPENING_CAPTURE_ONLY') != '1':
+            return
+        from .clan_battle_opening_observation import OpeningCaptureMaterials, OpeningMp4Materials
+        capture_format = os.environ.get('PCR_CLAN_OPENING_CAPTURE_FORMAT') or 'png'
+        capture_type = {'png': OpeningCaptureMaterials, 'mp4': OpeningMp4Materials}.get(capture_format)
+        if capture_type is None:
+            raise RuntimeError('clan_battle_opening_capture_format_invalid')
+        directory = Path(os.environ['PCR_CLAN_OPENING_CAPTURE_DIR']).resolve()
+        display_id = os.environ['PCR_CLAN_OPENING_CAPTURE_DISPLAY_ID']
+        if not directory.is_relative_to((native.ROOT/'.runtime').resolve()) or re.fullmatch('[0-9]+', display_id) is None:
+            raise RuntimeError('clan_battle_opening_capture_binding_invalid')
+        expected = self._opening_capture_source()
+        self._opening_capture_expected = expected
+        characters = getattr(self, 'characters', None)
+        self._opening_capture_observer = getattr(characters, 'opening_observer', None)
+        self._opening_capture_timed_observer = getattr(characters, 'opening_timed_observer', None)
+        self._opening_anchor_start_receipt, self._opening_anchor_start_receipt_path = None, None
+        self._opening_capture = capture_type(expected[1], expected[2], display_id, directory/token).start()
+        if self._opening_capture_source() != expected:
+            self.finish_opening_capture()
+            raise RuntimeError('clan_battle_opening_capture_source_changed')
+
+    def finish_opening_capture(self):
+        capture = getattr(self, '_opening_capture', None)
+        if capture is None:
+            return None
+        capture.stop_and_join()
+        try:
+            source_valid = self._opening_capture_source() == self._opening_capture_expected
+        except Exception:
+            source_valid = False
+        result = capture.finish(source_valid=source_valid, battle_start=self.battle_start)
+        self.opening_capture_evidence = dict(path=str(capture.directory/'capture.json'),
+            status=result['status'], source_bound=result['source_bound'], first_ub_verified=False)
+        if result.get('format') == 'mp4':
+            self.opening_capture_evidence.update(format='mp4', coverage='unknown', first_frame_verified=False,
+                media_sha256=(result.get('media') or {}).get('sha256'))
+        observer = getattr(self, '_opening_capture_observer', None)
+        if observer is not None:
+            anchors = observer.write_anchors(capture.directory, start_token=capture.directory.name,
+                owner_source=self._opening_capture_expected[0], source_valid=source_valid,
+                start_receipt=getattr(self, '_opening_anchor_start_receipt', None),
+                start_receipt_path=getattr(self, '_opening_anchor_start_receipt_path', None))
+            anchor_evidence = dict(path=str(capture.directory/'anchors.json'), status=anchors['status'],
+                sha256=hashlib.sha256((capture.directory/'anchors.json').read_bytes()).hexdigest(),
+                first_frame_verified=False, first_ub_verified=False, coverage='unknown')
+            result['anchors'] = anchor_evidence
+            self.opening_capture_evidence['anchors'] = anchor_evidence
+        timed = getattr(self, '_opening_capture_timed_observer', None)
+        paused = getattr(observer, 'anchor_refs', {}).get('paused') if observer is not None else None
+        if timed is not None and paused is not None:
+            receipt = getattr(self, '_opening_anchor_start_receipt', None)
+            try:
+                state = _detail(receipt)
+                same_team = (type(state.get('unit_ids')) is list and len(state['unit_ids']) == 5
+                    and len(set(state['unit_ids'])) == 5 and set(state['unit_ids']) == set(timed.units)
+                    and set(timed.units) == set(self.plan['unit_ids']))
+                bound = (source_valid and result.get('status') == 'captured'
+                    and result.get('anchors', {}).get('status') == 'captured'
+                    and timed.owner_source == self._opening_capture_expected[0]
+                    and timed.start_token == capture.directory.name
+                    and state.get('opening_start_token') == timed.start_token and same_team)
+            except (KeyError, TypeError, RuntimeError):
+                state, bound = {}, False
+            if not bound:
+                timed.invalidate('owner_capture_binding_unverified')
+            from .clan_battle_opening_observation import bind_screencap_materials
+            material = bind_screencap_materials(capture.directory, result,
+                display_id=getattr(capture, 'display_id', None), owner_bound=bound)
+            result['timed_capture_material'] = material
+            self.opening_capture_evidence['timed_capture_material'] = material
+            # No production classifier or capture-clock qualification is available yet.
+            # Never turn synthetic events or a file timestamp into a live no-UB proof.
+            timed.invalidate('capture_timeline_or_marker_unverified')
+            observation = timed.seal(capture.directory.name, paused['frame_pixel_sha256'],
+                owner_source=self._opening_capture_expected[0], battle_speed=state.get('battle_speed'))
+            result['timed_observation'] = observation
+            self.opening_capture_evidence['timed_observation'] = observation
+        from .supported_daily import _atomic_json
+        _atomic_json(self.directory/'opening-capture.json', self.opening_capture_evidence)
+        self._opening_capture = None
+        self._opening_capture_observer = None
+        self._opening_capture_timed_observer = None
+        return result
+
+    def arm_opening_start(self, token, *, start_seconds=None, action_kind=None):
+        policy = self.freeze_opening_control_policy(self.plan)
+        binding = getattr(self, '_account_binding', None)
+        self.characters.begin_opening(token, control_policy=policy, owner_source=binding,
+            start_seconds=start_seconds, action_kind=action_kind,
+            owner_valid=lambda: self.account_binding_valid(self.plan) and self._account_binding == binding)
+        opening_match = dict(mode='opening_match', opening_start_token=token,
+            battle_speed=self.battle_speed, start_seconds=start_seconds if start_seconds is not None else getattr(self, 'start_seconds', 90))
+        if not self.tasker.resource.override_pipeline({
+                'CBStart': dict(custom_recognition_param=dict(mode='start', opening_start_token=token)),
+                'CBOpeningMatch': dict(custom_recognition_param=opening_match)}):
+            raise RuntimeError('clan_battle_switch_pipeline_rejected')
+        try:
+            self._start_opening_capture(token)
+        except Exception as exc:
+            if not self.started and self.battle_start == 'not_sent':
+                receipt = dict(input_execution='not_sent', pre_input_validation_failed=True,
+                    clan_battle_phase='simulation_start', reason='opening_capture_before_cbstart')
+                pending, action = getattr(self, 'pending', None), getattr(self, 'action', None)
+                if type(pending) is dict and type(action) is dict and action.get('kind') in ('regular', 'carryover'):
+                    receipt.update(clan_battle_phase=action['kind']+'_start', daily_intent_id=pending['intent_id'])
+                raise native.NativeInputNotSent(receipt, str(exc)) from exc
+            raise
+
     def start_and_read(self, plan):
-        from .clan_battle import execute_switches, require_timing
+        try:
+            return self._start_and_read_bound(plan)
+        except ClanDisconnected as exc:
+            self.finish_opening_capture()
+            recover_disconnect(self, plan, exc)
+            raise
+        finally:
+            self.finish_opening_capture()
+
+    def _start_and_read_bound(self, plan):
+        from .clan_battle import execute_switches, require_timing, require_first_ub, require_frozen_opening
         ready = self.verify_team(plan)
         require_timing(self, plan)
+        if self.calibration and self.calibration.get('auto_battle') and not plan['switches']:
+            self.arm_opening_start(uuid4().hex, start_seconds=90, action_kind='simulation')
         start = self.run('CBStart', click=True)
         if self.calibration and self.calibration.get('auto_battle') and not plan['switches']:
             initial = start
-            self.opening_paused = True
+            opening = _detail(start)
+            self.opening_paused = opening.get('paused') is True
+            if not self.opening_paused and opening.get('opening_direct') is not True:
+                raise RuntimeError('clan_battle_opening_not_verified')
         else:
             hit = self.wait(['CBReadSettings', 'CBPage_result'], seconds=30)
             if hit != 'CBReadSettings':
@@ -1103,54 +1970,63 @@ class NativeClanBattle(NativeGuideTrial):
             initial = self.last_receipt
         settings = execute_switches(self, plan, initial=initial)
         if self.opening_paused:
-            state = self.read_battle_settings()
+            state = deepcopy(settings['observation'])
+            require_frozen_opening(state, settings['opening_evidence'])
             if any(state.get(key) != settings['opening_evidence'].get(key) for key in ('auto', 'sets', 'unit_ids', 'battle_speed')):
                 raise RuntimeError('clan_battle_switch_state_changed')
             for _ in range(2):
                 if state['battle_speed'] == self.battle_speed:
                     break
-                expected = {key: deepcopy(state[key]) for key in ('auto', 'sets', 'unit_ids', 'battle_speed')}
+                require_first_ub(state, plan['unit_ids'])
+                expected = {key: deepcopy(state[key]) for key in ('auto', 'sets', 'unit_ids', 'battle_speed', 'remaining_seconds')}
                 desired = {1: 2, 2: 4, 4: 1}[state['battle_speed']]
                 if not self.tasker.resource.override_pipeline({
                         'CBOpeningSpeed': dict(custom_recognition_param=dict(mode='opening_speed', **expected)),
                         'CBOpeningConfirmed': dict(custom_recognition_param=dict(mode='opening_read', **dict(expected, battle_speed=desired)))}):
                     raise RuntimeError('clan_battle_switch_pipeline_rejected')
+                before = deepcopy(state)
                 state = self.read_battle_settings(self.run('CBOpeningSpeed', click=True))
+                require_frozen_opening(state, before)
                 if any(state.get(key) != value for key, value in dict(expected, battle_speed=desired).items()):
                     raise RuntimeError('clan_battle_speed_readback_unknown')
                 settings['actions'].append(dict(control='speed', previous=expected['battle_speed'], target=desired))
             if state['battle_speed'] != self.battle_speed:
                 raise RuntimeError('clan_battle_speed_readback_unknown')
             settings['opening_evidence'] = deepcopy(state)
-            expected = {key: deepcopy(state[key]) for key in ('auto', 'sets', 'unit_ids', 'battle_speed')}
+            expected = {key: deepcopy(state[key]) for key in ('auto', 'sets', 'unit_ids', 'battle_speed', 'remaining_seconds')}
             if not self.tasker.resource.override_pipeline({'CBResumeOpening': dict(custom_recognition_param=dict(mode='opening_resume', **expected)),
-                    'CBSettingsConfirmed': dict(custom_recognition_param=dict(mode='battle_read', **expected))}):
+                    'CBSettingsConfirmed': dict(custom_recognition_param=dict(mode='battle_read', **{key: value for key, value in expected.items() if key != 'remaining_seconds'}))}):
                 raise RuntimeError('clan_battle_switch_pipeline_rejected')
             self.run('CBResumeOpening', click=True)
             self.opening_paused = False
             self.wait(['CBSettingsConfirmed'], seconds=15)
             settings['observation'] = self.read_battle_settings(self.last_receipt)
             settings['battle_speed'] = self.battle_speed
-        self.wait(['CBPage_result'], seconds=180)
-        result, result_receipt = self.read_page('result')
+        elif (self.calibration and self.calibration.get('auto_battle') and not plan['switches']
+                and opening.get('opening_direct') is True):
+            settings['battle_speed'] = self.battle_speed
+        self.wait(['CBPage_result'], seconds=360)
+        result_receipt = self.last_receipt
+        result = _result_detail(result_receipt)
         require_target_identity(plan, result)
+        self._simulation_result_receipt = result_receipt
         return dict(ready, damage=result['damage'], result_verified=True, settings_verified=True,
             settings_evidence=settings, result_evidence=result_receipt,
             native_evidence=dict(start=start, ready=ready['native_evidence'], result=result_receipt))
 
     def return_to_target(self, plan):
-        before, before_receipt = self.read_page('result')
+        before_receipt = getattr(self, 'last_receipt', None)
+        if before_receipt is not getattr(self, '_simulation_result_receipt', None):
+            raise RuntimeError('clan_battle_result_unknown')
+        before = _result_detail(before_receipt)
         require_target_identity(plan, before)
         action = self.run('CBAction_return_to_target', click=True)
         if self.calibration.get('version') == 2:
-            self.wait(['CBPage_lobby'], seconds=15)
-            if self.inheritance is not None:
-                self._restore_inheritance()
-                self.run('LabyClientMenuToAdventureOnce', click=True)
-                self.wait(['LabyClientAdventureObserved'], seconds=10)
-                self.run('CBAction_open_clan', click=True)
-                self.wait(['CBPage_lobby'], seconds=15)
-            target, target_receipt = self._open_simulation_target(plan)
+            self._simulation_result_return_verified = True
+            try:
+                target, target_receipt = self._open_simulation_target(plan)
+            finally:
+                self._simulation_result_return_verified = False
         else:
             self.wait(['CBPage_target'], seconds=15)
             target, target_receipt = self.read_page('target')

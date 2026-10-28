@@ -15,13 +15,20 @@ def video_reference(url):
     match = re.fullmatch(r'/video/(BV[0-9A-Za-z]{10})/?', parts.path)
     query = parse_qs(parts.query, keep_blank_values=True)
     if (parts.scheme != 'https' or parts.hostname not in ('www.bilibili.com', 'bilibili.com')
-            or parts.username or parts.password or parts.port or not match
-            or set(query) - {'p'} or len(query.get('p', ['1'])) != 1):
-        raise ValueError('请使用 B 站原始视频链接，分 P 用 ?p=数字；不接受合集或短链接。')
+            or parts.username is not None or parts.password is not None or parts.port is not None or not match
+            or set(query) - {'p', 'vd_source', 'spm_id_from', 'from_spmid', 'share_source', 'share_medium'}
+            or len(query.get('p', ['1'])) != 1):
+        raise ValueError('请使用 B 站原始视频链接，分 P 用 ?p=数字；不接受合集、短链接或未知参数。')
     page = query.get('p', ['1'])[0]
     if not page.isascii() or not page.isdigit() or not 1 <= int(page) <= 500:
         raise ValueError('视频分 P 无效。')
     return match[1], int(page)
+
+
+def canonical_video_url(url):
+    bvid, page = video_reference(url)
+    explicit_page = 'p' in parse_qs(urlsplit(url).query, keep_blank_values=True)
+    return f'https://www.bilibili.com/video/{bvid}/' + (f'?p={page}' if explicit_page else '')
 
 
 def _public_url(url, video=False):
@@ -56,6 +63,7 @@ def acquire_video(url, directory):
     """Exact BV and page binding; return a local video plus its publicly obtained metadata."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    url = canonical_video_url(url)
     bvid, page = video_reference(url)
     metadata = directory / 'metadata.json'
     _download('https://api.bilibili.com/x/web-interface/view?' + urlencode({'bvid': bvid}), metadata, 4_000_000)
@@ -158,7 +166,7 @@ def main():
             raw = cv2.imencode('.png', frame)[1].tobytes()
         finally:
             cap.release()
-        url = args.video_url
+        url = metadata['source_url']
         locator = f'BV={metadata["bvid"]}; P={metadata["page"]}; CID={metadata["cid"]}; t={args.at}s; {args.locator}'
     else:
         raw = args.image.read_bytes()

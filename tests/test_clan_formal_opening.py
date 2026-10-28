@@ -53,7 +53,7 @@ def test_formal_samples_cannot_repeat_a_page(executable, plan):
 @pytest.fixture
 def formal_reader(executable, plan, monkeypatch, tmp_path):
     plan = dict(plan, confirmed_for='reviewed')
-    action = dict(kind='carryover', boss=plan['boss'], phase='B', round=5, instance_id='next-instance',
+    action = dict(kind='regular', boss=plan['boss'], phase='B', round=5, instance_id='next-instance',
         start_seconds=34, stock_index=2, slot=1)
     now = datetime.now(timezone.utc)
     port = daily.NativeClanDailyAdapter.__new__(daily.NativeClanDailyAdapter)
@@ -78,7 +78,7 @@ def formal_reader(executable, plan, monkeypatch, tmp_path):
     hits.update(f'CBFormalOpeningSet{i}' for i in range(1,5))
     monkeypatch.setattr(page, 'hit', lambda context,image,node:node in hits)
     clock = ['0:34']
-    monkeypatch.setattr(page, 'word', lambda context,image,node:clock[0])
+    monkeypatch.setattr(page, 'word', lambda context,image,node,**options:clock[0])
     image = np.zeros((720,1280,3),np.uint8)
     for i in range(5):
         image[286:346,358+116*i:363+116*i] = (0,0,255) if i == 0 else (255,255,0)
@@ -90,7 +90,34 @@ def read(reader, context, image, **params):
     return reader.analyze(context, NS(image=image, custom_recognition_param=json.dumps(dict(mode='opening_read', **params))))
 
 
-def test_short_compensation_uses_intent_clock_and_role_identity(formal_reader):
+@pytest.mark.parametrize('start,text,ready', [
+    (90, '1:30', False), (90, '1:29', True),
+    (34, '0:34', False), (34, '0:33', True),
+    (2, '0:02', False), (2, '0:01', True),
+    (1, '0:01', False), (1, '0:00', False),
+    (90, 'bad', False), (90, '0:70', False)])
+def test_formal_pause_uses_actual_action_start_and_running_clock(formal_reader, start, text, ready):
+    port, reader, context, image, _, clock = formal_reader
+    port.action['start_seconds'] = start
+    port.pending['action']['start_seconds'] = start
+    port.start_seconds = start
+    port.calibration['daily']['execution']['opening']['start_seconds'] = sorted({90, start})
+    clock[0] = text
+    result = reader.analyze(context, NS(image=image, custom_recognition_param=json.dumps({'mode': 'formal_pause'})))
+    assert (result is not None) is ready
+
+
+def test_formal_pause_records_observation_before_clock_starts(formal_reader, monkeypatch):
+    _, reader, context, image, _, clock = formal_reader
+    clock[0] = '0:34'
+    observed = []
+    monkeypatch.setattr(reader, 'record_opening_frame', lambda frame, phase: observed.append((frame, phase)))
+    result = reader.analyze(context, NS(image=image, custom_recognition_param=json.dumps({'mode': 'formal_pause'})))
+    assert result is None
+    assert len(observed) == 1 and observed[0][0] is image and observed[0][1] == 'battle'
+
+
+def test_regular_opening_uses_intent_clock_and_role_identity(formal_reader):
     port, reader, context, image, _, _ = formal_reader
     result = read(reader, context, image)
     assert result is not None
@@ -101,7 +128,7 @@ def test_short_compensation_uses_intent_clock_and_role_identity(formal_reader):
     assert port.page.current == 'battle'
 
 
-@pytest.mark.parametrize('change', ['clock','stock','target','day','unknown_start','stop','tp','speed4','speed_bool'])
+@pytest.mark.parametrize('change', ['clock','stock','target','day','unknown_start','stop','speed4','speed_bool'])
 def test_formal_unknown_binding_never_returns_a_control_target(formal_reader, change):
     port, reader, context, image, hits, clock = formal_reader
     params = {}
@@ -111,28 +138,34 @@ def test_formal_unknown_binding_never_returns_a_control_target(formal_reader, ch
     elif change == 'day': port.now=lambda:datetime.now(timezone.utc)+timedelta(days=1)
     elif change == 'unknown_start': port.battle_start='not_sent'
     elif change == 'stop': context.tasker.stopping=True
-    elif change == 'tp': image[388,365]=[220,180,50]
     elif change == 'speed_bool': params['battle_speed']=True
     else:
         hits.remove('CBFormalOpeningSpeed1'); hits.add('CBFormalOpeningSpeed4')
     assert read(reader,context,image,**params) is None
 
 
-def test_compensation_pause_reuses_controls_without_simulation_90_89_rule(plan):
-    port=Controls(plan)
+def test_compensation_pause_reuses_controls_without_nominal_clock_or_zero_tp(plan):
+    from test_clan_opening import paused_port
+    port=paused_port(plan)
     port.calibration={'version':2,'daily':{'execution':{'opening':{'battle_speed':2}}}}
-    port.opening_paused=True
     port.formal_opening=True
     port.start_seconds=34
-    port.state.update(paused=True, remaining_seconds=34, same_frame=True,
-        zero_damage_verified=True,zero_tp_verified=True,battle_speed=1)
+    port.state.update(remaining_seconds=29, zero_damage_verified=False,zero_tp_verified=False)
     plan['set_by_unit'][str(plan['unit_ids'][0])]=False
     result=clan_battle.execute_switches(port,plan)
-    assert result['opening_evidence']['remaining_seconds']==34
+    assert result['opening_evidence']['remaining_seconds']==29
     assert port.actions==[('set',plan['unit_ids'][0],True,False)]
-    port.state['remaining_seconds']=33
     with pytest.raises(RuntimeError,match='opening_not_verified'):
-        clan_battle.execute_switches(port,plan)
+        clan_battle.require_frozen_opening(dict(port.state,remaining_seconds=28),result['opening_evidence'])
+
+
+def test_formal_nonzero_tp_does_not_prevent_read_only_pause_observation(formal_reader):
+    _,reader,context,image,_,clock=formal_reader
+    clock[0]='0:29'
+    image[388,365]=[220,180,50]
+    result=read(reader,context,image)
+    assert result is not None and result.detail['remaining_seconds']==29
+    assert 'first_ub_evidence' not in result.detail
 
 
 def test_formal_restore_failure_is_after_persistent_consumption_settlement(daily_request,tmp_path):
@@ -152,14 +185,19 @@ def test_formal_restore_failure_is_after_persistent_consumption_settlement(daily
     assert len(events)==2 and events[-1]['state']=='settled'
 
 
-def test_explicit_inheritance_recovery_restores_without_disabling_again(tmp_path):
+def test_explicit_legacy_recovery_only_settles_a_read_back_original_value(tmp_path):
+    from pcr_maa.clan_battle_inheritance import OPERATION
     port=SettingsPort()
-    first=BattleInheritance(port,Journal(tmp_path))
-    first.prepare()
-    second=BattleInheritance(port,Journal(tmp_path))
-    second.recover()
-    assert port.actions==[(True,False),(False,True)] and port.state is True
-    assert len(second.journal.events())==2 and second.intent is None
+    journal=Journal(tmp_path)
+    with journal.locked():
+        journal.append(dict(operation=OPERATION,intent_id='synthetic-legacy',
+            account_id=port.account,original=True,state='in_flight'))
+    before=journal.events()[0]
+    recovery=BattleInheritance(port,journal)
+    result=recovery.recover()
+    assert port.actions==[] and port.state is True
+    assert result['restored'] is True and recovery.intent is None
+    assert len(journal.events())==2 and journal.events()[0]==before
 
 @pytest.mark.parametrize('second',[90,89])
 @pytest.mark.parametrize('speed',[1,2,4])
@@ -181,13 +219,14 @@ def test_formal_start_second_coverage_is_explicit(executable,plan,seconds):
 
 
 @pytest.mark.parametrize('reason',['carryover_capability_not_calibrated','carryover_opening_start_time_uncalibrated'])
-def test_unqualified_carryover_is_held_while_three_other_main_attacks_finish(daily_request,tmp_path,reason):
+def test_unqualified_carryover_stops_before_other_main_attacks(daily_request,tmp_path,reason):
     port=Port(daily_request)
     port.issue={1}
     port.blocked_carryovers=lambda request,grants:{stock:reason for stock in grants}
     result=execute_batch(port,Journal(tmp_path),daily_request,now=port.now(),explicit_start=True)
     assert result.get('error') is None and result['outcome']=='remind_carryover'
-    assert result['regular_settled']==3 and result['carryover_settled']==0
+    assert result['regular_settled']==1 and result['carryover_settled']==0
+    assert len(port.executions)==1
     assert result['held_carryovers'][0]['reason']==reason
 
 
@@ -205,5 +244,20 @@ def test_native_carryover_filter_only_holds_known_unsupported_calibration(execut
         with pytest.raises(ValueError,match='file_changed'):
             port.blocked_carryovers({'slot_plans':{'1':plan}},{2:grant})
     else:
-        reason=port.blocked_carryovers({'slot_plans':{'1':plan}},{2:grant})[2]
-        assert reason==('carryover_capability_not_calibrated' if failure=='missing' else 'carryover_opening_start_time_uncalibrated')
+        blocked=port.blocked_carryovers({'slot_plans':{'1':plan}},{2:grant})
+        assert blocked==({2:'carryover_capability_not_calibrated'} if failure=='missing' else {})
+
+
+def test_formal_shared_start_callback_requires_the_pending_battle_token(formal_reader,monkeypatch):
+    port,reader,context,image,_,_=formal_reader
+    token=port.pending['intent_id']
+    reader.begin_opening(token)
+    monkeypatch.setattr(reader,'formation',lambda context,image:dict(unit_ids=port.plan['unit_ids']))
+    monkeypatch.setattr(reader.page,'require_team',lambda reading:None)
+    monkeypatch.setattr(reader.page,'action',lambda context,image,name:[1,2,3,4])
+    wrong=NS(image=image,custom_recognition_param=json.dumps(dict(mode='start',opening_start_token='other-intent')))
+    assert reader.analyze(context,wrong) is None and not reader.opening_started
+    right=NS(image=image,custom_recognition_param=json.dumps(dict(mode='start',opening_start_token=token)))
+    assert reader.analyze(context,right) is not None and reader.opening_started
+    state=read(reader,context,image).detail
+    assert state['opening_start_token']==token and state['intent_id']==token

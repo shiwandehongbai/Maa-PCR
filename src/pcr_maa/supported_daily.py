@@ -871,7 +871,9 @@ def summary(report, *, player=False):
             'clan_battle_previous_result_unknown': '上次模拟结果仍未决，已阻止再次开战。',
             'clan_battle_switch_missed': '已错过目标秒数，停止且不补点。',
             'clan_battle_controls_unknown': 'SET／AUTO 状态不明，停止且不补点。',
-            'clan_battle_disconnected_6002': '检测到 6002 断线，请先手动重连并核对结果；程序不会补点或重开。',
+            'clan_battle_disconnected_6002': ('6002 后已重新连接并核对账号；原战斗结果仍未核实，程序不会补点或重开。'
+                if result.get('disconnect_recovery', {}).get('connection_verified') is True
+                else '检测到 6002，自动恢复尚未完整核实；请核对当前连接和战斗结果，程序不会补点或重开。'),
         }
         for code, message in reasons.items():
             if reason == code or reason.startswith(code + ':'):

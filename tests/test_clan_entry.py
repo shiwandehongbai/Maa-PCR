@@ -66,10 +66,19 @@ def test_player_result_describes_simulation_damage_not_a_clear(outcome,started,e
     ('clan_battle_timing_window_unproven', '全部操作和读回'),
     ('clan_battle_previous_result_unknown', '阻止再次开战'),
     ('clan_battle_switch_missed', '不补点'),
-    ('clan_battle_disconnected_6002:battle_start=unknown', '手动重连'),
+    ('clan_battle_disconnected_6002:battle_start=unknown', '自动恢复尚未完整核实'),
 ])
 def test_player_stops_explain_the_recovery_boundary(error, expected):
     text = gui_contract.result_text(dict(selected_modules=[MODULE], steps=[dict(result=dict(
         outcome='stopped', simulation_started=True, error=error))]))
     assert expected in text and error not in text
     assert '已发出' not in text and '保留未决记录' in text
+
+
+@pytest.mark.parametrize('verified',[False,True])
+def test_6002_player_copy_reports_actual_connection_verification_without_claiming_battle_result(verified):
+    text=gui_contract.result_text(dict(selected_modules=[MODULE],steps=[dict(result=dict(
+        outcome='stopped',simulation_started=True,error='clan_battle_disconnected_6002:battle_start=sent',
+        disconnect_recovery=dict(connection_verified=verified,battle_result_verified=False)))]))
+    assert ('已重新连接并核对账号' in text) is verified
+    assert '程序不会补点或重开' in text and '保留未决记录' in text

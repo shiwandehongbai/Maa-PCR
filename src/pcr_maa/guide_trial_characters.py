@@ -101,14 +101,14 @@ class GuideTrialCharacters(CustomRecognition):
         if context.tasker.stopping:return None
         return self.AnalyzeResult(box=target, detail=state)
 
-    def match(self, frame, uid, roi):
+    def match(self, frame, uid, roi, *, threshold=.88):
         x, y, w, h = roi
         best = None
         for template, tx, ty, size in self.templates[uid]:
             scores = cv2.matchTemplate(frame[y:y+h, x:x+w], template, cv2.TM_CCOEFF_NORMED)
             _, score, _, point = cv2.minMaxLoc(scores)
             box = [x+point[0]-tx, y+point[1]-ty, size, size]
-            if score >= .88 and (best is None or score > best['score']):
+            if score >= threshold and (best is None or score > best['score']):
                 best = dict(unit_id=uid, score=score, box=box)
         return best
 

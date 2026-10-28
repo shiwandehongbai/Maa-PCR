@@ -144,6 +144,44 @@ internal static class ClanDailyPlanChecks
         confirmed = false; Throws(() => view.AssignCurrent(1), "ui_current_unconfirmed_rejected"); confirmed = true;
         view.ClearSlot(2); Require(PcrClanDailyPlan.Read(statePath, out _).Slots.Count == 2 && view.SlotTexts[1].Contains("尚未设置"), "ui_clear_only_reference");
         view.AssignCurrent(2); Require(PcrClanDailyPlan.Read(statePath, out _).Slots.Count == 3, "ui_assign_saved_current");
+        void ReviewQueuedBehindChange(Action<PcrClanDailyPlanDocument> change, int expectedSlots, bool succeeds, string label)
+        {
+            var hidden = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var gate = (System.Threading.SemaphoreSlim)typeof(PcrClanDailyPlanView).GetField("loadGate", hidden)!.GetValue(view)!;
+            using var entered = new System.Threading.ManualResetEventSlim(); using var release = new System.Threading.ManualResetEventSlim();
+            void Wait(System.Threading.Tasks.Task task)
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!task.IsCompleted && clock.Elapsed < TimeSpan.FromSeconds(20)) { Dispatcher.UIThread.RunJobs(); System.Threading.Thread.Sleep(1); }
+                Require(task.IsCompleted, label + "_finishes"); task.GetAwaiter().GetResult();
+            }
+            var operation = (System.Threading.Tasks.Task)typeof(PcrClanDailyPlanView).GetMethod("ChangeAsync", hidden)!.Invoke(view, new object[]
+            {
+                (Action<PcrClanDailyPlanDocument>)(value =>
+                {
+                    change(value); entered.Set();
+                    if (!release.Wait(TimeSpan.FromSeconds(20))) throw new TimeoutException(label + "_release");
+                }), "隔离提交完成"
+            })!;
+            try
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!entered.IsSet && clock.Elapsed < TimeSpan.FromSeconds(20)) { Dispatcher.UIThread.RunJobs(); System.Threading.Thread.Sleep(1); }
+                Require(entered.IsSet && gate.CurrentCount == 0, label + "_change_owns_gate");
+                var queuedReview = view.ReviewThreeAsync();
+                Require(!queuedReview.IsCompleted, label + "_review_waits_for_commit");
+                release.Set(); Wait(System.Threading.Tasks.Task.WhenAll(operation, queuedReview));
+                var persisted = PcrClanDailyPlan.Read(statePath, out var persistedHash);
+                var shown = (PcrClanDailyPlanDocument)typeof(PcrClanDailyPlanView).GetField("document", hidden)!.GetValue(view)!;
+                var shownHash = (string?)typeof(PcrClanDailyPlanView).GetField("loadedHash", hidden)!.GetValue(view);
+                Require(persisted.Slots.Count == expectedSlots && JToken.DeepEquals(JObject.FromObject(shown), JObject.FromObject(persisted))
+                    && shownHash == persistedHash, label + "_review_uses_committed_document_and_hash");
+                Require(view.StatusText.Contains("三队原件、账号与期次引用已核对") == succeeds, label + "_review_reports_committed_shape");
+            }
+            finally { release.Set(); if (!operation.IsCompleted) Wait(operation); }
+        }
+        ReviewQueuedBehindChange(value => PcrClanDailyPlan.Clear(value, 2), 2, false, "queued_review_after_clear");
+        ReviewQueuedBehindChange(value => PcrClanDailyPlan.Assign(value, 2, current, guidePath, config, root, DateTimeOffset.Now), 3, true, "queued_review_after_assign");
         var external = PcrClanDailyPlan.Read(statePath, out var expected); PcrClanDailyPlan.Clear(external, 1); PcrClanDailyPlan.Save(external, statePath, expected); var externalBytes = File.ReadAllBytes(statePath);
         Throws(() => view.ClearSlot(3), "ui_stale_writer_rejected"); Require(File.ReadAllBytes(statePath).SequenceEqual(externalBytes), "ui_stale_writer_keeps_newer_state"); view.Reload(); view.AssignCurrent(1);
         Render(view, Path.Combine(root, "daily-plan-view.png"), 1120, 760);

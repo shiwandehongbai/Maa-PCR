@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from .guide_source import acquire_video, video_reference, _download
+from .guide_source import acquire_video, canonical_video_url, video_reference, _download
 
 
 def digest(path):
@@ -23,10 +23,30 @@ def period_from_title(title):
 
 def parse_header(words, label):
     text = ' '.join(w['text'] for w in words)
-    phase_match = re.search(r'(?<![A-Z])(BC|[BCDE])\s*面', text, re.I)
-    phase = phase_match[1].upper() if phase_match else (label.upper() if label.upper() in ('BC', 'B', 'C', 'D', 'E') else None)
-    rounds = re.search(r'(\d+)\s*[~～\-至]\s*(\d+)\s*周目', text)
-    lower = re.search(r'(\d+)\s*\+\s*周目', text)
+    phase_pattern = r'(?<![A-Z])(BC|[BCDE])\s*面'
+    fourth_pattern = r'(?<![0-9零一二三四五六七八九十])(?:第\s*)?(?:四|4)\s*阶段'
+    phase_match = re.search(phase_pattern, text, re.I)
+    fourth_match = re.search(fourth_pattern, text)
+    label_match = re.search(phase_pattern, label, re.I)
+    if phase_match:
+        phase = phase_match[1].upper()
+        if fourth_match and phase != 'D':
+            phase = None
+    elif fourth_match:
+        phase = 'D'
+    elif label.upper() in ('BC', 'B', 'C', 'D', 'E'):
+        phase = label.upper()
+    elif label_match:
+        phase = label_match[1].upper()
+    else:
+        phase = 'D' if re.search(fourth_pattern, label) else None
+    rounds_pattern = r'(\d+)\s*[~～\-至]\s*(\d+)\s*周目'
+    lower_pattern = r'(\d+)\s*(?:\+\s*周目|周目\s*(?:及\s*)?以上)'
+    rounds = re.search(rounds_pattern, text)
+    lower = re.search(lower_pattern, text)
+    if not rounds and not lower:
+        rounds = re.search(rounds_pattern, label)
+        lower = re.search(lower_pattern, label)
     return dict(phase=phase, round_min=int(rounds[1]) if rounds else int(lower[1]) if lower else None,
                 round_max=int(rounds[2]) if rounds else None)
 
@@ -339,6 +359,7 @@ def build_page_jobs(frames, evidence, period, recognize):
 
 def prepare_bundle(url, output, *, pages=None):
     """Acquire every public part, detect static charts, propose teams, preserve all material."""
+    url = canonical_video_url(url)
     bvid, selected_page = video_reference(url)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)

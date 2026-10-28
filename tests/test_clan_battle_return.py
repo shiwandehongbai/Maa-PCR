@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from test_clan_battle import Port, plan
-from test_clan_battle_native import identity, calibration
+from test_clan_battle_native import identity, calibration, result_page_receipt
 from pcr_maa import clan_battle, clan_battle_native as native_port
 from pcr_maa.preset_execution import Journal
 
@@ -130,8 +130,11 @@ def test_owner_return_failure_writes_stopped_report_with_known_result(plan, tmp_
 def test_native_return_has_one_guarded_action_then_actual_target_readback(plan, calibration, tmp_path, monkeypatch):
     port = native_port.NativeClanBattle(NS(), tmp_path, calibration=calibration)
     port.account = plan['account_id']
+    before = result_page_receipt(dict(identity(plan), damage=12345678))
+    port.last_receipt = port._simulation_result_receipt = before
     calls = []
     def read(page):
+        assert page == 'target'  # Reuse the verified result, do not recapture it.
         calls.append(('read', page))
         return identity(plan), {'observed_page': page}
     monkeypatch.setattr(port, 'read_page', read)
@@ -139,14 +142,17 @@ def test_native_return_has_one_guarded_action_then_actual_target_readback(plan, 
     monkeypatch.setattr(port, 'wait', lambda names, **kwargs: calls.append(('wait', names, kwargs)) or names[0])
     result = port.return_to_target(plan)
     assert result['return_verified'] is True and result['boss'] == plan['boss']
-    assert calls == [('read', 'result'), ('CBAction_return_to_target', {'click': True}),
+    assert calls == [('CBAction_return_to_target', {'click': True}),
         ('wait', ['CBPage_target'], {'seconds': 15}), ('read', 'target')]
     assert set(result['native_evidence']) == {'before', 'action', 'target'}
+    assert result['native_evidence']['before'] is before
 
 
 def test_native_return_mismatched_result_page_never_clicks(plan, calibration, tmp_path, monkeypatch):
     port = native_port.NativeClanBattle(NS(), tmp_path, calibration=calibration)
-    monkeypatch.setattr(port, 'read_page', lambda _: (dict(identity(plan), simulation=False), {}))
+    before = result_page_receipt(dict(identity(plan), simulation=False, damage=12345678))
+    port.last_receipt = port._simulation_result_receipt = before
+    monkeypatch.setattr(port, 'read_page', lambda _: pytest.fail('must not recapture the result'))
     monkeypatch.setattr(port, 'run', lambda *a, **k: pytest.fail('must not click'))
     with pytest.raises(RuntimeError, match='target_mismatch'):
         port.return_to_target(plan)
@@ -155,7 +161,9 @@ def test_native_return_mismatched_result_page_never_clicks(plan, calibration, tm
 @pytest.mark.parametrize('failure', ['stopped', 'clan_battle_disconnected_6002:battle_start=sent', 'unknown_after_return'])
 def test_native_return_never_repeats_action_after_wait_failure(plan, calibration, tmp_path, monkeypatch, failure):
     port = native_port.NativeClanBattle(NS(), tmp_path, calibration=calibration)
-    monkeypatch.setattr(port, 'read_page', lambda _: (identity(plan), {'result': True}))
+    before = result_page_receipt(dict(identity(plan), damage=12345678))
+    port.last_receipt = port._simulation_result_receipt = before
+    monkeypatch.setattr(port, 'read_page', lambda _: pytest.fail('must not recapture the result'))
     actions = []
     monkeypatch.setattr(port, 'run', lambda node, **kwargs: actions.append(node) or {'action': node})
     def failed(*args, **kwargs):
@@ -164,3 +172,13 @@ def test_native_return_never_repeats_action_after_wait_failure(plan, calibration
     with pytest.raises(RuntimeError, match=failure):
         port.return_to_target(plan)
     assert actions == ['CBAction_return_to_target']
+
+
+def test_native_return_rejects_different_result_receipt_before_input(plan, calibration, tmp_path, monkeypatch):
+    port = native_port.NativeClanBattle(NS(), tmp_path, calibration=calibration)
+    port._simulation_result_receipt = result_page_receipt(dict(identity(plan), damage=12345678))
+    port.last_receipt = result_page_receipt(dict(identity(plan), damage=12345678))
+    monkeypatch.setattr(port, 'run', lambda *a, **k: pytest.fail('must not click'))
+    monkeypatch.setattr(port, 'read_page', lambda _: pytest.fail('must not recapture the result'))
+    with pytest.raises(RuntimeError, match='clan_battle_result_unknown'):
+        port.return_to_target(plan)

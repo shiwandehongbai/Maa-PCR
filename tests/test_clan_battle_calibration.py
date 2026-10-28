@@ -348,9 +348,14 @@ def daily_bundle(v2_bundle, profile):
 
 
 @pytest.fixture
-def daily_execution_bundle(daily_bundle, executable):
+def daily_execution_bundle(daily_bundle, executable, monkeypatch):
     root, bundled, _, _, save = daily_bundle
     bundled['daily'] = deepcopy(executable['daily'])
+    # Loader-only fixture supplies the shared gestures now read by daily validation.
+    monkeypatch.setattr('pcr_maa.clan_battle_native.calibration_pipeline', lambda *_, **kwargs: {
+        'CBAction_' + name: dict(action='Swipe', begin=executable['actions'][name]['begin'],
+            end=executable['actions'][name]['end'], duration=400)
+        for name in ('characters_top', 'characters_next')})
     opening = bundled['daily']['execution']['opening']
     for section in (bundled['daily'], bundled['daily']['execution'], opening, opening['inheritance']):
         for sample in section['samples']:
@@ -444,7 +449,12 @@ def page_bundle_v2(bundle, calibration_v2):
     return bundle
 
 
-def test_explicit_own_only_profile_can_omit_support_layout(page_bundle_v2, plan):
+def test_explicit_own_only_profile_can_omit_support_layout(page_bundle_v2, plan, monkeypatch):
+    from pcr_maa import clan_battle_native
+    pipeline = clan_battle_native.calibration_pipeline
+    # This scope fixture has synthetic result digits; live OCR calibration is checked separately.
+    monkeypatch.setattr(clan_battle_native, 'calibration_pipeline', lambda value, *args, **kwargs:
+        pipeline(dict(value, evidence_kind='offline_replay'), *args, **kwargs))
     root, profile, _, _, save = page_bundle_v2
     profile['support_modes'] = ['none']
     profile.pop('support')
@@ -474,3 +484,26 @@ def test_unsupported_scope_is_rejected_with_support_layout_present(page_bundle_v
     save()
     with pytest.raises(ValueError, match='support_scope_invalid'):
         module.load_calibration(plan, root=root)
+
+
+@pytest.mark.parametrize('name,count', [('start_confirmation', 3), ('carry_start_confirmation', 3), ('result_reward', 2)])
+@pytest.mark.parametrize('case', ['resolved', 'tampered', 'not_dict'])
+def test_optional_execution_dialog_samples_resolve_and_keep_hash_binding(daily_execution_bundle, plan, name, count, case):
+    root, profile, entry, _, save = daily_execution_bundle
+    sample = dict(profile['samples'][0], page=name)
+    dialog = dict(labels=[dict(roi=[10, 10, 100, 30], expected='^离线对话框$') for _ in range(count)],
+        target=[10, 10, 20, 20], samples=[sample])
+    profile['daily']['execution'][name] = dialog
+    entry['capabilities'] = ['formal']
+    if case == 'tampered': sample['sha256'] = '0' * 64
+    elif case == 'not_dict': profile['daily']['execution'][name] = []
+    save()
+    if case != 'resolved':
+        with pytest.raises(ValueError, match='file_changed' if case == 'tampered' else 'dialog_calibration_invalid'):
+            module.load_calibration(plan, root=root, capability='formal')
+        return
+    loaded = module.load_calibration(plan, root=root, capability='formal')
+    path = Path(loaded['daily']['execution'][name]['samples'][0]['path'])
+    assert path.is_absolute() and path.is_relative_to(root)
+    assert path == root / sample['path']
+    assert not Path(sample['path']).is_absolute()

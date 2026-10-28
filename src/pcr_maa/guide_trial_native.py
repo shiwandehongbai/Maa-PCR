@@ -20,7 +20,7 @@ class NativeGuideTrial:
     def checkpoint(self):
         native._check_receipt(self.tasker)
 
-    def run(self, node, *, click=False):
+    def run(self, node, *, click=False, reset_hits=()):
         self.checkpoint()
         if self.progress_observation_only and node not in (
                 'GTChoose', 'GTFireMap', 'GTFireMapBack', 'GTDeepBack', 'GTOpenDeep', 'GTOpenFire', PROFILE_NODE,
@@ -32,7 +32,7 @@ class NativeGuideTrial:
         if starting:
             self.battle_start = 'unknown'
         try:
-            result = native.run(self.tasker, node, reset_hits=actions if click else ())
+            result = native.run(self.tasker, node, reset_hits=(actions if click else ()) + tuple(reset_hits))
         except native.NativeInputNotSent:
             if starting:
                 self.battle_start = 'not_sent'
