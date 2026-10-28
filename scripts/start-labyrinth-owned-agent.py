@@ -1,7 +1,8 @@
-"""Private GUI-owned bot entry: a single stdin request, then Stop/EOF only."""
+"""Private GUI owner: one configuration, then pause/resume/stop controls."""
 from pathlib import Path
 import json
 import sys
+import threading
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from pcr_maa.labyrinth.owned_runtime import (parse_request, unique_object,
@@ -13,9 +14,11 @@ def main(*, runner=run_owned):
     value=None
     line=None
     output=sys.stdout
+    output_lock=threading.Lock()
     def emit(message):
-        output.write(json.dumps(message,ensure_ascii=False,separators=(',',':'))+'\n')
-        output.flush()
+        with output_lock:
+            output.write(json.dumps(message,ensure_ascii=False,separators=(',',':'))+'\n')
+            output.flush()
     try:
         line=sys.stdin.readline(65537)
         if len(line)>65536:

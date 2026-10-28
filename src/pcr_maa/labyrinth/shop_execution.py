@@ -165,6 +165,20 @@ def parse_shop_inventory(words,buttons):
         items.append(dict(common,kind='relic',current_stacks=current,relic=Relic(identifier,mark,bonus)))
     return balance,items
 
+def _stock_state(words,buttons,items):
+    known={item['slot']:item for item in items};unknown=False;available=False
+    for slot in range(3):
+        button=buttons.get(slot)
+        if button is None:unknown=True;continue
+        if not button['enabled']:continue
+        item=known.get(slot)
+        if (item is not None and item['kind']=='role_imprint'
+                or imprint_identity(_text(words.get(f'Name{slot}',[]))) is not None):continue
+        if item is not None:available=True
+        else:unknown=True
+    return 'unknown' if unknown else 'ready' if available else 'exhausted'
+
+
 class ShopRecognition(CustomRecognition):
     def __init__(self,stopped=None,*,icon_capture=None):super().__init__();self.stopped=stopped;self.icon_capture=icon_capture
     def analyze(self,context,argv):
@@ -193,11 +207,16 @@ class ShopRecognition(CustomRecognition):
             luma=float(np.mean(pixels[:,:,0]*.114+pixels[:,:,1]*.587+pixels[:,:,2]*.299))
             buttons[slot]=dict(box=words[f'Buy{slot}'][0]['box'],enabled=luma>=145,luma=luma)
         refresh=words.get('Refresh',[])
-        refresh_allowed=len(refresh)==1 and _text(words.get('Balance',[])) and _integer(_text(words['Balance']))>=300
-        payload=dict(state=state,words=words,buttons=buttons,same_frame=True,source='maa',refresh_allowed=bool(refresh_allowed))
+        try:balance=_integer(_text(words['Balance'])) if len(words.get('Balance',[]))==1 else None
+        except BatchStopped:balance=None
+        refresh_allowed=len(refresh)==1 and balance is not None and balance>=300
+        refresh_known=balance is not None and balance<300 or len(refresh)==1
+        payload=dict(state=state,words=words,buttons=buttons,same_frame=True,source='maa',
+            refresh_allowed=bool(refresh_allowed),refresh_known=refresh_known)
         if state=='shop':
             try:
                 balance,items=parse_shop_inventory(words,buttons)
+                payload['stock_state']=_stock_state(words,buttons,items)
                 payload.update(balance=balance,items=[dict(i,relic=dict(relic_id=i['relic'].relic_id,mark=i['relic'].mark,bonus=i['relic'].bonus,recognized=True)) if i['kind']=='relic' else i for i in items])
             except BatchStopped:return self.AnalyzeResult(None,dict(payload,status='unknown'))
         elif not words.get('Confirm') or not words.get('DialogBody'):return self.AnalyzeResult(None,dict(payload,status='unknown'))
@@ -255,20 +274,22 @@ class MaaShop:
         with self.timings.measure('page_wait'):receipt=native.run(self.tasker,NODE)
         return _readback(receipt),receipt
 
-    def _wait_state(self,batch,expected):
+    def _wait_state(self,batch,expected,*,accept=None):
         import time
         from .autoplay import _poll_pause
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+30)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+30)
         token=native.RUN_DEADLINE.set(deadline)
         try:
             while True:
                 batch.checkpoint()
-                if time.monotonic()>=deadline:raise BatchStopped('shop_readback_unknown')
+                if native.active_now()>=deadline:raise BatchStopped('shop_readback_unknown')
                 try:current,receipt=self._capture()
                 except BatchStopped as error:
                     if error.args!=('shop_readback_unknown',):raise
                 else:
-                    if time.monotonic()<deadline and current['state']==expected:return current,receipt
+                    batch.checkpoint()
+                    if (native.active_now()<deadline and current['state']==expected
+                            and (accept is None or accept(current))):return current,receipt
                 _poll_pause(self.tasker,batch,'LabyShopPollSpacing','shop_readback_unknown')
         except RuntimeError as error:
             if error.args not in (('Native task exceeded 90 seconds or inspection deadline',),
@@ -406,18 +427,28 @@ class MaaShop:
         strategy=getattr(batch.settings,'strategy',None)
         policy={key:strategy_value(strategy,key,default) for key,default in (('baseline_last_area',3),('baseline_target',4),('debuff_pivot_minimum',12),('debuff_pivot_tolerance',2))}
         priority=priority or strategy_value(strategy,'relic_mark_priority',())
+        refresh_permitted=refresh_shop and area is not None and area>=strategy_value(strategy,'refresh_from_area',5)
+        def exhausted(value):
+            return (relic_cycle>=3 or value.get('stock_state')=='exhausted'
+                or len(value['items'])==3 and all(i['kind']=='role_imprint' for i in value['items']))
+        def ready(value):
+            if exhausted(value) and refresh_permitted:return value.get('refresh_known',True)
+            return (any(i['kind']=='relic' and i['purchasable'] for i in value['items'])
+                or value.get('stock_state')!='unknown')
         try:
             for _ in range(100):
                 batch.checkpoint();current,receipt=self._capture()
                 if current['state']!='shop':raise BatchStopped('shop_initial_page_unknown')
+                if not buy_relics or area==4 and not refresh_permitted:break
+                if not ready(current):current,receipt=self._wait_state(batch,'shop',accept=ready)
                 items=[dict(i,relic=Relic(**i['relic'])) if i['kind']=='relic' else dict(i) for i in current['items']]
                 observed_stacks=calibrated_stacks(observed_stacks,items)
                 calibrated_marks.update(i['relic'].mark for i in items if i['kind']=='relic')
-                if not buy_relics or area==4:break
-                exhausted=relic_cycle>=3 or len(items)==3 and all(i['kind']=='role_imprint' for i in items)
-                if exhausted and refresh_shop and area is not None and area>=strategy_value(strategy,'refresh_from_area',5) and current.get('refresh_allowed'):
+                if exhausted(current) and refresh_permitted and current.get('refresh_allowed'):
                     self._refresh(batch,enter_id,block_id,current,cycle);cycle+=1;relic_cycle=0;refreshed=True;continue
-                selected=None if observed_stacks is None else shop_relic(observed_stacks,items,balance=current['balance'],buy=buy_relics,area=area,locked_focus=locked_focus,priority=priority,**policy)
+                selected=None if observed_stacks is None else shop_relic(observed_stacks,items,balance=current['balance'],buy=buy_relics,area=area,allow_area4=refresh_permitted,locked_focus=locked_focus,priority=priority,**policy)
+                if selected is None and any(i['kind']=='relic' and i['purchasable'] for i in items):
+                    raise BatchStopped('shop_relic_state_unknown')
                 if selected is None:
                     selected=min((i for i in items if i['kind']=='role_imprint' and i['purchasable']),key=lambda i:(i['choice_imprint'],i['slot']),default=None)
                 if selected is None:break

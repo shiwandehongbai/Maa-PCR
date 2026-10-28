@@ -21,9 +21,16 @@ class Encounter:
     requirements:tuple=()  # (any-of capabilities, member count, minimum score)
     preferred:tuple=()     # (capability, preferred member count)
     fallback:tuple=()      # (primary capability, primary count, alternatives, limit)
+    enemy:str='UNKNOWN'
+    isolation_radius:int|None=None
+
+    def __post_init__(self):
+        if self.enemy not in ('PHYSICAL','MAGIC','MIXED','UNKNOWN') or (self.isolation_radius is not None and
+                (type(self.isolation_radius) is not int or self.isolation_radius<=0)):
+            raise ValueError('invalid_encounter_formation')
 
 EX=(
- Encounter('ghost_lord','幽灵领主',1,preferred=(('HEAL',1),)),
+ Encounter('ghost_lord','幽灵领主',1,preferred=(('HEAL',1),),enemy='MAGIC',isolation_radius=300),
  Encounter('good_friend_x','好朋友X',1,requirements=((('DOT',),2,50),)),
  Encounter('island_whale','岛鲸',1),
  Encounter('antimatter_beast','反物质兽',1),
@@ -65,6 +72,16 @@ def contribution(members,strategy):
             value+=sum(sorted((v/100 for v in scores if v>=50),reverse=True)[:limit])
     return value
 
+def formation_risk(members,context):
+    # Static positions approximate the initial formation; battle skills may move allies.
+    radius=getattr(context.encounter,'isolation_radius',None)
+    if radius is None or not members:return 0
+    front=min(members,key=lambda p:p.position if p.position is not None else 2**31-1)
+    if front.position is None:return max(0,len(members)-1)
+    return sum(p.id!=front.id and (p.position is None or p.position-front.position<=radius
+        or p.data.get('roleClass')=='掩护者') for p in members)
+
+
 def guide_core(optimizer,ids,context):
     strategy=context.encounter
     if strategy is None:return ()
@@ -77,8 +94,14 @@ def guide_core(optimizer,ids,context):
             key=lambda p:max(capability(p,k) or 0 for k in kinds),reverse=True)[:need])
     gate=optimizer.cfg('relaxedMinimumReliableVanguard' if context.relaxed else 'minimumReliableVanguard')
     tanks=[p for p in roles if p.position is not None and p.vanguard(context)>=gate]
+    def compatible(uid,tank):
+        role=optimizer.profiles[uid]
+        if tank.id==uid:return True
+        if strategy.isolation_radius is not None:
+            return role.data.get('roleClass')!='掩护者' and role.position-tank.position>strategy.isolation_radius
+        return tank.position<=role.position
     return tuple(uid for uid in core if optimizer.profiles[uid].position is not None and
-        any(t.id==uid or t.position<=optimizer.profiles[uid].position for t in tanks))[:3]
+        any(compatible(uid,t) for t in tanks))[:3]
 
 def boss_encounter(node):
     from .routes import BOSSES
@@ -266,8 +289,8 @@ class MaaEncounter:
         if not restored and not input:raise BatchStopped('encounter_guard_restore_failed')
         return detail,receipt
     def _read(self,batch,page,timeout):
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+timeout)
-        while time.monotonic()<deadline:
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+timeout)
+        while native.active_now()<deadline:
             batch.checkpoint();token=native.RUN_DEADLINE.set(deadline)
             try:
                 try:value,receipt=self._run('Read',dict(mode='read'))
@@ -275,7 +298,7 @@ class MaaEncounter:
                     if str(error) not in ('encounter_readback_unknown','game_session_readback_unknown'):raise
                     continue
                 batch.checkpoint()
-                if time.monotonic()>=deadline:raise BatchStopped('encounter_readback_unknown')
+                if native.active_now()>=deadline:raise BatchStopped('encounter_readback_unknown')
                 if value.get('page')==page:return value,receipt
             finally:native.RUN_DEADLINE.reset(token)
         raise BatchStopped('encounter_readback_unknown')

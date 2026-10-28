@@ -8,6 +8,7 @@ from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 import hashlib,json,re
+from time import perf_counter
 from maa.custom_recognition import CustomRecognition
 from .batch import BatchStopped
 
@@ -73,23 +74,42 @@ def button_fraction(image,box,*,enabled=False):
     return hits/128
 
 class EventRecognition(CustomRecognition):
-    def __init__(self,stopped=None):super().__init__();self.stopped=stopped;self.last=None;self.stable=0
+    def __init__(self,stopped=None,*,diagnostics=None):super().__init__();self.stopped=stopped;self.last=None;self.stable=0;self.diagnostics=diagnostics
     def analyze(self,context,argv):
-        if (self.stopped is not None and self.stopped()) or tuple(argv.image.shape[:2])!=(720,1280):return self.AnalyzeResult(None,{'status':'unknown'})
-        reco=context.run_recognition('LabyEventWords',argv.image);raw=getattr(reco,'raw_detail',None)
-        if type(raw) is not dict or getattr(reco,'hit',False) is not True:return self.AnalyzeResult(None,{'status':'unknown'})
+        ocr_ms=None;word_count=None;text_length=None
+        def finish(box,detail,reason):
+            diagnostics=self.diagnostics or getattr(getattr(context,'tasker',None),'_labyrinth_diagnostics',None)
+            if diagnostics is not None:
+                match=detail.get('match',detail)
+                try:diagnostics.record_event(reason=reason,ocr_ms=ocr_ms,word_count=word_count,text_length=text_length,
+                    event_id=match.get('event_id'),score=match.get('score'),margin=match.get('margin'),
+                    stable_frames=detail.get('stable_frames'),trusted=detail.get('trusted'),buttons=detail.get('choices',()))
+                except Exception:pass
+            return self.AnalyzeResult(box,detail)
+        if self.stopped is not None and self.stopped():return finish(None,{'status':'unknown'},'stopped')
+        if tuple(argv.image.shape[:2])!=(720,1280):return finish(None,{'status':'unknown'},'invalid_image')
+        started=perf_counter()
+        try:reco=context.run_recognition('LabyEventWords',argv.image)
+        except BaseException:
+            ocr_ms=(perf_counter()-started)*1000
+            finish(None,{'status':'unknown'},'ocr_unavailable')
+            raise
+        ocr_ms=(perf_counter()-started)*1000;raw=getattr(reco,'raw_detail',None)
+        if type(raw) is not dict or getattr(reco,'hit',False) is not True:return finish(None,{'status':'unknown'},'ocr_unavailable')
         words=raw.get('filtered',[])
-        if type(words) is not list or not words:return self.AnalyzeResult(None,{'status':'unknown'})
+        if type(words) is not list or not words:return finish(None,{'status':'unknown'},'ocr_empty')
+        word_count=len(words)
         # Model threshold already filters words; preserve exact raw words as evidence.
         text=''.join(w.get('text','') for w in sorted(words,key=lambda w:(w.get('box',[0,0])[1],w.get('box',[0])[0])))
+        text_length=len(text)
         match=recognize_event(text)
-        if match is None:self.last=None;self.stable=0;return self.AnalyzeResult(None,dict(status='unknown',words=words))
+        if match is None:self.last=None;self.stable=0;return finish(None,dict(status='unknown',words=words),'event_unmatched')
         event=match['catalogue_event'];layout=next((l for l in catalogue()['layouts'] if l['optionCount']==len(event['choices'])),None)
-        if layout is None or layout.get('calibrationRequired') is not False:return self.AnalyzeResult(None,{'status':'unknown'})
+        if layout is None or layout.get('calibrationRequired') is not False:return finish(None,{'status':'unknown'},'layout_unavailable')
         choices=[]
         for choice,roi in zip(sorted(event['choices'],key=lambda c:c['slot']),layout['selectButtonRois']):
             box=pixel_rect(roi);present=button_fraction(argv.image,box);enabled=button_fraction(argv.image,box,enabled=True)
-            if present<.35:return self.AnalyzeResult(None,dict(status='unknown',reason='event_button_absent',words=words,match=match))
+            if present<.35:return finish(None,dict(status='unknown',reason='event_button_absent',words=words,match=match),'event_button_absent')
             choices.append(dict(choice_id=int(choice['id']),slot=choice['slot']-1,box=box,label=choice['name'],button_confidence=present,enabled_confidence=enabled))
         self.stable=self.stable+1 if self.last==match['event_id'] else 1;self.last=match['event_id']
         payload=dict(match,choices=choices,words=words,text=text,trusted=match['text_trusted'] and self.stable>=2,stable_frames=self.stable,same_frame=True,
@@ -97,10 +117,11 @@ class EventRecognition(CustomRecognition):
         params=argv.custom_recognition_param
         if type(params) is str:params=json.loads(params or '{}')
         if type(params) is not dict:params={}
-        if params.get('event_id') and (params['event_id']!=match['event_id'] or payload['trusted'] is not True):return self.AnalyzeResult(None,payload)
+        if params.get('event_id') and (params['event_id']!=match['event_id'] or payload['trusted'] is not True):return finish(None,payload,'event_identity_changed' if params['event_id']!=match['event_id'] else 'event_unstable')
         slot=params.get('slot')
-        if slot is not None and (type(slot) is not int or slot<0 or slot>=len(choices) or choices[slot]['enabled_confidence']<.35):return self.AnalyzeResult(None,payload)
-        return self.AnalyzeResult([0,0,1280,720],payload)
+        if slot is not None and (type(slot) is not int or slot<0 or slot>=len(choices)):return finish(None,payload,'event_slot_invalid')
+        if slot is not None and choices[slot]['enabled_confidence']<.35:return finish(None,payload,'event_button_disabled')
+        return finish([0,0,1280,720],payload,'event_guard_accepted' if slot is not None else 'event_observed')
 
 def event_readback(receipt):
     if receipt.get('native_ok') is not True:raise BatchStopped('event_unknown')

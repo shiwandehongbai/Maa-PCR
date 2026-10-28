@@ -72,12 +72,24 @@ class NativeGuideTrial:
 
     def wait(self, names, *, seconds=30):
         end = min(time.monotonic() + seconds, native.RUN_DEADLINE.get())
-        while time.monotonic() < end:
-            hit = self.choose(names)
-            if hit != 'GTUnknown':
-                return hit
-            time.sleep(.3)
-        raise RuntimeError('guide_trial_page_timeout')
+        token = native.RUN_DEADLINE.set(end)
+        try:
+            while time.monotonic() < end:
+                hit = self.choose(names)
+                if time.monotonic() >= end:
+                    break
+                if hit != 'GTUnknown':
+                    return hit
+                time.sleep(max(0, min(.3, end - time.monotonic())))
+            raise RuntimeError('guide_trial_page_timeout')
+        except RuntimeError as error:
+            if error.args not in (('Native task exceeded 90 seconds or inspection deadline',),
+                    ('Inspection deadline exceeded before task input',),
+                    ('Context deadline exceeded after synchronous return; outcome unknown',)):
+                raise
+            raise RuntimeError('guide_trial_page_timeout') from error
+        finally:
+            native.RUN_DEADLINE.reset(token)
 
     def configure(self, plan):
         from .guide_identity import require_source_team

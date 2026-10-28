@@ -1,0 +1,45 @@
+{
+  "source": "2026-10-25 feedback; only the role dialog is retained; no account, device, or run identifiers",
+  "unselected_cards": [
+    {
+      "box": [
+        505,
+        329,
+        130,
+        130
+      ],
+      "character_id": "1075",
+      "unit_icon_id": "107561"
+    },
+    {
+      "box": [
+        223,
+        470,
+        130,
+        130
+      ],
+      "character_id": "1351",
+      "unit_icon_id": "135131"
+    }
+  ],
+  "selected": [
+    "1075",
+    "1351"
+  ],
+  "target_box": [
+    223,
+    470,
+    130,
+    130
+  ],
+  "frames": [
+    {
+      "path": "labyrinth-opening-bottom-20261025-stats.png",
+      "sha256": "d24e00e5f235e161b8c95fe421ebb6a89779bde795d9e178363fb310d108146d"
+    },
+    {
+      "path": "labyrinth-opening-bottom-20261025-stars.png",
+      "sha256": "d03fd22fcc15501f296603ac9b05351a037bbde02ab4efc4037bbfe8dcfa0c4d"
+    }
+  ]
+}

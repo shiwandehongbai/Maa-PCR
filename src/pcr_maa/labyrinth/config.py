@@ -36,12 +36,17 @@ class Strategy:
     normal_win_rate: int = 95
     extreme_win_rate: int = 70
     opening_rosters: object = field(default_factory=lambda:MappingProxyType({}))
+    special_equipment_mode: str = 'off'
+    special_equipment_battles: tuple[str,...] = ('NORMAL','EX','BOSS')
+    response_interval_ms: int = 300
+    auto_database_update: bool = True
 
     def payload(self):
         values={key:getattr(self,key) for key in self.__dataclass_fields__}
         values.update(deployment_weights=list(self.deployment_weights),
             scoring_overrides=dict(self.scoring_overrides),personal_scores=dict(self.personal_scores),
             relic_mark_priority=list(self.relic_mark_priority),
+            special_equipment_battles=list(self.special_equipment_battles),
             opening_rosters={key:[list(slot) for slot in slots] for key,slots in self.opening_rosters.items()})
         return values
 
@@ -70,6 +75,16 @@ class Strategy:
                        or not number(x,0,100) for k,x in personal.items())):
             raise ValueError('invalid_personal_scores')
         defaults=cls();extra={}
+        equipment=value.get('special_equipment_mode','off')
+        battles=value.get('special_equipment_battles',['NORMAL','EX','BOSS'])
+        if equipment not in ('off','auto_equip'):raise ValueError('invalid_special_equipment_mode')
+        if (type(battles) is not list or equipment=='auto_equip' and not battles
+                or any(type(kind) is not str or kind not in ('NORMAL','EX','BOSS') for kind in battles)
+                or len(set(battles))!=len(battles)):
+            raise ValueError('invalid_special_equipment_battles')
+        interval=value.get('response_interval_ms',300)
+        if type(interval) is not int or interval not in (300,500):raise ValueError('invalid_response_interval_ms')
+        extra.update(special_equipment_mode=equipment,special_equipment_battles=tuple(battles),response_interval_ms=interval)
         for key,lo,hi in (('player_weight',0,100),('duplicate_role_penalty',0,30),
                 ('mixed_damage_penalty',0,30),('effective_character_system_bonus',0,30),
                 ('single_boss_retry_count_before_multi',0,10),('baseline_last_area',0,5),
@@ -79,7 +94,7 @@ class Strategy:
             if type(item) is not int or not lo<=item<=hi:raise ValueError('invalid_'+key)
             extra[key]=item
         for key in ('attribute_pairing_bonus_enabled','prefer_pure_boss_damage_system',
-                'single_boss_fallback_to_multi_after_three_failures','reroll_after_three_battle_failures'):
+                'single_boss_fallback_to_multi_after_three_failures','reroll_after_three_battle_failures','auto_database_update'):
             item=value.get(key,getattr(defaults,key))
             if type(item) is not bool:raise ValueError('invalid_'+key)
             extra[key]=item

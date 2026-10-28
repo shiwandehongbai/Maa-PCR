@@ -34,18 +34,34 @@
     <TextBlock Text="筛选完整路线 → 自动打完 → 按目标次数循环" TextWrapping="Wrap" />
     <TextBlock Text="{Binding LabyrinthSettings.Progress}" TextWrapping="Wrap" Foreground="{DynamicResource SukiPrimaryColor}" />
    </StackPanel>
+   <Button Name="PauseLabyrinthButton" Content="{Binding LabyrinthSettings.PauseLabel}" Click="PauseClick" IsVisible="{Binding IsRunning}" IsEnabled="{Binding !LabyrinthSettings.PausePending}" HorizontalAlignment="Left" />
    <StackPanel Spacing="12" IsEnabled="{Binding CanEditPcrTarget}">
     <StackPanel Spacing="6">
      <TextBlock Text="{Binding LabyrinthSettings.AccountSummary}" TextWrapping="Wrap" />
-     <Expander Name="AccountSettings" Header="国服 B 服账号" IsExpanded="False"><StackPanel Spacing="8" Margin="0,8">
-      <TextBlock Text="账号必须与模拟器中的游戏一致。玩家 ID 与凭据加密保存在本机当前 Windows 用户下，重开自动载入，默认隐藏。" TextWrapping="Wrap" />
+     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+      <ComboBox Name="AccountSelector" ItemsSource="{Binding LabyrinthSettings.Accounts}" SelectedItem="{Binding LabyrinthSettings.SelectedAccount, Mode=TwoWay}" HorizontalAlignment="Stretch" AutomationProperties.Name="黎明界账号">
+       <ComboBox.ItemTemplate><DataTemplate x:DataType="pcr:PcrLabyrinthAccount"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
+      </ComboBox>
+      <Button Grid.Column="1" Content="新增账号" Command="{Binding LabyrinthSettings.AddAccountCommand}" />
+     </Grid>
+     <Expander Name="AccountSettings" Header="账号与服务器" IsExpanded="False"><StackPanel Spacing="8" Margin="0,8">
+      <TextBlock Text="每个账号单独保存目标和策略。玩家 ID 与登录凭据加密保存在本机当前 Windows 用户下，切换账号不会登录游戏。" TextWrapping="Wrap" />
+      <TextBlock Text="账号名称" /><TextBox Name="AccountNameInput" Text="{Binding LabyrinthSettings.AccountName, Mode=TwoWay}" MaxLength="40" />
+      <TextBlock Text="服务器" />
+      <ComboBox Name="ServerSelector" ItemsSource="{Binding LabyrinthSettings.Servers}" SelectedItem="{Binding LabyrinthSettings.SelectedServer, Mode=TwoWay}" HorizontalAlignment="Stretch">
+       <ComboBox.ItemTemplate><DataTemplate x:DataType="pcr:PcrLabyrinthServer"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate>
+      </ComboBox>
+      <TextBlock Text="{Binding LabyrinthSettings.LoginHint}" TextWrapping="Wrap" FontSize="12" />
       <Button Content="{Binding LabyrinthSettings.CredentialsVisibilityText}" Command="{Binding LabyrinthSettings.ToggleCredentialsCommand}" HorizontalAlignment="Left" />
       <TextBlock Text="游戏玩家 ID（个人简介，非 B 站 UID）" TextWrapping="Wrap" />
       <TextBox Name="ExpectedPlayerIdInput" PasswordChar="{Binding LabyrinthSettings.CredentialMask}" Text="{Binding LabyrinthSettings.ExpectedPlayerId, Mode=TwoWay}" MaxLength="19" Watermark="请输入个人简介中的数字 ID" />
-      <TextBlock Text="登录账号" /><TextBox Name="UsernameInput" PasswordChar="{Binding LabyrinthSettings.CredentialMask}" Text="{Binding LabyrinthSettings.Username, Mode=TwoWay}" />
-      <TextBlock Text="密码" /><TextBox Name="PasswordInput" PasswordChar="{Binding LabyrinthSettings.CredentialMask}" Text="{Binding LabyrinthSettings.Password, Mode=TwoWay}" />
+      <TextBlock Text="{Binding LabyrinthSettings.LoginLabel}" /><TextBox Name="UsernameInput" PasswordChar="{Binding LabyrinthSettings.CredentialMask}" Text="{Binding LabyrinthSettings.Username, Mode=TwoWay}" />
+      <TextBlock Text="{Binding LabyrinthSettings.PasswordLabel}" /><TextBox Name="PasswordInput" PasswordChar="{Binding LabyrinthSettings.CredentialMask}" Text="{Binding LabyrinthSettings.Password, Mode=TwoWay}" />
       <TextBlock Text="{Binding LabyrinthSettings.CredentialsStatus}" TextWrapping="Wrap" FontSize="12" />
-      <Button Content="重新保存账号" Command="{Binding LabyrinthSettings.SaveCommand}" HorizontalAlignment="Left" />
+      <StackPanel Orientation="Horizontal" Spacing="8">
+       <Button Content="重新保存账号" Command="{Binding LabyrinthSettings.SaveCommand}" />
+       <Button Content="{Binding LabyrinthSettings.DeleteAccountText}" Command="{Binding LabyrinthSettings.DeleteAccountCommand}" />
+      </StackPanel>
      </StackPanel></Expander>
     </StackPanel>
     <TextBlock Name="BasicSettings" Text="目标公会与次数" FontSize="16" FontWeight="SemiBold" />
@@ -66,6 +82,9 @@
      <TextBlock Grid.Column="1" Text="{Binding LabyrinthSettings.Status}" TextWrapping="Wrap" VerticalAlignment="Center" />
     </Grid>
     <Expander Name="RerollSettings" Header="高级设置 · 刷开局与限制" IsExpanded="False"><StackPanel Spacing="10" Margin="0,8">
+     <TextBlock Text="观察间隔（毫秒）" /><ComboBox ItemsSource="{Binding LabyrinthSettings.ResponseIntervals}" SelectedItem="{Binding LabyrinthSettings.ResponseIntervalMs}" HorizontalAlignment="Stretch" />
+     <TextBlock Text="300 毫秒响应更快，500 毫秒减轻持续识别负担；下一次开始生效。" TextWrapping="Wrap" FontSize="12" />
+     <CheckBox Content="在后台检查游戏数据库更新（下一次任务使用）" IsChecked="{Binding LabyrinthSettings.AutoDatabaseUpdate}" />
      <CheckBox Content="启用刷开局：允许放弃不符合条件的开局" IsChecked="{Binding LabyrinthSettings.Reroll}" />
      <Grid ColumnDefinitions="*,*" ColumnSpacing="16"><StackPanel Spacing="6">
       <TextBlock Text="每局最多刷取次数" /><pcr:PcrCountInput Name="MaxAttemptsInput" DraftText="{Binding LabyrinthSettings.MaxAttempts, Mode=TwoWay}" Minimum="1" Maximum="100" Increment="1" FormatString="0" ParsingNumberStyle="Integer" ClipValueToMinMax="False" AutomationProperties.Name="每局最多刷取次数" />
@@ -87,6 +106,14 @@
      <TextBlock Text="愤怒巨龙 310103；炸脖龙 301701；究极守护者 319401；领主哥布林 315004；奇美拉 302501" TextWrapping="Wrap" FontSize="12" />
     </StackPanel></Expander>
     <Expander Name="TeamSettings" Header="高级队伍策略" IsExpanded="False"><StackPanel Spacing="10" Margin="0,8">
+     <Button Name="RoleRatingsButton" Content="编辑个人角色评分" Click="RatingsClick" HorizontalAlignment="Left" />
+     <TextBlock Text="特别装备" /><ComboBox ItemsSource="{Binding LabyrinthSettings.SpecialEquipmentModes}" SelectedItem="{Binding LabyrinthSettings.SpecialEquipmentMode}" HorizontalAlignment="Stretch" />
+     <StackPanel Orientation="Horizontal" Spacing="16">
+      <CheckBox Content="普通战" IsChecked="{Binding LabyrinthSettings.SpecialEquipmentNormal}" />
+      <CheckBox Content="EX 战" IsChecked="{Binding LabyrinthSettings.SpecialEquipmentEx}" />
+      <CheckBox Content="Boss 战" IsChecked="{Binding LabyrinthSettings.SpecialEquipmentBoss}" />
+     </StackPanel>
+     <TextBlock Text="自动装备只在编组完成后执行；没有可装备内容时取消并继续。" TextWrapping="Wrap" FontSize="12" />
      <TextBlock Text="Boss 编组" /><ComboBox ItemsSource="{Binding LabyrinthSettings.BossModes}" SelectedItem="{Binding LabyrinthSettings.BossMode}" HorizontalAlignment="Stretch" />
      <CheckBox Content="Boss 偏好纯物理或纯魔法伤害体系" IsChecked="{Binding LabyrinthSettings.PreferPureBossDamageSystem}" />
      <CheckBox Content="单队 Boss 失败后允许切换多队" IsChecked="{Binding LabyrinthSettings.SingleBossFallbackToMultiAfterThreeFailures}" />

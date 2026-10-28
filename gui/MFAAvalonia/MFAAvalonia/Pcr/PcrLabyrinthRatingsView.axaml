@@ -1,0 +1,51 @@
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:pcr="clr-namespace:MFAAvalonia.Pcr" x:Class="MFAAvalonia.Pcr.PcrLabyrinthRatingsView"
+ x:DataType="pcr:PcrLabyrinthRatingsDraft" Title="角色个人评分" Width="840" Height="760"
+ MinWidth="620" MinHeight="480" WindowStartupLocation="CenterOwner">
+ <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20" RowSpacing="12">
+  <StackPanel Spacing="6"><TextBlock Text="角色个人评分" FontSize="22" FontWeight="SemiBold" />
+   <TextBlock Text="个人评分优先用于选人和编组；未设置的角色沿用原评分。" TextWrapping="Wrap" />
+  </StackPanel>
+  <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
+   <TextBox Name="RatingSearch" Text="{Binding SearchQuery,Mode=TwoWay}" Watermark="搜索角色名、版本或 ID" AutomationProperties.Name="搜索角色名、版本或 ID" />
+   <CheckBox Grid.Column="1" Content="仅看已修改" IsChecked="{Binding ModifiedOnly,Mode=TwoWay}" />
+   <TextBlock Grid.Column="2" Text="{Binding ResultCount}" VerticalAlignment="Center" />
+  </Grid>
+  <Grid Grid.Row="2" ColumnDefinitions="*,250" ColumnSpacing="16">
+   <ListBox Name="RatingRows" ItemsSource="{Binding VisibleRows}" SelectedItem="{Binding Selected,Mode=TwoWay}" AutomationProperties.Name="角色评分列表">
+    <ListBox.ItemTemplate><DataTemplate x:DataType="pcr:PcrLabyrinthRatingRow">
+     <Grid ColumnDefinitions="56,*" ColumnSpacing="12" Margin="3,6">
+      <Border Width="56" Height="56" CornerRadius="7" BorderThickness="1" BorderBrush="{DynamicResource SukiBorderBrush}">
+       <Image Source="{Binding Icon}" Width="50" Height="50" Stretch="Uniform" AutomationProperties.Name="{Binding Name,StringFormat='角色头像：{0}'}" />
+      </Border>
+      <StackPanel Grid.Column="1" Spacing="3"><TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+       <TextBlock Text="{Binding Id}" FontSize="11" Opacity="0.65" />
+       <TextBlock Text="{Binding PersonalScore,StringFormat='我的评分：{0}'}" FontSize="12" TextWrapping="Wrap" />
+      </StackPanel>
+     </Grid>
+    </DataTemplate></ListBox.ItemTemplate>
+   </ListBox>
+   <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+   <StackPanel Spacing="10" IsEnabled="{Binding HasSelection}">
+    <TextBlock Text="{Binding Selected.Name,FallbackValue=请在左侧选择角色}" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap" />
+    <TextBlock Text="{Binding Selected.Detail}" TextWrapping="Wrap" />
+    <TextBlock Text="{Binding Selected.OriginalScoreText,StringFormat='原评分：{0}'}" />
+    <TextBlock Text="{Binding Selected.PersonalScore,StringFormat='我的评分：{0}'}" TextWrapping="Wrap" />
+    <TextBlock Text="我的评分（0–100）" />
+    <TextBox Name="RatingScoreInput" Text="{Binding ScoreInput,Mode=TwoWay}" MaxLength="12" AutomationProperties.Name="我的评分，0至100整数" />
+    <Button Name="ApplyRatingButton" Content="应用评分" Click="ApplyRating" HorizontalAlignment="Stretch" />
+    <Button Name="RestoreRatingButton" Content="恢复此角色原评分" Click="RestoreRating" HorizontalAlignment="Stretch" />
+    <TextBlock Text="{Binding ErrorMessage}" TextWrapping="Wrap" Foreground="{DynamicResource SukiPrimaryColor}" />
+   </StackPanel></ScrollViewer>
+  </Grid>
+  <Grid Grid.Row="3" RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+   <TextBlock Text="先点“应用评分”加入草稿，再点“保存评分”。取消会丢弃本窗口的修改。" TextWrapping="Wrap" FontSize="12" />
+   <TextBlock Grid.Row="1" Name="RatingsSaveError" TextWrapping="Wrap" Foreground="{DynamicResource SukiPrimaryColor}" />
+   <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+    <Button Name="ResetRatingsButton" Content="恢复全部原评分" Click="ResetRatings" HorizontalAlignment="Left" />
+    <Button Grid.Column="1" Name="CancelRatingsButton" Content="取消" Click="CancelRatings" />
+    <Button Grid.Column="2" Name="SaveRatingsButton" Content="保存评分" Click="SaveRatings" />
+   </Grid>
+  </Grid>
+ </Grid>
+</Window>

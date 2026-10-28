@@ -16,6 +16,7 @@ SCREEN=Path(__file__).resolve().parents[1]/'.runtime/acceptance-after109/.runtim
 def test_imprint_initial_and_between_join_background_waits_without_old_purchase_replay(monkeypatch,choice):
     batch,stamp=harness();clock=[0.]
     monkeypatch.setattr(scenes,'time',NS(monotonic=lambda:clock[0]))
+    monkeypatch.setattr('pcr_maa.native.active_now',scenes.time.monotonic)
     pages=[('shop',{}),('free_role_reward',{}) if choice else ('joined',{'role':'1'}),
            ('joined',{'role':'1'}),('shop',{}),('joined',{'role':'2'}),('shop',{})] if choice else [
            ('shop',{}),('joined',{'role':'1'}),('shop',{})]
@@ -41,6 +42,7 @@ def test_imprint_initial_and_between_join_background_waits_without_old_purchase_
 def test_shop_without_any_join_expires_original_budget_and_has_no_input(monkeypatch):
     batch,stamp=harness();clock=[0.]
     monkeypatch.setattr(scenes,'time',NS(monotonic=lambda:clock[0]))
+    monkeypatch.setattr('pcr_maa.native.active_now',scenes.time.monotonic)
     monkeypatch.setattr(autoplay,'_poll_pause',lambda *a:clock.__setitem__(0,clock[0]+.5))
     runtime=Runtime([('shop',{})]);runtime.tasker=NS()
     shop=shops.MaaShop.__new__(shops.MaaShop)

@@ -70,9 +70,10 @@ class TeamRecognition(CustomRecognition):
         except Exception:return None
 
 class MaaTeam:
-    def __init__(self,tasker,stamp,roster=None,*,optimizer=None,timings=None,characters=None,failed_teams=(),retry_number=0,last_failed_team=None):
+    def __init__(self,tasker,stamp,roster=None,*,optimizer=None,timings=None,characters=None,failed_teams=(),retry_number=0,last_failed_team=None,combat_kind=None):
         self.failed_teams=tuple(tuple(sorted(team)) for team in failed_teams);self.retry_number=retry_number;self.last_failed_team=last_failed_team
         self.tasker,self.stamp,self.roster=tasker,stamp,tuple(roster or ())
+        self.combat_kind=combat_kind
         self._characters=characters;self._optimizer_supplied=optimizer is not None;self.pages={};self.boss_teams={};self.boss_all_teams={}
         self.optimizer=optimizer or load_optimizer();self.timings=timings or Timings();self.attempted=set();self.prepared={};self.started=set()
     def _read(self):
@@ -114,6 +115,10 @@ class MaaTeam:
         if selected!=desired:raise BatchStopped('team_readback_unknown')
         batch.checkpoint();selected,receipt=self._read()
         if selected!=desired:raise BatchStopped('team_readback_unknown')
+        equipment=self._equipment(batch,enter_id,block_id,desired,page='battle')
+        if equipment:
+            actual,receipt=self.characters.read(batch,'battle',roster=self.roster)
+            if actual['selected']!=desired or any(not c['trusted'] for c in actual['members']):raise BatchStopped('team_readback_unknown')
         self.prepared[key]=desired
         return self.stamp(enter_id=enter_id,block_id=block_id,team=desired,native=receipt)
     def _start_legacy(self,batch,enter_id,block_id,read_result):
@@ -131,8 +136,11 @@ class MaaTeam:
                 if not resource.override_pipeline({node:original}):raise BatchStopped('team_guard_restore_failed')
             return self.stamp(operation_id=oid,**fields,native=receipt,input_native=receipt,input_action_verified=True)
         clicked=batch.transaction('battle_start',fields,send)
+        if getattr(self,'combat_kind',None)=='NORMAL':
+            from .special_equipment import applies,equipment_runtime
+            if applies(getattr(getattr(batch,'settings',None),'strategy',None),'NORMAL'):equipment_runtime(self.tasker).last_normal_team=tuple(sorted(desired))
         batch.checkpoint();result=read_result(enter_id,block_id)
-        if not isinstance(result,dict) or result.get('verified') is not True or result.get('outcome') not in ('won','defeated') or result.get('enter_id')!=enter_id or result.get('block_id')!=block_id:raise BatchStopped('battle_result_unknown')
+        if not isinstance(result,dict) or result.get('verified') is not True or result.get('outcome') not in ('won','defeated','revived') or result.get('enter_id')!=enter_id or result.get('block_id')!=block_id:raise BatchStopped('battle_result_unknown')
         return batch.observation(self.stamp(operation_id=clicked['operation_id'],**fields,battle_finished=True,outcome=result['outcome'],native=result,input_native=clicked['input_native']),**fields)
 
 
@@ -140,7 +148,12 @@ class MaaTeam:
     def characters(self):
         if self._characters is None:
             from .character_recognition import MaaCharacters
-            self._characters=MaaCharacters(self.tasker,timings=self.timings)
+            from .scene import runtime_resource
+            resource=runtime_resource(self.tasker)
+            self._characters=getattr(resource,'_labyrinth_team_characters',None)
+            if self._characters is None:
+                self._characters=MaaCharacters(self.tasker,timings=self.timings)
+                resource._labyrinth_team_characters=self._characters
         return self._characters
 
     def _configured(self,batch):
@@ -205,6 +218,9 @@ class MaaTeam:
                 if remaining==pool:raise
                 pool=remaining
                 continue
+            equipment=self._equipment(batch,enter_id,block_id,desired,page='battle')
+            if equipment:actual,receipt=self.characters.read(batch,'battle',roster=self.roster)
+            if actual['selected']!=desired or any(not c['trusted'] for c in actual['members']):raise BatchStopped('team_readback_unknown')
             self.prepared[key]=desired;self.pages[key]='battle'
             return self.stamp(source='maa',enter_id=enter_id,block_id=block_id,team=desired,native=receipt)
 
@@ -232,6 +248,9 @@ class MaaTeam:
                 for index,desired in enumerate(all_teams,1):
                     if observation['boss_tab']!=index:observation=nav.move(batch,enter_id,'boss',observation,tab=index,block_id=block_id)
                     observation,receipt=self._edit(batch,enter_id,block_id,'boss',desired,observation)
+                    equipment=self._equipment(batch,enter_id,block_id,desired,page='boss',boss_tab=index)
+                    if equipment:observation,receipt=characters.read(batch,'boss',roster=self.roster)
+                    if observation['selected']!=desired or observation['boss_tab']!=index or any(not c['trusted'] for c in observation['members']):raise BatchStopped('team_readback_unknown')
                     receipts.append(receipt)
             except CharacterNotFound as missing:
                 remaining=tuple(role for role in pool if role not in missing.targets)
@@ -245,6 +264,14 @@ class MaaTeam:
             self.prepared[key]=teams[0];self.pages[key]='boss';self.boss_teams[key]=teams;self.boss_all_teams[key]=all_teams
             return self.stamp(source='maa',enter_id=enter_id,block_id=block_id,team=teams[0],teams=teams,
                 selected_teams_verified=True,safe_count=plan.safe_count,plan_reason=plan.reason,native=receipt,team_native=receipts)
+
+    def _equipment(self,batch,enter_id,block_id,desired,*,page,boss_tab=None):
+        from .special_equipment import applies,equipment_runtime
+        kind=getattr(self,'combat_kind',None)
+        if not applies(getattr(getattr(batch,'settings',None),'strategy',None),kind) or not desired:return False
+        self.characters
+        return equipment_runtime(self.tasker).equip(batch,self.stamp,enter_id,block_id,kind,desired,
+            page=page,roster=self.roster,boss_tab=boss_tab)
 
     def failed_signatures(self,enter_id,block_id):
         key=(enter_id,block_id)
@@ -279,6 +306,9 @@ class MaaTeam:
             _,receipt=self.characters.run('StartOnce',params,input=True)
             return self.stamp(operation_id=oid,**fields,native=receipt,input_native=receipt,input_action_verified=True)
         clicked=batch.transaction('battle_start',fields,send)
+        if getattr(self,'combat_kind',None)=='NORMAL':
+            from .special_equipment import applies,equipment_runtime
+            if applies(getattr(getattr(batch,'settings',None),'strategy',None),'NORMAL'):equipment_runtime(self.tasker).last_normal_team=tuple(sorted(desired))
         batch.checkpoint();result=read_result(enter_id,block_id)
-        if not isinstance(result,dict) or result.get('verified') is not True or result.get('outcome') not in ('won','defeated') or result.get('enter_id')!=enter_id or result.get('block_id')!=block_id:raise BatchStopped('battle_result_unknown')
+        if not isinstance(result,dict) or result.get('verified') is not True or result.get('outcome') not in ('won','defeated','revived') or result.get('enter_id')!=enter_id or result.get('block_id')!=block_id:raise BatchStopped('battle_result_unknown')
         return batch.observation(self.stamp(operation_id=clicked['operation_id'],**fields,battle_finished=True,outcome=result['outcome'],native=result,input_native=clicked['input_native']),**fields)

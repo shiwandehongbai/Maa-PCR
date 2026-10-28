@@ -4,11 +4,11 @@
 
 ## 版本与发布边界
 
-当前发行元数据基线为 **v0.1.19 / R66**，Python 元数据为 `0.1.19`，精确增量基线为正式 v0.1.18 / R65。候选保持 release_staging / distribution_ready=false，验收绑定精确 CI 载荷后封装发布。已安装版本以安装目录的 manifest 为准。
+当前发行元数据基线为 **v0.1.20 / R67**，Python 元数据为 `0.1.20`，精确增量基线为正式 v0.1.19 / R66。候选保持 release_staging / distribution_ready=false，验收绑定精确 CI 载荷后封装发布。已安装版本以安装目录的 manifest 为准。
 
-R65→R66 精确补丁仅适用于正式 R65。其他较低修订号由维护器核验完整包和旧程序文件后保数据更新。通过软件内“检查更新”或离线导入入口更新，不解压覆盖安装。
+R66→R67 精确补丁仅适用于正式 R66。其他较低修订号由维护器核验完整包和旧程序文件后保数据更新。通过软件内“检查更新”或离线导入入口更新，不解压覆盖安装。
 
-正式 R65 清单 SHA-256：`64cee56fb55858feac9daa73997ccf2eac66d6a1ad251065f040a3a146c0d698`。
+正式 R66 清单 SHA-256：`68f18726b9828d6b1040b067b8b23325c6553d1a198c5466d2a2631d82d9c58b`。
 
 - `pyproject.toml` 是 Python 项目的版本元数据。
 - `scripts/build_release.py` 的 `--version`、`--revision` 决定候选包身份；当前默认值对应上述源码版本，不代表修改后的源码已经正式验收。
@@ -16,7 +16,7 @@ R65→R66 精确补丁仅适用于正式 R65。其他较低修订号由维护器
 - `delivery/acceptance.json` 只证明其中修订号对应的精确提交和载荷。新改动不得借用旧验收晋级；后续正式发行需要新的修订号、候选及受影响验证。
 - 已发布范围见 [发布说明](RELEASE_STATUS.md)，历史记录保留当时的版本，不批量替换。
 
-R66 删除正式单关试打选项，并在 GUI 与 Agent 启动授权前拒绝旧选择。新包绑定本版 CI 和升级验收；已有游戏验证边界继续保留，不放开同修订号覆盖。
+R67 整合半截卡片、开局衔接修复和全部 11 组上游功能。新包绑定本版 CI 和升级验收；已有真实游戏验证边界保持，旧验收和跳过项不能代替本版结果。
 
 ## 当前整合范围
 
@@ -37,7 +37,7 @@ python -X utf8 -B scripts/verify.py all
 ```
 
 - `public` 使用 `scripts.public_test_policy`，明确排除 `private_replay`，不要求 .NET。
-- `gui` 校验 SDK 精确版本，依次离线锁定恢复、Release 构建桌面程序，运行 `PcrUpdate.Tests`、`PcrProfileSwitch.Tests`（包括 owner 契约）和 `PcrLabyrinthCredentials.Tests`。每组检查使用的 Core 哈希必须与桌面构建一致。
+- `gui` 校验 SDK 精确版本，依次离线锁定恢复、Release 构建桌面程序，运行 `PcrUpdate.Tests`、`PcrProfileSwitch.Tests`（包括 owner 契约）、`PcrLabyrinthCredentials.Tests`、`PcrLabyrinthAccounts.Tests` 和 `PcrLabyrinthRatings.Tests`。后两组覆盖账号迁移、隔离保存及评分窗口。每组检查使用的 Core 哈希必须与桌面构建一致。
 - `all` 执行上述两组；前置条件或任一步失败就停止并返回非零退出码。`passed` 只表示所选范围的命令成功，不把跳过、未选中或缺失的私有回放计作通过。
 
 入口固定使用所在 checkout 作为源码根目录，不依赖调用方当前目录。通过 `--dotnet` 指定 SDK 可执行文件，通过 `--nuget-cache` 指定已有包缓存；不指定时分别使用 PATH 和 `NUGET_PACKAGES`（未设置则为用户 `.nuget/packages`）。入口不安装依赖、不联网恢复、不打包、不连接设备、不复制到玩家安装。缺依赖时先按锁文件单独准备环境，再重新运行。

@@ -16,6 +16,13 @@ ROOT = Path(__file__).resolve().parents[2]
 RESOURCE = ROOT / "assets/resource"
 RUNTIME = ROOT / ".runtime"
 RUN_DEADLINE = ContextVar('inspection_deadline', default=float('inf'))
+RUN_CONTROL = ContextVar('owner_run_control', default=None)
+
+
+def active_now():
+    """Business budgets exclude only pauses acknowledged at a safe boundary."""
+    control = RUN_CONTROL.get()
+    return control.now() if control is not None else time.monotonic()
 
 
 def setup():
@@ -29,9 +36,9 @@ def setup():
 
 
 def wait_job(job, *, seconds=30):
-    deadline = min(time.monotonic() + seconds, RUN_DEADLINE.get())
+    deadline = min(active_now() + seconds, RUN_DEADLINE.get())
     while not job.done:
-        if time.monotonic() >= deadline:
+        if active_now() >= deadline:
             raise TimeoutError(f'Native job exceeded {seconds} seconds or inspection deadline')
         time.sleep(0.05)
     return job
@@ -263,9 +270,13 @@ def require_native_input(receipt, action_nodes):
 
 
 def run(tasker, entry, *, reset_hits=()):
+    control = RUN_CONTROL.get()
+    if control is not None:
+        control.before_dispatch(tasker, entry)
     if isinstance(tasker, ContextTasker):
         try:
-            detail = tasker.run_task(entry, deadline=RUN_DEADLINE.get(), reset_hits=reset_hits)
+            remaining = max(0, RUN_DEADLINE.get() - active_now())
+            detail = tasker.run_task(entry, deadline=time.monotonic() + remaining, reset_hits=reset_hits)
             receipt = _receipt(detail, native_ok=bool(detail and detail.status.succeeded),
                                tasker_inited=tasker.inited,
                                task_id=detail.task_id if detail else None,
@@ -280,7 +291,7 @@ def run(tasker, entry, *, reset_hits=()):
         return receipt
     if tasker_blocked(tasker):
         raise RuntimeError('Native tasker stopped or blocked; outcome unknown, no retry')
-    if time.monotonic() >= RUN_DEADLINE.get():
+    if active_now() >= RUN_DEADLINE.get():
         if reset_hits and hasattr(tasker, '_labyrinth_input_evidence'):
             raise NativeInputNotSent(dict(input_execution='not_sent',
                 pre_input_validation_failed=True, reason='native_deadline_before_dispatch'))
@@ -294,9 +305,9 @@ def run(tasker, entry, *, reset_hits=()):
     proof = _InputEvidence(tasker, entry).open()
     try:
         job = tasker.post_task(entry)
-        deadline = min(time.monotonic() + 90, RUN_DEADLINE.get())
+        deadline = min(active_now() + 90, RUN_DEADLINE.get())
         while not job.done:
-            if time.monotonic() >= deadline:
+            if active_now() >= deadline:
                 raise RuntimeError('Native task exceeded 90 seconds or inspection deadline')
             time.sleep(0.05)
         detail = job.get()
@@ -327,7 +338,7 @@ def run(tasker, entry, *, reset_hits=()):
 
 
 def _check_receipt(tasker):
-    if time.monotonic() >= RUN_DEADLINE.get():
+    if active_now() >= RUN_DEADLINE.get():
         raise RuntimeError('Receipt deadline exceeded; outcome unknown, no retry')
     if isinstance(tasker, ContextTasker):
         tasker._check_ready()

@@ -54,6 +54,9 @@ internal static class PcrLogFiles
         foreach (var file in Files(root, area + "runs", true))
         {
             var relative = Path.GetRelativePath(Path.Combine(root, area + "runs"), file).Split(Path.DirectorySeparatorChar);
+            if (relative.Length == 3 && RunId.IsMatch(relative[0]) && relative[1] == "diagnostics"
+                && (relative[2] is "environment.json" or "runtime-history.ndjson" or "state-history.ndjson" or "state-latest.json")
+                && File.GetLastWriteTimeUtc(file) >= nativeCutoffUtc) yield return file;
             if (relative.Length == 4 && RunId.IsMatch(relative[0]) && relative[1] == "native" && relative[2] == "maa"
                 && (relative[3].Equals("maafw.log", StringComparison.OrdinalIgnoreCase) || MaaBackupName.IsMatch(relative[3]))
                 && File.GetLastWriteTimeUtc(file) >= nativeCutoffUtc) yield return file;

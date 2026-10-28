@@ -30,6 +30,7 @@ def test_owned_acquisition_map_background_waits_for_actual_joined_without_input(
   return Scene(kind,native_receipt(),dict(area=2) if kind=='map' else {})
  runtime=NS(tasker=NS(),stamp=stamp,observe=observe,perform=lambda *a,**k:pytest.fail('MAP is pure waiting'))
  monkeypatch.setattr(scene,'time',NS(monotonic=lambda:clock[0]))
+ monkeypatch.setattr('pcr_maa.native.active_now',scene.time.monotonic)
  def pause(*args):pauses.append(1);clock[0]+=.25
  monkeypatch.setattr(autoplay,'_poll_pause',pause)
  actual=scene.MaaSceneRuntime.wait_for(runtime,batch,{'joined','event_animation'},source=source,timeout=12,acquisition_fields=dict(source='maa',enter_id=148,reward_id='20302:role_reward:1'))
@@ -44,6 +45,7 @@ def test_owned_acquisition_map_keeps_original_total_deadline_and_zero_inputs(mon
  def observe(**kw):reads.append(1);return Scene('map',native_receipt(),dict(area=2))
  runtime=NS(tasker=NS(),stamp=stamp,observe=observe,perform=lambda *a,**k:pytest.fail('no MAP advancement'))
  monkeypatch.setattr(scene,'time',NS(monotonic=lambda:clock[0]))
+ monkeypatch.setattr('pcr_maa.native.active_now',scene.time.monotonic)
  monkeypatch.setattr(autoplay,'_poll_pause',lambda *a:clock.__setitem__(0,clock[0]+1))
  with pytest.raises(BatchStopped,match='^role_reward_readback_unknown$'):
   scene.MaaSceneRuntime.wait_for(runtime,batch,{'joined'},source='role_reward',timeout=budget,reason='role_reward_readback_unknown',acquisition_fields=dict(source='maa',enter_id=148))
@@ -256,6 +258,7 @@ def event_retry_harness(monkeypatch,following='map'):
  captured=[];adapter.capture=lambda:captured.append(1) or (dict(current),{})
  selected=[];adapter.tasker=NS(resource=NS(override_pipeline=lambda nodes:selected.append(nodes['LabyEventSelectGuard']['custom_recognition_param']['slot']) or True))
  clock=[0];monkeypatch.setattr(events,'time',NS(monotonic=lambda:clock[0]))
+ monkeypatch.setattr('pcr_maa.native.active_now',events.time.monotonic)
  monkeypatch.setattr(events,'configured_optimizer',lambda _:NS(profiles={}))
  monkeypatch.setattr(events.native,'run',lambda *a,**k:dict(native_ok=True,nodes=[dict(name='LabyEventSelectOnce',completed=True,action=dict(success=True))]))
  same=Scene('event',{},dict(event=dict(event_id=1314,trusted=True)))
@@ -299,6 +302,7 @@ def test_fixed_upstream_event_all_choices_retired_never_resends(monkeypatch):
  adapter,batch,current,selected,captured,waits=event_retry_harness(monkeypatch)
  from pcr_maa.labyrinth import event_execution as events
  clock=[0];monkeypatch.setattr(events,'time',NS(monotonic=lambda:clock[0]))
+ monkeypatch.setattr('pcr_maa.native.active_now',events.time.monotonic)
  same=Scene('event',{},dict(event=dict(event_id=1314,trusted=True)))
  def wait_for(b,allowed,**kw):
   clock[0]+=6;assert kw['accept'](same);return same

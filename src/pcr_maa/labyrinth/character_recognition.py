@@ -626,7 +626,8 @@ def detect_grid(frame,viewport,*,card_size=130,pitch=141,row_pitch=141,max_colum
 
         if a<=vy+card_size*.08 and z-a<card_size*.88:start=z-card_size
 
-        elif z>=vy+vh-card_size*.08 and z-a<card_size*.88:start=a
+        # Selection shading can hide the top of a clipped row from the projection.
+        elif z>=vy+vh-card_size*.08 and z-a<card_size*.88:start=normalized[-1]+row_pitch if normalized else a
 
         else:start=(a+z)//2-card_size//2
 
@@ -1080,31 +1081,13 @@ class CharacterRecognizer:
 
             x,y,w,h=box;vx,vy,vw,vh=viewport
 
-            clipped_top=max(0,vy-y);visible=min(y+h,vy+vh)-max(y,vy)
-
             selected=opening_marker(frame,box)>=.72 if page=='opening' else battle_marker(frame,box)>=.45
 
-            recognition_box=box
+            icon=(x+6,y+6,w-14,w-14)
 
-            if page=='opening' and visible<h and scroll['can_scroll'] and scroll['position'] is not None:
+            clipped_top=max(0,vy-y);visible=min(y+h,vy+vh)-max(y,vy)
 
-                fallback_rows=(162,303,443) if scroll['position']>=.95 else (188,329,471) if scroll['position']>=.65 else ()
-
-                fallback_x=(81,223,363,505,646,787,929,1070)
-
-                if fallback_rows:
-
-                    fy=min(fallback_rows,key=lambda value:abs(value-y));fx=min(fallback_x,key=lambda value:abs(value-x))
-
-                    if abs(fy-y)<=w/4 and abs(fx-x)<=w/4:recognition_box=(fx,fy,w,h)
-
-            rx,ry,rw,rh=recognition_box
-
-            icon=(rx+6,ry+6,rw-14,rw-14)
-
-            clipped_top=max(0,vy-ry);visible=min(ry+rh,vy+vh)-max(ry,vy)
-
-            attribute=card_attribute(frame,recognition_box) if (page in ('battle','boss') or not selected) and (visible==h or page in ('battle','boss') and ry+rh<=vy+vh) else None
+            attribute=card_attribute(frame,box) if (page in ('battle','boss') or not selected) and (visible==h or page in ('battle','boss') and y+h<=vy+vh) else None
 
             mask=IconMask(right=True,top_left=True,top_right=page=='opening' and selected,
 
@@ -1124,11 +1107,17 @@ class CharacterRecognizer:
 
             cached=old.get(slots[box])
 
-            if page=='opening' and selected and cached and cached['trusted']:
+            if page=='opening' and selected:
 
-                for key in ('character_id','name','variant','confidence','rival_confidence','rival_margin','trusted','candidates','unit_icon_id'):
+                if cached and cached['trusted']:
 
-                    item[key]=cached[key]
+                    for key in ('character_id','name','variant','confidence','rival_confidence','rival_margin','trusted','candidates','unit_icon_id'):
+
+                        item[key]=cached[key]
+
+                elif visible<h:
+                    # Shading and clipping cannot establish a new portrait identity.
+                    item.update(character_id=None,name=None,variant=None,unit_icon_id=None,trusted=False)
 
             cards.append(item)
 
@@ -1656,7 +1645,7 @@ class MaaCharacters:
         node=self.namespace+suffix;resource=self.tasker.resource;original=resource.get_node_data(node)
 
         if suffix=='FilterStable':
-            params=dict(params,freeze_timeout_ms=max(0,int(min(2500,(native.RUN_DEADLINE.get()-time.monotonic())*1000))))
+            params=dict(params,freeze_timeout_ms=max(0,int(min(2500,(native.RUN_DEADLINE.get()-native.active_now())*1000))))
         changes=dict(custom_recognition_param=params)
 
         if suffix=='ScrollOnce':
@@ -1730,21 +1719,21 @@ class MaaCharacters:
 
         from .. import native
 
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+timeout)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+timeout)
 
         while True:
 
-            if time.monotonic()>=deadline:raise BatchStopped('character_feedback_unknown')
+            if native.active_now()>=deadline:raise BatchStopped('character_feedback_unknown')
 
             token=native.RUN_DEADLINE.set(deadline)
 
             try:
                 observation,receipt=self.read(batch,page,roster=roster,stable=False,**({'members_only':True} if members_only else {}))
                 batch.checkpoint()
-                if time.monotonic()>=deadline:raise BatchStopped('character_feedback_unknown')
+                if native.active_now()>=deadline:raise BatchStopped('character_feedback_unknown')
                 accepted=observation['stable'] and predicate(observation)
                 batch.checkpoint()
-                if time.monotonic()>=deadline:raise BatchStopped('character_feedback_unknown')
+                if native.active_now()>=deadline:raise BatchStopped('character_feedback_unknown')
                 if accepted:return observation,receipt
             finally:native.RUN_DEADLINE.reset(token)
 
@@ -1756,7 +1745,7 @@ class MaaCharacters:
 
         from .. import native
 
-        deadline=min(native.RUN_DEADLINE.get(),time.monotonic()+timeout)
+        deadline=min(native.RUN_DEADLINE.get(),native.active_now()+timeout)
         timeout_reason='character_stability_unknown' if stable else 'character_readback_unknown'
         last_error=None
 
@@ -1764,7 +1753,7 @@ class MaaCharacters:
 
             batch.checkpoint()
 
-            if time.monotonic()>=deadline:raise BatchStopped(timeout_reason) from last_error
+            if native.active_now()>=deadline:raise BatchStopped(timeout_reason) from last_error
 
             token=native.RUN_DEADLINE.set(deadline)
 
@@ -1792,7 +1781,7 @@ class MaaCharacters:
 
             batch.checkpoint()
 
-            if time.monotonic()>=deadline:raise BatchStopped(timeout_reason) from last_error
+            if native.active_now()>=deadline:raise BatchStopped(timeout_reason) from last_error
 
             if not stable or observation['stable']:return observation,receipt
 
@@ -1849,7 +1838,7 @@ class CharacterNavigation:
                 input_action_verified=True,client_page_verified=False)
         import time
         from .. import native
-        token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),time.monotonic()+12)) if filter is not None else None
+        token=native.RUN_DEADLINE.set(min(native.RUN_DEADLINE.get(),native.active_now()+12)) if filter is not None else None
         try:
             clicked=batch.transaction(kind,fields,send)
             if filter is not None:
