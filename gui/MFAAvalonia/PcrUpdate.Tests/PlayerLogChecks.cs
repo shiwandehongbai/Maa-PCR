@@ -109,6 +109,7 @@ internal static class PlayerLogChecks
             finally { window.Close(); Dispatcher.UIThread.RunJobs(); }
         }
         CheckLifecycle(owner);
+        CheckRunHandoff(owner);
         Console.WriteLine($"PCR player log checks passed: {count}; cache/ZIP <=16MiB, isolation, redaction, stale output, three rendered profiles, awaitable cleanup; game inputs=0; messages sent=0");
     }
     private static void CheckFeedback(PcrLiveLogView view,TaskQueueViewModel vm,string root,string id)
@@ -157,6 +158,59 @@ internal static class PlayerLogChecks
         {
             dialog?.Close();Dispatcher.UIThread.RunJobs();
             foreach(var pair in previous)pair.Key.SetValue(null,pair.Value);
+        }
+    }
+    private static void CheckRunHandoff(Func<string,TaskQueueViewModel> owner)
+    {
+        var finalize=typeof(MaaProcessor).GetMethod("FinalizePcrRunAsync",Hidden)!;
+        foreach(var id in new[]{"pcr-alpha-v1",PcrClanGuide.ProfileId})
+        foreach(var status in new[]{MFATask.MFATaskStatus.SUCCEEDED,MFATask.MFATaskStatus.FAILED,MFATask.MFATaskStatus.STOPPED})
+        foreach(var restartOnUnlock in new[]{true,false})
+        {
+            var vm=owner(id);var processor=vm.Processor;
+            foreach(var field in new[]{"_agentContexts","_screenshotTaskerInitLock","_liveViewScreencapJobLock","_detachedScreenshotTaskersLock","_detachedScreenshotTaskers"}) New(processor,field);
+            Call(vm,"BeginPcrRunFeedback");Dispatcher.UIThread.RunJobs();
+            var oldLog=Property(vm,"PlayerLog")!;
+            vm.IsRunning=true;vm.PcrCleanupPending=true;Set(processor,"_isTaskRunActive",1);
+            object? newLog=null;bool? oldLogClosedAtUnlock=null;string? oldErrorAtUnlock=null;
+            void Restart()
+            {
+                Call(vm,"BeginPcrRunFeedback");newLog=Property(vm,"PlayerLog");
+                Set(processor,"_isTaskRunActive",1);vm.IsRunning=true;vm.PcrCleanupPending=false;
+            }
+            System.ComponentModel.PropertyChangedEventHandler unlocked=(_,e)=>
+            {
+                if(!restartOnUnlock||e.PropertyName!=nameof(vm.PcrCleanupPending)||vm.PcrCleanupPending||newLog!=null)return;
+                oldLogClosedAtUnlock=(bool)Property(oldLog,"IsFinished")!;oldErrorAtUnlock=vm.PcrStartError;
+                Restart();
+            };
+            vm.PropertyChanged+=unlocked;
+            try
+            {
+                // Keep the UI queue paused until cleanup has posted its completion callbacks.
+                Task.Run(async()=>await (Task)finalize.Invoke(processor,[status])!).WaitAsync(TimeSpan.FromSeconds(15)).GetAwaiter().GetResult();
+                if(!restartOnUnlock)Restart();
+                Dispatcher.UIThread.RunJobs();
+                var label=id+status+restartOnUnlock;
+                Check(newLog!=null,"restart_reached:"+label);
+                Check(string.IsNullOrEmpty(vm.PcrStartError),"late_failure_does_not_replace_new_run_error:"+label);
+                Check(vm.IsRunning&&processor.IsTaskRunActive,"late_idle_does_not_stop_new_run:"+label);
+                Check(!(bool)Property(newLog!,"IsFinished")!,"late_finish_does_not_close_new_log:"+label);
+                var newText=File.ReadAllText(Path.Combine((string)Property(newLog!,"DirectoryPath")!,"events.log"));
+                Check(!newText.Contains("执行资源已释放")&&!newText.Contains("本次任务未完成"),"new_run_has_no_old_completion_text:"+label);
+                var oldManifest=JObject.Parse(File.ReadAllText(Path.Combine((string)Property(oldLog,"DirectoryPath")!,"manifest.json")));
+                Check((string?)oldManifest["outcome"]==(status==MFATask.MFATaskStatus.SUCCEEDED?"complete":status==MFATask.MFATaskStatus.FAILED?"failed":"stopped"),"old_log_keeps_its_terminal_outcome:"+label);
+                if(restartOnUnlock)
+                {
+                    Check(oldLogClosedAtUnlock==true,"log_closed_before_unlock:"+label);
+                    if(status==MFATask.MFATaskStatus.FAILED)Check(!string.IsNullOrEmpty(oldErrorAtUnlock),"failure_attached_before_unlock:"+label);
+                }
+            }
+            finally
+            {
+                vm.PropertyChanged-=unlocked;Set(processor,"_isTaskRunActive",0);vm.IsRunning=false;vm.PcrCleanupPending=false;
+                Call(vm,"FinishPlayerLog","stopped");Dispatcher.UIThread.RunJobs();
+            }
         }
     }
     private static void CheckLifecycle(Func<string,TaskQueueViewModel> owner)

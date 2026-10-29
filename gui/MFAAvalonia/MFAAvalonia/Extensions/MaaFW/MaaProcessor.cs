@@ -3580,15 +3580,17 @@ public class MaaProcessor
 
     private void EndTaskRun()
     {
+        var viewModel = ViewModel;
+        var feedbackRun = viewModel?.CurrentPcrFeedbackRun ?? 0;
         Interlocked.Exchange(ref _isTaskRunActive, 0);
         DispatcherHelper.PostOnMainThread(() =>
         {
-            if (ViewModel != null)
+            if (viewModel != null && feedbackRun == viewModel.CurrentPcrFeedbackRun)
             {
-                ViewModel.IsRunning = TaskQueue.Count > 0;
-                ViewModel.PcrCleanupPending = false;
+                viewModel.IsRunning = TaskQueue.Count > 0;
+                viewModel.PcrCleanupPending = false;
                 // IsRunning may already be false while the run was still active.
-                ViewModel.NotifyPcrDiagnosticBoundary();
+                viewModel.NotifyPcrDiagnosticBoundary();
                 MFAAvalonia.Pcr.PcrProfileRunGate.Notify();
             }
         });
@@ -4764,17 +4766,20 @@ public class MaaProcessor
 
     private async Task FinalizePcrRunAsync(MFATask.MFATaskStatus status)
     {
+        var viewModel = ViewModel;
+        var feedbackRun = viewModel?.CurrentPcrFeedbackRun ?? 0;
         if (MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled)
         {
-            ViewModel?.AddPcrLiveLog("任务已结束，正在释放执行资源…");
+            viewModel?.AddPcrLiveLog("任务已结束，正在释放执行资源…");
             // The command queue owns this cleanup; keep the run busy until exit is proved.
             await Task.Run(() => SetTasker(requireAllStopped: true));
         }
-        EndTaskRun();
-        if (status == MFATask.MFATaskStatus.FAILED && ViewModel is { PcrHasStartError: false } failedVm)
-            DispatcherHelper.PostOnMainThread(() => failedVm.ShowPcrStartError(failedVm.CurrentPcrFeedbackRun, "本次任务未完成，请查看本次实时日志。"));
-        ViewModel?.FinishPlayerLog(status == MFATask.MFATaskStatus.SUCCEEDED ? "complete"
+        if (status == MFATask.MFATaskStatus.FAILED && viewModel is { PcrHasStartError: false })
+            DispatcherHelper.PostOnMainThread(() => viewModel.ShowPcrStartError(feedbackRun, "本次任务未完成，请查看本次实时日志。"));
+        viewModel?.FinishPlayerLog(status == MFATask.MFATaskStatus.SUCCEEDED ? "complete"
             : status == MFATask.MFATaskStatus.FAILED ? "failed" : "stopped");
+        // Finish this run's diagnostics before another run can replace the log.
+        EndTaskRun();
     }
 
     private MaaJobStatus AbortCurrentTasker()
