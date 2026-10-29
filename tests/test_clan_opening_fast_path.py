@@ -32,7 +32,7 @@ def d4_plan():
 
 def replay(monkeypatch, plan, *, speed=2, initial=None, second=None, paused=None, fallback=True, direct=False, match_calls=None, match_times=None, legacy_failure=False):
     if not all(path.is_file() for path in (HUD90,HUD27,PAUSED)):
-        pytest.skip('local real D4 source frames unavailable')
+        pytest.skip('private real D4 source frames are not distributed')
     profile = load_calibration(plan)
     resource = native.load_resource()
     page = backend.ClanBattlePage(plan,profile)
@@ -91,6 +91,7 @@ def replay(monkeypatch, plan, *, speed=2, initial=None, second=None, paused=None
         stopped=native.stop_tasker(tasker);assert stopped['idle'] and stopped['stop_completed']
 
 
+@pytest.mark.private_replay
 def test_real_d4_hud_direct_match_has_only_start_input(monkeypatch):
     selected=d4_plan()
     receipt,clicks=replay(monkeypatch,selected,fallback=False,direct=True)
@@ -105,7 +106,10 @@ def test_real_d4_hud_direct_match_has_only_start_input(monkeypatch):
 
 
 @pytest.mark.parametrize('difference',['auto','set','speed','unknown_speed'])
+@pytest.mark.private_replay
 def test_real_hud_difference_falls_back_to_pause_without_live_settings_inputs(monkeypatch,difference):
+    if not all(path.is_file() for path in (HUD90, HUD27, PAUSED)):
+        pytest.skip('private real D4 source frames are not distributed')
     selected=d4_plan(); speed=2; initial=None
     if difference=='auto':selected['auto']=False
     elif difference=='set':selected['set_by_unit'][str(selected['unit_ids'][0])]=False
@@ -148,6 +152,7 @@ def test_formal_direct_match_skips_resume_and_keeps_speed_two(plan):
         auto=plan['auto'],battle_speed=2,remaining_seconds=34,same_frame=True,paused=False,
         opening_direct=True,opening_start_token='intent',frame_pixel_sha256='a'*64)
     port=NS(calibration={'version':2,'daily':{'execution':{'opening':{'battle_speed':2}}}},
+        action={'kind':'regular'},
         formal_opening=True,opening_paused=False,battle_speed=2,start_seconds=34,
         read_battle_settings=lambda initial:deepcopy(state),
         tasker=NS(resource=NS(override_pipeline=lambda _:pytest.fail('no setting input expected'))))
@@ -161,7 +166,7 @@ def test_formal_direct_match_skips_resume_and_keeps_speed_two(plan):
 
 def test_paused_dialog_with_initial_clock_never_matches_running_fast_path():
     if not HUD90.is_file() or not PAUSED.is_file():
-        pytest.skip('local real D4 source frames unavailable')
+        pytest.skip('private real D4 source frames are not distributed')
     selected=d4_plan();profile=load_calibration(selected)
     frame=native.read_image(PAUSED)
     frame[21:47,1080:1123]=native.read_image(HUD90)[21:47,1080:1123]
@@ -186,6 +191,7 @@ def test_paused_dialog_with_initial_clock_never_matches_running_fast_path():
         stopped=native.stop_tasker(tasker);assert stopped['idle'] and stopped['stop_completed']
 
 
+@pytest.mark.private_replay
 def test_simulation_direct_match_flows_to_result_without_menu(monkeypatch,tmp_path):
     from test_clan_battle_native import result_page_receipt
     selected=d4_plan()
@@ -213,6 +219,7 @@ def test_simulation_direct_match_flows_to_result_without_menu(monkeypatch,tmp_pa
     assert result['damage']==123 and result['result_verified'] is True
 
 
+@pytest.mark.private_replay
 def test_fallback_requires_first_ub_evidence_before_difference_toggle(monkeypatch):
     selected=d4_plan();selected['set_by_unit'][str(selected['unit_ids'][0])]=False
     receipt,clicks=replay(monkeypatch,selected)
@@ -228,7 +235,7 @@ def test_fallback_requires_first_ub_evidence_before_difference_toggle(monkeypatc
 
 def test_real_d4_125_hud_direct_match_has_only_start_input(monkeypatch):
     if not HUD25.is_file():
-        pytest.skip('local real D4 1:25 source frame unavailable')
+        pytest.skip('private real D4 1:25 source frame is not distributed')
     selected=d4_plan()
     receipt,clicks=replay(monkeypatch,selected,initial=native.read_image(HUD25),fallback=False,direct=True)
     native.require_native_input(receipt,('CBStart',))
@@ -328,7 +335,7 @@ D3_HUD28 = ROOT / 'bb8ca30d3569437c88d45450006efa7c/anchor-battle.png'
 @pytest.mark.parametrize('intro', [False, True])
 def test_start_pauses_on_real_d3_hud_without_expensive_running_match(monkeypatch, intro):
     if not D3_HUD28.is_file():
-        pytest.skip('local real D3 1:28 source frame unavailable')
+        pytest.skip('private real D3 1:28 source frame is not distributed')
     calls = []
     # The first sample is a real D4 1:30 intro when requested; the next is the
     # D3 1:28 frame on which the previous slow match delayed the actual pause.
@@ -349,7 +356,7 @@ def test_start_pauses_on_real_d3_hud_without_expensive_running_match(monkeypatch
 def test_old_start_order_replays_actual_d3_late_paused_failure(monkeypatch):
     late = native.ROOT / '.runtime/supported-daily-work/run-cc52d4a55bdc4adfab660d0616e6cac0/219-CBStart.png'
     if not D3_HUD28.is_file() or not late.is_file():
-        pytest.skip('local real D3 battle and delayed pause source frames unavailable')
+        pytest.skip('private real D3 battle and delayed pause source frames are not distributed')
     selected = d4_plan()
     selected['boss'] = 3
     selected['unit_ids'] = [135001, 134001, 130701, 130801, 124101]
@@ -426,9 +433,12 @@ def test_formal_and_carry_start_chain_pauses_only_with_valid_binding(
         assert stopped['idle'] and stopped['stop_completed']
 
 
+@pytest.mark.private_replay
 def test_real_matching_paused_controls_resume_without_settings_changes(monkeypatch, tmp_path):
     from test_clan_battle_native import result_page_receipt
     selected = d4_plan()
+    if not all(path.is_file() for path in (HUD90, HUD27, PAUSED)):
+        pytest.skip('private real D4 source frames are not distributed')
     start, clicks = replay(monkeypatch, selected, initial=native.read_image(HUD27), fallback=False)
     native.require_native_input(start, ('CBStart', 'CBPauseOpening'))
     state = backend._detail(start)

@@ -19,6 +19,7 @@ def opening_caller(request, plan, tmp_path, monkeypatch):
     port.calibration = {'version': 2, 'daily': {'execution': {'opening': {'battle_speed': 2}}}} if formal else {
         'version': 2, 'auto_battle': {'speeds': [1, 2, 4]}}
     port.formal_opening, port.opening_paused = formal, formal
+    port.action = {'kind': 'regular'}
     state = paused_port(plan).state
     state.update(battle_speed=2, remaining_seconds=84)
     initial = receipt(deepcopy(state))

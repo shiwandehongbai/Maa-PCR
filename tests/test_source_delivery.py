@@ -110,6 +110,7 @@ class SourceDeliveryTests(unittest.TestCase):
                       'delivery/baselines/r64-package-manifest.json',
                       'delivery/baselines/r65-package-manifest.json',
                       'delivery/baselines/r66-package-manifest.json',
+                      'delivery/baselines/r67-package-manifest.json',
                       'vendor/autopcr_sync/example.py', 'assets/labyrinth/icons/icon.png',
                       'assets/resource/image/labyrinth/scene/home_level.png',
                       'third_party/materials/LICENSE', '.github/workflows/ci.yml',

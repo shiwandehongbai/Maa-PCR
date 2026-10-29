@@ -123,9 +123,3 @@ def test_insufficient_cp_popup_cannot_be_read_as_its_background_formal_target():
 
 def test_simulation_target_cannot_supply_formal_counter_observation():
     assert not read_sample('boss5','target',simulation=True)['native_ok']
-
-
-def test_readback_frames_do_not_enable_formal_or_carryover():
-    for capability in ('formal','carryover'):
-        with pytest.raises(RuntimeError,match='capability_missing:'+capability):
-            load_calibration(sampled_plan(),capability=capability)

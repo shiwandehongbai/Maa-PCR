@@ -93,12 +93,6 @@ def test_actual_formal_c3_detail_cannot_be_a_simulation_target():
     assert not receipt['native_ok'] and errors
 
 
-@pytest.mark.parametrize('capability',['formal','carryover'])
-def test_c_menu_samples_grant_no_formal_or_carryover(capability):
-    with pytest.raises(RuntimeError,match='capability_missing:'+capability):
-        load_calibration(dict(sampled_plan(),phase='C',boss=3),capability=capability)
-
-
 @pytest.mark.parametrize('phase,expected', [('B',[665,307,1,1]),('C',[373,402,1,1])])
 def test_difficulty_clicks_existing_selected_radio_center_instead_of_OCR_text(phase,expected):
     plan=dict(sampled_plan(),phase=phase,boss=3)

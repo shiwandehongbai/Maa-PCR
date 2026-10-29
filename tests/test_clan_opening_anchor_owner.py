@@ -62,7 +62,7 @@ def owner(tmp_path, monkeypatch, request):
     backend.NativeClanBattle.__init__(port, NS(resource=NS(override_pipeline=lambda _: True)), tmp_path/'run')
     port.directory.mkdir()
     port.plan, port._account_binding = {'switches': []}, source_owner
-    port.pending = dict(intent_id='fixture-intent', action={'start_seconds': 90})
+    port.pending = dict(intent_id='fixture-intent', action={'kind': 'regular', 'start_seconds': 90})
     port.action = {'kind': 'regular'}
     reader_cls = daily._DailyTeamReader if formal else ClanBattleCharacters
     reader = object.__new__(reader_cls)
@@ -81,6 +81,8 @@ def owner(tmp_path, monkeypatch, request):
     port.page, port.characters = reader.page, reader
     monkeypatch.setattr(port, 'opening_binding', lambda **kwargs: port.pending, raising=False)
     monkeypatch.setattr(port, 'freeze_opening_control_policy', lambda _: None)
+    monkeypatch.setattr(port, 'account_binding_valid', lambda _: True)
+    port.calibration = reader.calibration
     def source():
         state['events'].append('source_checked')
         return expected

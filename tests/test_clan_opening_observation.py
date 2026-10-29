@@ -332,6 +332,7 @@ def test_formal_run_override_records_real_capture_markers_without_changing_start
     NativeClanBattle.__init__(port,NS(),tmp_path)
     pending={'intent_id':'fixture-intent'}
     port.pending=pending;port.action={'kind':'regular'};port.page=NS(expected=None)
+    port.calibration={'daily':{'execution':{}}}
     port._opening_capture=capture
     proof={'input_execution':'not_sent'}
     def run(*args,**kwargs):

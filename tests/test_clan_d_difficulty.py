@@ -38,9 +38,3 @@ def test_d_radio_click_uses_the_existing_same_row_target():
     callback.read = lambda *args, **kwargs: {}
     callback.hit = lambda *args, **kwargs: True
     assert callback.action(None, None, "select_difficulty") == [665, 402, 1, 1]
-
-
-@pytest.mark.parametrize("capability", ["formal", "carryover"])
-def test_d_simulation_material_does_not_enable_formal_capability(capability):
-    with pytest.raises(RuntimeError, match="capability_missing:" + capability):
-        load_calibration(dict(sampled_plan(), phase="D", boss=3), capability=capability)

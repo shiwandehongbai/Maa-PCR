@@ -223,6 +223,7 @@ def test_start_renews_only_new_pause_nodes(monkeypatch, tmp_path):
     calls.clear()
     formal = daily.NativeClanDailyAdapter.__new__(daily.NativeClanDailyAdapter)
     formal.started, formal.pending, formal.battle_start = False, {'intent_id': 'new'}, 'not_sent'
+    formal.calibration = {'daily': {'execution': {}}}
     formal.page = NS(expected=None)
     formal.run('CBStart', click=True)
     assert calls == [('CBStart', dict(click=True, reset_hits=('CBDailyPauseOpening', 'CBDailyPauseRetry')))]
