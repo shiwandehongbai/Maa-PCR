@@ -32,6 +32,8 @@ using Newtonsoft.Json.Linq;
 
 internal static class StartupActionsChecks
 {
+    private static bool IsDotnetHost => string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "dotnet", StringComparison.OrdinalIgnoreCase);
+    private static string AssemblyArgument => IsDotnetHost ? $"\"{typeof(StartupActionsChecks).Assembly.Location}\" " : "";
     private const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.Static | BindingFlags.NonPublic;
     private static readonly Type Startup = typeof(PcrAlphaOwner).Assembly.GetType("MFAAvalonia.Pcr.PcrStartupActions", true)!;
     private static readonly Type Gate = typeof(PcrAlphaOwner).Assembly.GetType("MFAAvalonia.Pcr.PcrProfileRunGate", true)!;
@@ -157,13 +159,13 @@ internal static class StartupActionsChecks
         config.SetValue(ConfigurationKeys.BeforeTask, "StartupSoftwareAndScript");
         config.SetValue(ConfigurationKeys.AfterTask, "CloseEmulatorAndMFA");
         config.SetValue(ConfigurationKeys.SoftwarePath, Environment.ProcessPath!);
-        config.SetValue(ConfigurationKeys.EmulatorConfig, $"\"{typeof(StartupActionsChecks).Assembly.Location}\" \"{marker}\" --startup-launch-marker");
+        config.SetValue(ConfigurationKeys.EmulatorConfig, $"{AssemblyArgument}\"{marker}\" --startup-launch-marker");
         config.SetValue(ConfigurationKeys.WaitSoftwareTime, 0.0);
         for (var restart = 0; restart < 2; restart++)
         {
             var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = root };
-            info.ArgumentList.Add(typeof(StartupActionsChecks).Assembly.Location);
+            if (IsDotnetHost) info.ArgumentList.Add(typeof(StartupActionsChecks).Assembly.Location);
             info.ArgumentList.Add(directory);
             info.ArgumentList.Add("--startup-restart-fixture");
             using var child = Process.Start(info)!;
@@ -187,7 +189,7 @@ internal static class StartupActionsChecks
         var work = Path.Combine(root, "中文 启动目录\U0001F600"); Directory.CreateDirectory(work);
         var shortcutPath = Path.Combine(root, "带 参数\U0001F600.lnk");
         var marker = Path.Combine(work, "shortcut-marker.txt");
-        var arguments = $"\"{typeof(StartupActionsChecks).Assembly.Location}\" \"{marker}\" --startup-launch-marker";
+        var arguments = $"{AssemblyArgument}\"{marker}\" --startup-launch-marker";
         var link = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"))!)!;
         try
         {
@@ -213,7 +215,7 @@ internal static class StartupActionsChecks
         var child = (Process)typeof(MaaProcessor).GetField("_softwareProcess", Hidden)!.GetValue(null)!;
         Require(child.WaitForExit(5000) && child.ExitCode == 0, "shortcut_helper_exits_cleanly");
         var explicitMarker = Path.Combine(work, "explicit.txt");
-        config.SetValue(ConfigurationKeys.EmulatorConfig, $"\"{typeof(StartupActionsChecks).Assembly.Location}\" \"{explicitMarker}\" --startup-launch-marker");
+        config.SetValue(ConfigurationKeys.EmulatorConfig, $"{AssemblyArgument}\"{explicitMarker}\" --startup-launch-marker");
         Complete(vm.Processor.StartSoftware());
         child = (Process)typeof(MaaProcessor).GetField("_softwareProcess", Hidden)!.GetValue(null)!;
         Require(child.WaitForExit(5000) && child.ExitCode == 0 && File.Exists(explicitMarker)
@@ -343,7 +345,8 @@ internal static class StartupActionsChecks
                         outcome == "missing-outcome" ? "{\"kind\":\"result\"}" :
                         new JObject { ["kind"] = "result", ["outcome"] = outcome, ["batch_complete"] = outcome == "complete" }.ToString(Newtonsoft.Json.Formatting.None)) + ",flush=True)\n");
                 var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
-                foreach (var arg in new[] { typeof(StartupActionsChecks).Assembly.Location, Path.Combine(root, "held-helper.txt"), "--startup-hold-marker" })
+                if (IsDotnetHost) info.ArgumentList.Add(typeof(StartupActionsChecks).Assembly.Location);
+                foreach (var arg in new[] { Path.Combine(root, "held-helper.txt"), "--startup-hold-marker" })
                     info.ArgumentList.Add(arg);
                 using var helper = Process.Start(info)!;
                 processField.SetValue(null, helper);

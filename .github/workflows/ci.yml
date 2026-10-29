@@ -62,6 +62,10 @@ jobs:
           $startupEvidence = [IO.Path]::GetFullPath((Join-Path (Get-Location) '.runtime/ci/startup-actions'))
           dotnet run --project gui/MFAAvalonia/PcrUpdate.Tests/PcrUpdate.Tests.csproj --configuration Release --runtime win-x64 -p:Platform=x64 --no-build -- $startupEvidence --startup-actions-only | Tee-Object -FilePath .runtime/ci/startup-actions.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $startupDllEvidence = [IO.Path]::GetFullPath((Join-Path (Get-Location) '.runtime/ci/startup-actions-dotnet'))
+          $startupDll = Join-Path (Get-Location) 'gui/MFAAvalonia/PcrUpdate.Tests/bin/x64/Release/net10.0/win-x64/PcrUpdate.Tests.dll'
+          dotnet $startupDll $startupDllEvidence --startup-actions-only | Tee-Object -FilePath .runtime/ci/startup-actions-dotnet.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Labyrinth GUI Contract Checks
         run: |
           $evidence = [IO.Path]::GetFullPath((Join-Path (Get-Location) '.runtime/ci/labyrinth-checks'))
@@ -127,6 +131,8 @@ jobs:
             .runtime/ci/gui-checks.log
             .runtime/ci/startup-actions.log
             .runtime/ci/startup-actions/
+            .runtime/ci/startup-actions-dotnet.log
+            .runtime/ci/startup-actions-dotnet/
             .runtime/ci/credentials-checks.log
             .runtime/ci/profile-checks/
             .runtime/ci/parity-gui-checks/
