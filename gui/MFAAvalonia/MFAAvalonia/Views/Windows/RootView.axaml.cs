@@ -251,8 +251,13 @@ public partial class RootView : SukiWindow
         _isInitializing = false;
         if (MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled)
         {
-            if (AppRuntime.IsNewInstance) MFAAvalonia.Pcr.PcrSoftwareUpdateService.CheckOnStartup();
-            return; // PCR launch never enters automatic game/Start restoration.
+            if (AppRuntime.IsNewInstance)
+            {
+                MFAAvalonia.Pcr.PcrSoftwareUpdateService.CheckOnStartup();
+                if (Instances.InstanceTabBarViewModel.ActiveTab?.TaskQueueViewModel is { } vm)
+                    await MFAAvalonia.Pcr.PcrStartupActions.RunAsync(vm);
+            }
+            return;
         }
 
         try

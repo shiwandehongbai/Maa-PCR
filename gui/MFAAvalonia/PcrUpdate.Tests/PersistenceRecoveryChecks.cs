@@ -23,6 +23,7 @@ internal static class PersistenceRecoveryChecks
         try
         {
             InstanceChecks(root);
+            StartupSettingsChecks();
             GlobalChecks(root);
             Console.WriteLine("PCR configuration recovery checks passed: locked/malformed reads, reload, atomic failure, retained credentials/settings/records; game inputs=0");
         }
@@ -79,6 +80,46 @@ internal static class PersistenceRecoveryChecks
         fresh.SetValueAndPersist("created", true);
         Require(File.Exists(fresh.GetConfigFilePath()), "missing_profile_can_no_longer_be_created");
         Require(File.ReadAllBytes(history).SequenceEqual(historyBytes), "unknown_run_record_was_modified");
+    }
+
+    private static void StartupSettingsChecks()
+    {
+        var profiles = new[] { "pcr-alpha-v1", "pcr-labyrinth-v1", MFAAvalonia.Pcr.PcrClanGuide.ProfileId };
+        var options = new[]
+        {
+            (ConfigurationKeys.BeforeTask, new[] { "None", "StartupSoftware", "StartupSoftwareAndScript", "StartupScriptOnly" }),
+            (ConfigurationKeys.AfterTask, new[] { "None", "CloseMFA", "CloseEmulator", "CloseEmulatorAndMFA",
+                "ShutDown", "ShutDownOnce", "CloseEmulatorAndRestartMFA", "RestartPC" })
+        };
+        foreach (var id in profiles)
+        {
+            var config = new InstanceConfiguration(id);
+            foreach (var (key, values) in options)
+            {
+                Require(config.GetValue(key, "None") == "None", "startup_default:" + id + ":" + key);
+                foreach (var value in values)
+                {
+                    config.SetValue(key, value);
+                    Require((string?)JObject.Parse(File.ReadAllText(config.GetConfigFilePath()))[key] == value,
+                        "startup_not_written:" + id + ":" + key + ":" + value);
+                    var reopened = new InstanceConfiguration(id);
+                    Require(reopened.GetValue(key, "None") == value, "startup_not_restored:" + id + ":" + key + ":" + value);
+                }
+            }
+            config.SetValue(ConfigurationKeys.BeforeTask, id == profiles[0] ? "StartupSoftwareAndScript" : "None");
+            config.SetValue(ConfigurationKeys.AfterTask, id == profiles[0] ? "CloseEmulatorAndMFA" : "None");
+        }
+        foreach (var id in profiles)
+        {
+            var reopened = new InstanceConfiguration(id);
+            Require(reopened.GetValue(ConfigurationKeys.BeforeTask, "None") == (id == profiles[0] ? "StartupSoftwareAndScript" : "None")
+                && reopened.GetValue(ConfigurationKeys.AfterTask, "None") == (id == profiles[0] ? "CloseEmulatorAndMFA" : "None"),
+                "startup_profile_settings_leaked:" + id);
+        }
+        Require(MFAAvalonia.Pcr.PcrAlphaPolicy.Value(ConfigurationKeys.NoAutoStart) == null
+            && MFAAvalonia.Pcr.PcrAlphaPolicy.Value(ConfigurationKeys.GlobalStartEnabled) == bool.FalseString,
+            "startup_execution_policy_changed");
+        Console.WriteLine("PCR startup settings checks passed: every action survives reopening in all three profiles; game inputs=0");
     }
 
     internal static void GlobalChecks(string root)

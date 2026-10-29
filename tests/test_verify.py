@@ -106,7 +106,7 @@ def test_gui_rejects_stale_core_before_running(monkeypatch, tmp_path, mode):
 
 def test_gui_plan_builds_before_checks_and_uses_matching_rids(tmp_path):
     commands = verify.gui_commands("sdk", tmp_path / "gui", tmp_path)
-    assert len(commands) == 22
+    assert len(commands) == 23
     assert [name for name, _, _ in commands][0:2] == ["MFAAvalonia.Desktop-restore", "MFAAvalonia.Desktop-build"]
     for name, command, cwd in commands:
         assert cwd.is_relative_to(tmp_path)
@@ -121,6 +121,9 @@ def test_gui_plan_builds_before_checks_and_uses_matching_rids(tmp_path):
             assert command[command.index("-r") + 1] == "win-x64"
         if name == "PcrProfileSwitch.Tests-run":
             assert command[-3:] == [str(verify.ROOT), str(tmp_path / "fixtures/PcrProfileSwitch.Tests"), sys.executable]
+        if name == "PcrUpdate.Tests-startup-actions-run":
+            assert command[-2:] == [str(tmp_path / "fixtures/startup-actions"), "--startup-actions-only"]
+            assert Path(command[1]).parent == cwd
         if name in ("PcrLabyrinthAccounts.Tests-run","PcrLabyrinthRatings.Tests-run"):
             project=name.removesuffix('-run')
             assert command[-2:]==[str(tmp_path/'fixtures'/project),str(verify.ROOT)]

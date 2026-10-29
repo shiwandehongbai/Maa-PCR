@@ -170,6 +170,7 @@ internal static class PcrLabyrinthOwner
         }
         var released=false;
         var cancelled=false;
+        var finished=false;
         using var timeout=new CancellationTokenSource(TimeSpan.FromHours(24));
         using var startup=new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var cancel=CancellationTokenSource.CreateLinkedTokenSource(run.Cancel.Token,timeout.Token,startup.Token);
@@ -264,6 +265,7 @@ internal static class PcrLabyrinthOwner
                         throw new InvalidOperationException("黎明界通关结果不完整，本次未确认完成。");
                     receipt=true;
                     var outcome=(string?)value["outcome"];
+                    finished=!string.IsNullOrWhiteSpace(outcome) && outcome!="stopped";
                     vm.LabyrinthSettings.Progress=outcome=="complete" ? "目标次数已全部完成。" : "本次任务已停止。";
                     vm.LabyrinthSettings.Status=SettingsStatusFor(outcome);
                     // 固定运行栏与日志复用同一原因；设置卡片保持原内容。
@@ -312,6 +314,7 @@ internal static class PcrLabyrinthOwner
                 if (cancelled) vm.LabyrinthSettings.Progress="本次任务已停止。";
                 lock (PcrProfileRunGate.StartGate) {
                     if (ReferenceEquals(current,run)) current=null;
+                    cancelled|=run.Cancel.IsCancellationRequested;
                     run.Cancel.Dispose();
                     vm.IsRunning=false;
                     vm.LabyrinthSettings.IsPaused=false;
@@ -321,5 +324,7 @@ internal static class PcrLabyrinthOwner
             }
             vm.Processor.AddLog(vm.LabyrinthSettings.Status,(IBrush?)null);
         }
+        if (released && finished && !cancelled)
+            vm.Processor.HandleAfterTaskOperation();
     }
 }

@@ -65,6 +65,9 @@ def gui_commands(dotnet: str, gui: Path, output: Path) -> list[tuple[str, list[s
         if name == "PcrProfileSwitch.Tests":
             command.extend([str(ROOT), str(output / "fixtures" / name), sys.executable])
         commands.append((name + "-run", command, binary))
+        if name == "PcrUpdate.Tests":
+            commands.append((name + "-startup-actions-run",
+                [dotnet, str(binary / (name + ".dll")), str(output / "fixtures" / "startup-actions"), "--startup-actions-only"], binary))
         if name == "PcrProfileSwitch.Tests":
             for mode in PROFILE_CHECK_MODES:
                 commands.append((name + "-" + mode + "-run",
@@ -108,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     output.mkdir(parents=True)
     receipt = {"scope": args.scope, "root": str(ROOT), "python": sys.version,
                "executable": sys.executable, "status": "running", "steps": []}
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1")
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1", PCR_STARTUP_TEST_PYTHON=sys.executable)
     env.pop("PYTEST_ADDOPTS", None)  # A local filter/collect-only must not narrow public verification.
     for variable, folder in (("TEMP", "temp"), ("TMP", "temp"), ("LOCALAPPDATA", "local-appdata"),
                              ("DOTNET_CLI_HOME", "dotnet-home"), ("NUGET_HTTP_CACHE_PATH", "nuget-http")):

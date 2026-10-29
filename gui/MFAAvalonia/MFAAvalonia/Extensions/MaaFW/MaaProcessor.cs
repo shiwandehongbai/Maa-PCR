@@ -4860,31 +4860,38 @@ public class MaaProcessor
     }
 
     public void HandleAfterTaskOperation()
+        => HandleAfterTaskOperation(Instances.ShutdownApplication, () => CloseSoftware(this),
+            Instances.ShutdownSystem, () => Instances.RestartApplication(), Instances.RestartSystem);
+
+    internal void HandleAfterTaskOperation(Action closeApplication, Action closeSoftware,
+        Action shutdownSystem, Action restartApplication, Action restartSystem)
     {
         var afterTask = InstanceConfiguration.GetValue(ConfigurationKeys.AfterTask, "None");
         switch (afterTask)
         {
             case "CloseMFA":
-                Instances.ShutdownApplication();
+                closeApplication();
                 break;
             case "CloseEmulator":
-                CloseSoftware(this);
+                closeSoftware();
                 break;
             case "CloseEmulatorAndMFA":
-                CloseSoftwareAndMFA(this);
+                closeSoftware();
+                closeApplication();
                 break;
             case "ShutDown":
-                Instances.ShutdownSystem();
+                shutdownSystem();
                 break;
             case "ShutDownOnce":
-                InstanceConfiguration.SetValue(ConfigurationKeys.AfterTask, "None");
-                Instances.ShutdownSystem();
+                InstanceConfiguration.SetValueAndPersist(ConfigurationKeys.AfterTask, "None");
+                shutdownSystem();
                 break;
             case "CloseEmulatorAndRestartMFA":
-                CloseSoftwareAndRestartMFA(this);
+                closeSoftware();
+                restartApplication();
                 break;
             case "RestartPC":
-                Instances.RestartSystem();
+                restartSystem();
                 break;
         }
     }
@@ -4976,11 +4983,21 @@ public class MaaProcessor
     private CancellationTokenSource? _emulatorCancellationTokenSource;
     private static Process? _softwareProcess;
 
-    public async Task StartSoftware()
+    public Task StartSoftware() => StartSoftware(CancellationToken.None);
+
+    public async Task StartSoftware(CancellationToken token)
     {
-        _emulatorCancellationTokenSource = new CancellationTokenSource();
-        await StartRunnableFile(InstanceConfiguration.GetValue(ConfigurationKeys.SoftwarePath, string.Empty),
-            InstanceConfiguration.GetValue(ConfigurationKeys.WaitSoftwareTime, 60.0), _emulatorCancellationTokenSource.Token);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(token);
+        _emulatorCancellationTokenSource = cancel;
+        try
+        {
+            await StartRunnableFile(InstanceConfiguration.GetValue(ConfigurationKeys.SoftwarePath, string.Empty),
+                InstanceConfiguration.GetValue(ConfigurationKeys.WaitSoftwareTime, 60.0), cancel.Token);
+        }
+        finally
+        {
+            if (ReferenceEquals(_emulatorCancellationTokenSource, cancel)) _emulatorCancellationTokenSource = null;
+        }
     }
 
     private bool CanStartSoftware(out string reason)
@@ -5004,14 +5021,17 @@ public class MaaProcessor
 
     async private Task StartRunnableFile(string exePath, double waitTimeInSeconds, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(exePath))
         {
+            if (MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled) throw new InvalidOperationException("请先在启动设置中填写游戏路径。");
             LoggerHelper.Warning("已跳过启动程序，因为 SoftwarePath 为空。");
             return;
         }
 
         if (!File.Exists(exePath))
         {
+            if (MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled) throw new InvalidOperationException("启动设置中的游戏路径不存在。");
             LoggerHelper.Warning($"已跳过启动程序，因为文件不存在：{exePath}");
             return;
         }
@@ -5075,6 +5095,14 @@ public class MaaProcessor
         var connectionWindow = TimeSpan.FromSeconds(Math.Max(0, waitTimeInSeconds));
         if (connectionWindow <= TimeSpan.Zero)
             return;
+
+        if (MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled)
+        {
+            // PCR connects only after the fresh Owner has checked this run.
+            AddLog($"正在等待游戏启动（{Math.Ceiling(connectionWindow.TotalSeconds)} 秒），可点击停止取消。", useMarkdown: false);
+            await Task.Delay(connectionWindow, token);
+            return;
+        }
 
         var targetKey = (ViewModel?.CurrentController ?? MaaControllerTypes.Adb) switch
         {

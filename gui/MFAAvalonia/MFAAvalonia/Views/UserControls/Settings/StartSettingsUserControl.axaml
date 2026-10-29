@@ -136,13 +136,13 @@
                         <TextBlock
                             FontSize="16"
                             FontWeight="SemiBold"
-                            Text="{markup:I18n {x:Static helper:LangKeys.WaitSoftware}}" />
+                            Text="{Binding StartupWaitLabel}" />
                     </StackPanel>
                 </DockPanel>
                 <TextBlock
                     Opacity="0.72"
                     TextWrapping="Wrap"
-                    Text="{markup:I18n {x:Static helper:LangKeys.WaitSoftwareDescription}}" />
+                    Text="{Binding StartupWaitDescription}" />
 
                 <Border
                     BorderBrush="{DynamicResource SukiLightBorderBrush}"

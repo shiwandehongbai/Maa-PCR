@@ -11,6 +11,13 @@ using MFAAvalonia.ViewModels.UsersControls.Settings;
 using Newtonsoft.Json.Linq;
 using SukiUI.MessageBox;
 
+if (args.Length == 2 && Path.IsPathFullyQualified(args[0]) && args[1] is "--startup-launch-marker" or "--startup-hold-marker")
+{
+    File.AppendAllText(args[0], "launched\n");
+    if (args[1] == "--startup-hold-marker") await Task.Delay(TimeSpan.FromSeconds(30));
+    return 0;
+}
+
 if (args.Length == 2 && Path.IsPathFullyQualified(args[0]) && args[1] == "--ocr-lock-crash")
 {
     using var held = new FileStream(Path.Combine(args[0], ".quota-lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
@@ -18,13 +25,23 @@ if (args.Length == 2 && Path.IsPathFullyQualified(args[0]) && args[1] == "--ocr-
 }
 
 if (args.Length is not (1 or 2) || !Path.IsPathFullyQualified(args[0])
-    || args.Length == 2 && args[1] != "--controls-only")
+    || args.Length == 2 && args[1] is not ("--controls-only" or "--persistence-only" or "--startup-actions-only" or "--startup-restart-fixture"))
 {
     Console.Error.WriteLine("PCR GUI update checks: an absolute evidence directory is required.");
     return 2;
 }
 try
 {
+if (args.Length == 2 && args[1] is "--startup-actions-only" or "--startup-restart-fixture")
+{
+    StartupActionsChecks.Run(args[0], args[1] == "--startup-restart-fixture");
+    return 0;
+}
+if (args.Length == 2 && args[1] == "--persistence-only")
+{
+    PersistenceRecoveryChecks.Run(args[0]);
+    return 0;
+}
 if (args.Length == 2)
 {
     UpdateViewChecks.Run(args[0]);

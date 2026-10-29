@@ -43,7 +43,6 @@ public static class PcrAlphaPolicy
         ConfigurationKeys.RetryOnDisconnectedWin32
     };
     public static string? Value(string key) => Disabled.Contains(key) ? bool.FalseString
-        : key == ConfigurationKeys.NoAutoStart || key == ConfigurationKeys.AgentTcpMode ? bool.TrueString
-        : key == ConfigurationKeys.BeforeTask || key == ConfigurationKeys.AfterTask ? "None"
+        : key == ConfigurationKeys.AgentTcpMode ? bool.TrueString
         : key == ConfigurationKeys.Prescript || key == ConfigurationKeys.Postscript ? "" : null;
 }

@@ -158,6 +158,12 @@ public partial class StartSettingsUserControlModel : ViewModelBase
 
     public AvaloniaList<LocalizationViewModel> AfterTaskList => _afterTaskList;
 
+    public string StartupWaitLabel => MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled
+        ? "启动游戏后等待（秒）" : LangKeys.WaitSoftware.ToLocalization();
+    public string StartupWaitDescription => MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled
+        ? "选择同时启动脚本时，等待结束后再校验设备并开始任务；填 0 不额外等待。"
+        : LangKeys.WaitSoftwareDescription.ToLocalization();
+
 
     [ObservableProperty] private string? _beforeTask = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.BeforeTask, "None");
 
@@ -373,6 +379,8 @@ public partial class StartSettingsUserControlModel : ViewModelBase
     private void OnLanguageChanged(object? sender, EventArgs e)
     {
         UpdateAfterTaskDisplayNames();
+        OnPropertyChanged(nameof(StartupWaitLabel));
+        OnPropertyChanged(nameof(StartupWaitDescription));
     }
 
     private void UpdateAfterTaskDisplayNames()

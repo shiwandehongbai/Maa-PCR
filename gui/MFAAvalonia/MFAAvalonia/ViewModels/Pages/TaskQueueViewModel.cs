@@ -793,6 +793,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
 
     public void StopTask(Action? action = null)
     {
+        if (PcrStartupActions.Cancel(this, action)) return;
         if (PcrGuideSyncOwner.IsActive) { PcrGuideSyncOwner.Stop(); return; }
         if (IsLabyrinthProfile && PcrLabyrinthOwner.IsActive) { PcrLabyrinthOwner.Stop(this); return; }
         if (_pcrConnectSession is { } connection)
