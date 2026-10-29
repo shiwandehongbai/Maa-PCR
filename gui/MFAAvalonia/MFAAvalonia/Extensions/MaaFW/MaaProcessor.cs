@@ -24,6 +24,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.Versioning;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Bitmap = Avalonia.Media.Imaging.Bitmap;
@@ -5185,22 +5186,54 @@ public class MaaProcessor
         LoggerHelper.Warning($"启动后连接等待窗口已超时：{Math.Max(0, waitTimeInSeconds):0.#} 秒。");
     }
 
+    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellLinkW
+    {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder path, int count, IntPtr data, uint flags);
+        void GetIDList(out IntPtr list);
+        void SetIDList(IntPtr list);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder text, int count);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder path, int count);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string path);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder arguments, int count);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
+        void GetHotkey(out ushort hotkey);
+        void SetHotkey(ushort hotkey);
+        void GetShowCmd(out int command);
+        void SetShowCmd(int command);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder path, int count, out int index);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+        void Resolve(IntPtr window, uint flags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+    }
+
     [SupportedOSPlatform("windows")]
     private static (string Path, string Arguments, string WorkingDirectory)? ResolveShortcut(string path)
     {
+        object? link = null;
         try
         {
-            var type = Type.GetTypeFromProgID("WScript.Shell");
-            if (type != null)
-            {
-                dynamic shell = Activator.CreateInstance(type);
-                dynamic shortcut = shell.CreateShortcut(path);
-                return ((string)shortcut.TargetPath, (string)shortcut.Arguments, (string)shortcut.WorkingDirectory);
-            }
+            // WScript converts filenames through the system code page; ShellLinkW keeps Unicode paths.
+            link = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"))!);
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)link!).Load(path, 0);
+            var shortcut = (IShellLinkW)link;
+            var target = new System.Text.StringBuilder(32768);
+            var arguments = new System.Text.StringBuilder(32768);
+            var workingDirectory = new System.Text.StringBuilder(32768);
+            shortcut.GetPath(target, target.Capacity, IntPtr.Zero, 0);
+            shortcut.GetArguments(arguments, arguments.Capacity);
+            shortcut.GetWorkingDirectory(workingDirectory, workingDirectory.Capacity);
+            return (target.ToString(), arguments.ToString(), workingDirectory.ToString());
         }
         catch (Exception ex)
         {
             LoggerHelper.Warning($"解析快捷方式失败：{ex.Message}");
+        }
+        finally
+        {
+            if (link != null) Marshal.FinalReleaseComObject(link);
         }
         return null;
     }

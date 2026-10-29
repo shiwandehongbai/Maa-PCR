@@ -184,14 +184,24 @@ internal static class StartupActionsChecks
 
     private static void CheckShortcut(TaskQueueViewModel vm, string root)
     {
-        var work = Path.Combine(root, "中文 启动目录"); Directory.CreateDirectory(work);
-        var shortcutPath = Path.Combine(root, "带 参数.lnk");
+        var work = Path.Combine(root, "中文 启动目录\U0001F600"); Directory.CreateDirectory(work);
+        var shortcutPath = Path.Combine(root, "带 参数\U0001F600.lnk");
         var marker = Path.Combine(work, "shortcut-marker.txt");
-        dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!)!;
-        dynamic link = shell.CreateShortcut(shortcutPath);
-        link.TargetPath = Environment.ProcessPath!;
-        link.Arguments = $"\"{typeof(StartupActionsChecks).Assembly.Location}\" \"{marker}\" --startup-launch-marker";
-        link.WorkingDirectory = work; link.Save();
+        var arguments = $"\"{typeof(StartupActionsChecks).Assembly.Location}\" \"{marker}\" --startup-launch-marker";
+        var link = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"))!)!;
+        try
+        {
+            var contract = typeof(MaaProcessor).GetNestedType("IShellLinkW", BindingFlags.NonPublic)!;
+            contract.GetMethod("SetPath")!.Invoke(link, [Environment.ProcessPath!]);
+            contract.GetMethod("SetArguments")!.Invoke(link, [arguments]);
+            contract.GetMethod("SetWorkingDirectory")!.Invoke(link, [work]);
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)link).Save(shortcutPath, true);
+        }
+        finally { System.Runtime.InteropServices.Marshal.FinalReleaseComObject(link); }
+        var resolved = typeof(MaaProcessor).GetMethod("ResolveShortcut", Hidden)!.Invoke(null, [shortcutPath]);
+        Require(resolved is ValueTuple<string,string,string> target
+            && string.Equals(target.Item1, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase)
+            && target.Item2 == arguments && target.Item3 == work, "unicode_shortcut_target_arguments_working_directory");
         var config = vm.Processor.InstanceConfiguration;
         config.SetValue(ConfigurationKeys.SoftwarePath, shortcutPath);
         config.SetValue(ConfigurationKeys.EmulatorConfig, "");
@@ -208,8 +218,6 @@ internal static class StartupActionsChecks
         child = (Process)typeof(MaaProcessor).GetField("_softwareProcess", Hidden)!.GetValue(null)!;
         Require(child.WaitForExit(5000) && child.ExitCode == 0 && File.Exists(explicitMarker)
             && File.ReadAllLines(marker).Length == 1, "explicit_arguments_override_shortcut");
-        var resolved = typeof(MaaProcessor).GetMethod("ResolveShortcut", Hidden)!.Invoke(null, [shortcutPath]);
-        Require(resolved is ValueTuple<string,string,string> target && target.Item3 == work, "shortcut_keeps_working_directory");
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
         try { Complete(vm.Processor.StartSoftware(cancelled.Token)); throw new Exception("cancelled_shortcut_started"); }
         catch (OperationCanceledException) { checks++; }
