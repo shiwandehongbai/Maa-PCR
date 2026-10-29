@@ -90,6 +90,17 @@ internal static class AlphaOwnerChecks
                 && ReferenceEquals(Field(session, "OfflineControllerBuilder"), neverAllocate), "session_captures_construction_seam_once");
             Require(!ReferenceEquals(Field(session, "Selection"), schedule)
                 && JToken.DeepEquals((JObject)Field(session, "Selection"), schedule), "session_owns_selection_snapshot");
+            int MaxSeconds() => (int)sessionType.GetProperty("MaxSeconds")!.GetValue(session)!;
+            var ownedSelection = (JObject)Field(session, "Selection");
+            Require(MaxSeconds() == 1800, "daily_owner_keeps_thirty_minute_limit");
+            ownedSelection["selected_modules"] = new JArray("clan_battle_daily");
+            Require(MaxSeconds() == 3600, "formal_clan_owner_has_one_hour_limit");
+            sessionType.GetProperty("PreparationOnly")!.SetValue(session, true);
+            Require(MaxSeconds() == 1800, "read_only_preparation_keeps_thirty_minute_limit");
+            sessionType.GetProperty("PreparationOnly")!.SetValue(session, false);
+            ownedSelection["selected_modules"] = new JArray("clan_battle_daily", "rewards");
+            Require(MaxSeconds() == 1800, "mixed_selection_cannot_extend_owner");
+            ownedSelection["selected_modules"] = schedule["selected_modules"]!.DeepClone();
             Require(!PcrAlphaOwner.ClaimStart(other), "other_processor_cannot_claim_start");
             Set(session, "Preparing", true);
             Require(!PcrAlphaOwner.ClaimStart(processor), "preparing_cannot_start");

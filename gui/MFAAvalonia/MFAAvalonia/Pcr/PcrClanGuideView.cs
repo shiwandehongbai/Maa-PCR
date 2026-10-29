@@ -43,7 +43,7 @@ public sealed partial class PcrClanGuideView : UserControl
     private readonly TextBlock calibrationSummary = Note("");
     private readonly TextBlock calibrationDetails = Note("");
     private readonly TextBlock speedLabel = Note("模拟战倍速");
-    private readonly TextBlock formalSpeed = new() { Text = "固定 2 倍速", IsVisible = false };
+    private readonly TextBlock formalSpeed = new() { Text = "固定 2 倍速 · 单次任务最长 60 分钟", IsVisible = false };
     private readonly Expander workSelection = new() { Header = "选择或更换作业", IsExpanded = true };
     private readonly Expander dailyDetails = new() { Header = "一天三刀目标" };
     private Button stopFetch = null!;

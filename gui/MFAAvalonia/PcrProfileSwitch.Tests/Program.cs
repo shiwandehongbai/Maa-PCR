@@ -19,6 +19,7 @@ using MFAAvalonia.ViewModels.Pages;
 try
 {
 Console.OutputEncoding = System.Text.Encoding.UTF8;
+if (args.Length == 4 && args[3] == "--alpha-owner-only") { AlphaOwnerChecks.Run(); return 0; }
 if (args.Length != 3 && !(args.Length == 4 && args[3] is "--guide-only" or "--guide-owner" or "--clan-only" or "--clan-daily-only" or "--clan-workflow-only" or "--clan-workflow-window" or "--clan-package-fixture" or "--clan-formal-only" or "--clan-formal-start-only" or "--clan-postsave-only" or "--clan-calibration-only" or "--profile-registration-only" or "--agent-shutdown-only" or "--channel-config-only" or "--window-lifecycle-only" or "--clan-performance-only"))
     throw new ArgumentException("Usage: PcrProfileSwitch.Tests <source-root> <isolated-fixture-directory> <development-python> [--guide-only|--guide-owner|--clan-only|--clan-daily-only|--clan-workflow-only|--clan-workflow-window|--clan-package-fixture|--clan-formal-only|--clan-formal-start-only|--clan-postsave-only|--clan-calibration-only|--profile-registration-only|--agent-shutdown-only|--channel-config-only|--window-lifecycle-only|--clan-performance-only]");
 // Initialize rendering services for log themes without creating a window or the product App.

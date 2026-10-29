@@ -55,6 +55,7 @@ class Port:
         self.actual_title, self.actual_profile = PLAN['account_id'], PLAN['account_id']
         self.entry_page, self.after_pages = 'LabyClientTitleObserved', ['LabyClientNoticeObserved'] * 2
         self.fail_at, self.change_source_at, self.mutate_receipt = None, None, None
+        self.loading_reads = {}
         self.journal = [{'state': 'in_flight'}] if pending else []
 
     def checkpoint(self):
@@ -79,6 +80,9 @@ class Port:
 
     def run(self, node, *, click=False):
         self.calls.append((node, click))
+        if self.loading_reads.get(node, 0):
+            self.native_failed = True
+            raise RuntimeError('direct observation missed during loading; Context blocked')
         if node == self.fail_at:
             self.native_failed = True
             raise TimeoutError('native_timeout')
@@ -96,6 +100,21 @@ class Port:
             self.mutate_receipt(node, result)
         self.last_receipt = result
         return result
+
+    def choose(self, names, *, timeout):
+        entry, = names
+        if self.loading_reads.get(entry, 0):
+            self.loading_reads[entry] -= 1
+            self.calls.append((entry, False))
+            result = receipt('GTUnknown', click=True)
+            hit = 'GTUnknown'
+        else:
+            result = self.run(entry)
+            result['nodes'][0]['action'] = dict(name=entry, success=True, raw={})
+            hit = entry
+        result['nodes'].insert(0, receipt('GTChoose', click=True)['nodes'][0])
+        self.last_receipt = result
+        return hit
 
     def _verify_account(self, plan):
         self.calls.append(('verify_account', False))
@@ -127,6 +146,17 @@ def test_safe_recovery_reuses_owner_and_invalidates_all_stale_bindings():
         'LabyDisconnectReturnTitleOnce', 'LabyClientTitleStartOnce', 'LabyClientNoticeCloseOnce',
         'LabyClientHomeToAdventure', 'LabyClientOpenMainMenuOnce']
     assert all('CBStart' not in node and 'StopApp' not in node and 'StartApp' not in node for node, _ in port.calls)
+
+
+@pytest.mark.parametrize('entry', ['LabyGameSessionRecoveryObserved', 'LabyGameSessionAfterTitleObserved'])
+def test_loading_frames_do_not_poison_context_or_repeat_navigation(entry, monkeypatch):
+    monkeypatch.setattr('pcr_maa.clan_battle_recovery.time.sleep', lambda seconds: None)
+    port = Port()
+    port.loading_reads[entry] = 2
+    assert recover(port)['can_continue'] is True
+    assert not port.native_failed and port.loading_reads[entry] == 0
+    assert port.calls.count(('LabyDisconnectReturnTitleOnce', True)) == 1
+    assert port.calls.count(('LabyClientTitleStartOnce', True)) == 1
 
 
 @pytest.mark.parametrize('start,pending', [('sent', None), ('unknown', None), ('previously_sent', None),
@@ -165,6 +195,7 @@ def test_failed_input_outcome_controls_whether_prebattle_work_can_continue(repla
 @pytest.mark.parametrize('proven_not_sent', [True, False])
 def test_probe_and_recovery_keep_unknown_prior_input_from_being_repeated(proven_not_sent):
     port = Port()
+    recovery_choose = port.choose
     original = (native.NativeInputNotSent({'input_execution': 'not_sent'}) if proven_not_sent
         else RuntimeError('Native input outcome unknown; no retry'))
 
@@ -174,6 +205,7 @@ def test_probe_and_recovery_keep_unknown_prior_input_from_being_repeated(proven_
 
     port.choose = choose
     error = observe_disconnect_after_failure(port, original, input_attempted=True)
+    port.choose = recovery_choose
     result = recover_disconnect(port, PLAN, error)
     assert result['can_continue'] is proven_not_sent
     assert error.original_error is original

@@ -574,7 +574,7 @@ public static partial class PcrAlphaOwner
         lock (Gate)
         {
             RequirePendingStart(attempt);
-            if (current != s || !s.PreparationOnly || s.Revoked || s.Watch.Elapsed.TotalSeconds >= 1800
+            if (current != s || !s.PreparationOnly || s.Revoked || s.Watch.Elapsed.TotalSeconds >= s.MaxSeconds
                 || s.Processor != attempt.Processor || s.Processor != MaaProcessorManager.Instance.Current)
                 throw new InvalidOperationException("Read-only candidate revoked; no reconnect or arming");
         }
@@ -690,7 +690,7 @@ public static partial class PcrAlphaOwner
     {
         lock (Gate)
         {
-            if (current == null || current.Processor != processor || current.Revoked || current.Watch.Elapsed.TotalSeconds >= 1800)
+            if (current == null || current.Processor != processor || current.Revoked || current.Watch.Elapsed.TotalSeconds >= current.MaxSeconds)
                 throw new InvalidOperationException("Explicit current Start required");
             if (current.PreparationOnly || current.Preparing || !current.IsOffline && current.Mapping == null)
                 PcrMuMuDisplay.RequireProductionQualification();

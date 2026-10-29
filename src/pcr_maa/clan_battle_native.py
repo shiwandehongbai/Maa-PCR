@@ -84,7 +84,7 @@ def _roi(value):
     return value
 
 
-def _node(spec, *, expected=None):
+def _node(spec, *, expected=None, ocr_threshold=.9):
     if type(spec) is not dict:
         raise ValueError('clan_battle_calibration_node_invalid')
     algorithm = spec.get('recognition', 'OCR')
@@ -95,7 +95,7 @@ def _node(spec, *, expected=None):
         if type(text) is not str or not text.startswith('^') or not text.endswith('$'):
             raise ValueError('clan_battle_calibration_label_invalid')
         re.compile(text)
-        value.update(expected=text, threshold=.9)
+        value.update(expected=text, threshold=ocr_threshold)
     elif algorithm == 'TemplateMatch' and expected is None:
         name, digest = spec.get('template'), spec.get('sha256')
         names, digests = (name, digest) if type(name) is list else ([name], [digest])
@@ -382,7 +382,7 @@ def calibration_pipeline(calibration, plan, *, capability='simulation'):
         if type(spec) is not dict or type(spec.get('labels')) is not list or len(spec['labels']) < 2:
             raise ValueError('clan_battle_calibration_page_guards_missing')
         for index, label in enumerate(spec['labels']):
-            nodes[f'CBLabel_{page}_{index}'] = _node(label)
+            nodes[f'CBLabel_{page}_{index}'] = _node(label, ocr_threshold=.8 if page == 'adventure' else .9)
         fields = spec.get('fields', {})
         if type(fields) is not dict:
             raise ValueError('clan_battle_calibration_fields_missing:' + page)

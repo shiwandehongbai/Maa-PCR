@@ -292,6 +292,48 @@ def test_formal_battle_and_result_require_continuous_reserved_target(executable,
     assert page.read(context, image, 'result')['damage'] == 12345
 
 
+def test_initial_formation_only_allows_cancel_before_rebinding_target(executable, plan):
+    _, _, hits, context = execution_context(executable, plan, 'formation')
+    page = daily.ClanBattleDailyExecutionPage(executable, plan, NS())
+    image = np.zeros((720, 1280, 3), np.uint8)
+    assert page.read(context, image, 'formation')['navigation_only'] is True
+    assert page.bound is None
+    hits.add('CBDailyActionLabel_cancel_formation')
+    target = executable['daily']['execution']['actions']['cancel_formation']['target']
+    assert page.action(context, image, 'cancel_formation') == target
+    for action in ('start', 'characters_top', 'open_support'):
+        with pytest.raises(RuntimeError, match='transition_unverified'):
+            page.action(context, image, action)
+    hits.remove('CBDailyActionLabel_cancel_formation')
+    with pytest.raises(RuntimeError, match='action_unknown'):
+        page.action(context, image, 'cancel_formation')
+
+
+def test_initial_boss_detail_only_allows_return_without_inventing_identity(executable, plan):
+    _, _, hits, context = execution_context(executable, plan, 'boss_detail')
+    page = daily.ClanBattleDailyExecutionPage(executable, plan, NS())
+    image = np.zeros((720, 1280, 3), np.uint8)
+    reading = page.read(context, image, 'boss_detail')
+    assert reading['navigation_only'] and not {'boss', 'phase', 'formal', 'instance_id'} & reading.keys()
+    hits.add('CBDailyActionLabel_back_to_lobby')
+    assert page.action(context, image, 'back_to_lobby') == executable['daily']['execution']['actions']['back_to_lobby']['target']
+    with pytest.raises(RuntimeError, match='transition_unverified'):
+        page.action(context, image, 'open_formal')
+
+
+def test_initial_formation_returns_to_lobby_without_a_reserved_action(executable, plan):
+    port = object.__new__(daily.NativeClanDailyAdapter)
+    port.calibration, port.plan, port.action = deepcopy(executable), plan, None
+    port.calibration['daily']['execution']['carry_selection'] = {}
+    pages = iter(('CBPage_formation', 'CBPage_boss_detail', 'CBPage_lobby'))
+    calls = []
+    port.wait = lambda *args, **kwargs: next(pages)
+    port.run = lambda node, **kwargs: calls.append(node)
+    port.account_binding_valid = lambda plan: True
+    port.enter_lobby()
+    assert calls == ['CBAction_cancel_formation', 'CBAction_back_to_lobby']
+
+
 def test_used_units_reader_excludes_support_in_multiple_completed_teams(executable, plan):
     _, _, hits, context = execution_context(executable, plan, 'used_units', game_day='2026-10-25')
     slots = executable['daily']['execution']['used_units']['slots']

@@ -194,7 +194,8 @@ def daily_pipeline(calibration, plan):
     for page, spec in pages.items():
         for kind in ('labels', 'rejects'):
             for index, label in enumerate(spec[kind]):
-                nodes[f'CBDaily_{page}_{kind}_{index}'] = _node(label)
+                nodes[f'CBDaily_{page}_{kind}_{index}'] = _node(label,
+                    ocr_threshold=.8 if page == 'adventure' and kind == 'labels' else .9)
         for field, roi in spec['fields'].items():
             expected = PATTERNS.get(field)
             if field == 'boss':
@@ -205,6 +206,9 @@ def daily_pipeline(calibration, plan):
                 nodes.update(result_damage_nodes(roi, 'CBDaily_result_damage'))
             else:
                 nodes[f'CBDaily_{page}_{field}'] = _node({'roi': roi}, expected=expected)
+                if field == 'health':
+                    # The detector can split the HP ratio into incomplete number fragments.
+                    nodes[f'CBDaily_{page}_{field}']['only_rec'] = True
         nodes['CBDailyPage_' + page] = dict(recognition='Custom', custom_recognition='ClanBattleDailyPage',
             custom_recognition_param=dict(page=page), action='DoNothing', next=[], timeout=1000,
             pre_delay=0, post_delay=0)
@@ -219,7 +223,7 @@ class ClanBattleDailyPage(CustomRecognition):
         super().__init__()
         self.calibration, self.plan = calibration, plan
 
-    def read(self, context, image, page):
+    def read(self, context, image, page, *, labels_only=False):
         pages = dict(self.calibration['daily']['pages'])
         pages.update(self.calibration['daily'].get('execution', {}).get('pages', {}))
         if (context.tasker.stopping or image is None or image.shape != (720, 1280, 3)
@@ -232,7 +236,8 @@ class ClanBattleDailyPage(CustomRecognition):
                 or not all(self.hit(context, image, f'CBDaily_{page}_labels_{i}') for i in range(len(spec['labels'])))):
             raise RuntimeError('clan_battle_daily_page_unknown:' + page)
         values = {'page': page}
-        for field in spec['fields']:
+        fields = () if labels_only else spec['fields']
+        for field in fields:
             text = self.word(context, image, f'CBDaily_{page}_{field}')
             if field == 'boss':
                 values[field] = self.plan['boss']
@@ -532,6 +537,8 @@ class ClanBattleDailyExecutionPage(ClanBattleDailyPage):
         return units, support
 
     def read(self, context, image, page):
+        if not self.bound and page in ('formation', 'boss_detail'):
+            return dict(super().read(context, image, page, labels_only=True), navigation_only=True)
         value = super().read(context, image, page)
         execution = self.calibration['daily']['execution']
         if page == 'lobby':
@@ -631,6 +638,8 @@ class ClanBattleDailyExecutionPage(ClanBattleDailyPage):
     def action(self, context, image, name):
         spec = self.calibration['daily']['execution']['actions'][name]
         value = self.read(context, image, spec['page'])
+        if value.get('navigation_only') and name not in ('cancel_formation', 'back_to_lobby'):
+            raise RuntimeError('clan_battle_daily_transition_unverified')
         if not self.hit(context, image, 'CBDailyActionLabel_' + name):
             raise RuntimeError('clan_battle_daily_action_unknown:' + name)
         if name == 'open_boss':
@@ -1154,7 +1163,8 @@ class NativeClanDailyAdapter(NativeClanBattle):
             hit = 'CBPage_formation'
         if hit == 'CBPage_formation':
             self.run('CBAction_cancel_formation', click=True)
-            hit = self.wait(['CBPage_carry_selection' if selection and self.action['kind'] == 'carryover' else 'CBPage_boss_detail'], seconds=10)
+            hit = self.wait(['CBPage_carry_selection' if selection and self.action is not None
+                and self.action['kind'] == 'carryover' else 'CBPage_boss_detail'], seconds=10)
         if hit == 'CBPage_carry_selection':
             self.run('CBAction_close_carry_selection', click=True)
             self.wait(['CBPage_boss_detail'], seconds=10)

@@ -69,18 +69,18 @@ def test_regular_denial_creates_no_intent_and_no_frozen_batch(tmp_path, daily_re
     assert not port.executions and not ledgers(tmp_path) and not list(tmp_path.rglob('batch.json'))
 
 
-def test_denied_carryover_is_held_while_approved_main_attacks_continue(tmp_path, daily_request):
+def test_denied_carryover_holds_batch_without_moving_to_another_target(tmp_path, daily_request):
     port = ConsentPort(daily_request)
     port.issue, port.consent_fault = {1}, 'deny_carry'
     result, _ = run(tmp_path, daily_request, port)
-    assert result['regular_settled'] == 3 and result['carryover_settled'] == 0
+    assert result['regular_settled'] == 1 and result['carryover_settled'] == 0
     assert result['outcome'] == 'remind_carryover'
     assert result['held_carryovers'][0]['reason'] == 'carryover_not_authorized'
     assert [row['kind'] for row in port.confirmations] == ['regular', 'carryover']
-    assert [row['action']['kind'] for row in port.executions] == ['regular']*3
+    assert [row['action']['kind'] for row in port.executions] == ['regular']
     # The authorization hold remains replayable in the unchanged v1 Journal.
     again, _ = run(tmp_path, daily_request, port)
-    assert again['regular_settled'] == 3 and len(port.executions) == 3
+    assert again['regular_settled'] == 1 and len(port.executions) == 1
 
 
 def test_carryover_confirmation_is_separate_and_binds_source_team_time_and_new_instance(tmp_path, daily_request):

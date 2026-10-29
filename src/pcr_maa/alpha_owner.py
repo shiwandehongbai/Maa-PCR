@@ -162,7 +162,8 @@ class OwnerProvider:
                 or answer.get('combination') != selection):
             raise ValueError('owner_reply_binding_mismatch')
         remaining = answer.pop('remaining_seconds', None)
-        if type(remaining) not in (int, float) or not math.isfinite(remaining) or not 0 < remaining <= 1800:
+        max_seconds = 3600 if selection.get('selected_modules') == ['clan_battle_daily'] else 1800
+        if type(remaining) not in (int, float) or not math.isfinite(remaining) or not 0 < remaining <= max_seconds:
             raise ValueError('owner_reply_invalid_remaining_time')
         answer.pop('ok')
         answer['deadline'] = time.monotonic() + remaining

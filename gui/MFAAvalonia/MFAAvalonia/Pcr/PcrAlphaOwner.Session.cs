@@ -35,6 +35,8 @@ public static partial class PcrAlphaOwner
         public string? SelectedConfigPath { get; init; }
         public string? ConfigFileHash { get; init; }
         public bool PreparationOnly { get; init; }
+        public int MaxSeconds => !PreparationOnly && Selection["selected_modules"] is JArray { Count: 1 } modules
+            && (string?)modules[0] == "clan_battle_daily" ? 3600 : 1800;
         public readonly PcrStartConsent Consent = consent;
         public readonly PcrClanCodeBinding? ClanCode = selection["selected_modules"] is JArray { Count: 1 } modules
             && (string?)modules[0] == "clan_battle_daily" ? PcrClanCodeBinding.Capture(repository, (JObject)JObject.Parse(config.Json)["config"]!) : null;
@@ -258,7 +260,7 @@ public static partial class PcrAlphaOwner
             {
                 var reply = (JObject)request.DeepClone();
                 var valid = session == current && session.Consumed && !session.Revoked
-                    && session.Watch.Elapsed.TotalSeconds < 1800
+                    && session.Watch.Elapsed.TotalSeconds < session.MaxSeconds
                     && (session.Mapping == null || (session.Watch.Elapsed - session.MappingChecked).TotalSeconds <= 15)
                     && (long?)request["root_task_id"] == session.Root
                     && (string?)request["controller_uuid"] == session.Uuid
@@ -282,7 +284,7 @@ public static partial class PcrAlphaOwner
                 if (session != current || session.PreparationOnly || session.Preparing || !session.IsOffline && session.Mapping == null || session.Revoked || session.Consumed || session.Root == 0
                     || session.Mapping != null && (session.Watch.Elapsed - session.MappingChecked).TotalSeconds > 15
                     || !BindingUnchanged(session)
-                    || session.Watch.Elapsed.TotalSeconds >= 1800
+                    || session.Watch.Elapsed.TotalSeconds >= session.MaxSeconds
                     || (long?)request["root_task_id"] != session.Root || (string?)request["controller_uuid"] != session.Uuid
                     || !JToken.DeepEquals(request["combination"], session.Selection))
                 { session.Revoked = true; return new JObject { ["ok"] = false }; }
@@ -293,7 +295,7 @@ public static partial class PcrAlphaOwner
                     ["serial"] = binding["connection"]!["serial"],
                     ["combination"] = session.Selection.DeepClone(), ["execute"] = true,
                     ["game_day"] = session.Consent.GameDay, ["count_context"] = session.Consent.CountContext,
-                    ["remaining_seconds"] = 1800 - session.Watch.Elapsed.TotalSeconds,
+                    ["remaining_seconds"] = session.MaxSeconds - session.Watch.Elapsed.TotalSeconds,
                     ["schedule_authorizations"] = new JArray(session.Consent.ScheduleAuthorizations),
                     ["schedule_attest_current_plan"] = session.Consent.AttestCurrentPlan,
                     ["schedule_confirm_new_cycle"] = session.Consent.ConfirmNewCycle };

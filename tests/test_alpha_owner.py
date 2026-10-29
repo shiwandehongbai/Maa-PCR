@@ -88,6 +88,21 @@ class OwnerTests(unittest.TestCase):
             with self.subTest(remaining=remaining), self.assertRaisesRegex(ValueError, 'remaining_time'):
                 self.provider(self.reply(remaining_seconds=remaining))(self.context(), self.reply()['combination'])
 
+    def test_formal_clan_owner_accepts_one_hour_but_rejects_longer_grant(self):
+        selection = dict(version=1, selected_modules=['clan_battle_daily'], rewards_final=False)
+        answer = self.reply(combination=selection, remaining_seconds=3600)
+        start = time.monotonic()
+        grant = self.provider(answer)(self.context(), selection)
+        self.assertGreaterEqual(grant.deadline, start + 3600)
+        self.assertLess(grant.deadline, time.monotonic() + 3600.1)
+        with self.assertRaisesRegex(ValueError, 'remaining_time'):
+            self.provider(dict(answer, remaining_seconds=3601))(self.context(), selection)
+
+    def test_mixed_clan_selection_keeps_thirty_minute_limit(self):
+        selection = dict(version=1, selected_modules=['clan_battle_daily', 'rewards'], rewards_final=False)
+        with self.assertRaisesRegex(ValueError, 'remaining_time'):
+            self.provider(self.reply(combination=selection, remaining_seconds=1801))(self.context(), selection)
+
     def test_eof_and_pre_revocation_reject(self):
         provider = alpha_owner.OwnerProvider(io.StringIO(''), io.StringIO())
         with self.assertRaisesRegex(ValueError, 'channel_closed'):

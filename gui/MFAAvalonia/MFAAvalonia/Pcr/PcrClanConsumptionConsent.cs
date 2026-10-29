@@ -275,7 +275,7 @@ public static partial class PcrAlphaOwner
                 if (session.Target != null) RequireSelectedTarget(session.Processor.ViewModel!, session.Target, session.Config);
                 if (PcrClanCodeBinding.Capture(repository, config) != session.ClanCode) throw new InvalidDataException("clan_consent_code_changed");
                 lock (Gate)
-                    if (session == current && session.Consumed && !session.Revoked && session.Watch.Elapsed.TotalSeconds < 1800
+                    if (session == current && session.Consumed && !session.Revoked && session.Watch.Elapsed.TotalSeconds < session.MaxSeconds
                         && (session.Mapping == null || (session.Watch.Elapsed - session.MappingChecked).TotalSeconds <= 15)
                         && (long?)request["root_task_id"] == session.Root && (string?)request["controller_uuid"] == session.Uuid
                         && (string?)request["invocation_id"] == session.Invocation && BindingUnchanged(session)) return true;

@@ -18,6 +18,7 @@ def port(request, tmp_path):
         value = object.__new__(NativeClanDailyAdapter)
         NativeClanBattle.__init__(value, tasker, tmp_path)
         value.pending, value.action = None, None
+        value.calibration = {'daily': {'execution': {}}}
     value.checkpoint = lambda: None
     return value
 

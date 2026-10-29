@@ -195,9 +195,32 @@ def recover_disconnect(port, plan, error, *, pending=False):
         evidence.append(deepcopy(result))
         return result
 
+    def wait_choice(entry, choices, deadline):
+        while True:
+            check()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError('clan_battle_recovery_page_unknown')
+            # A loading frame must succeed as GTUnknown, not block the borrowed Context.
+            hit = port.choose([entry], timeout=max(1, min(1000, int(remaining * 1000))))
+            check()
+            result = port.last_receipt
+            rows = result.get('nodes', [])
+            if (len(rows) != 2 or rows[0].get('name') != 'GTChoose'
+                    or hit not in (entry, 'GTUnknown') or rows[1].get('name') != hit
+                    or not _readonly_receipt(port, rows)):
+                raise RuntimeError('clan_battle_recovery_page_unknown')
+            _root(dict(result, nodes=rows[:1]), 'GTChoose')
+            evidence.append(deepcopy(result))
+            if hit == entry:
+                return _choice(dict(result, nodes=rows[1:]), entry, choices)
+            _root(dict(result, nodes=rows[1:]), 'GTUnknown')
+            time.sleep(max(0, min(.3, deadline - time.monotonic())))
+
     try:
         run('LabyDisconnectReturnTitleOnce', click=True)
-        hit = _choice(run('LabyGameSessionRecoveryObserved'), 'LabyGameSessionRecoveryObserved', RECOVERY_PAGES)
+        hit = wait_choice('LabyGameSessionRecoveryObserved', RECOVERY_PAGES,
+            min(expires, time.monotonic() + 30))
         if hit == 'LabyClientTitleObserved':
             title = run('LabyClientTitleObserved')
             if str(title_player_id(title)) != expected:
@@ -211,9 +234,7 @@ def recover_disconnect(port, plan, error, *, pending=False):
                 if remaining <= 0:
                     raise RuntimeError('clan_battle_recovery_login_unverified')
                 entry = 'LabyGameSessionAfterTitleObserved'
-                if not port.tasker.resource.override_pipeline({entry: dict(timeout=max(1, int(remaining * 1000)))}):
-                    raise RuntimeError('clan_battle_recovery_pipeline_rejected')
-                hit = _choice(run(entry), entry, AFTER_TITLE_PAGES)
+                hit = wait_choice(entry, AFTER_TITLE_PAGES, startup_expires)
                 if hit == DISCONNECT:
                     raise RuntimeError('clan_battle_recovery_disconnected_again')
                 if hit == 'LabyClientDownloadErrorObserved':
