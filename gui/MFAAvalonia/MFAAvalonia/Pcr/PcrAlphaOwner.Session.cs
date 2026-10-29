@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -32,6 +34,8 @@ public static partial class PcrAlphaOwner
         public readonly JObject Selection = (JObject)selection.DeepClone();
         public readonly ValidatedConfig Config = config;
         public Action<string>? ReportSummary { get; init; }
+        public Action<JObject>? ReportPlayerLog { get; init; }
+        public string? DiagnosticRunId { get; init; }
         public string? SelectedConfigPath { get; init; }
         public string? ConfigFileHash { get; init; }
         public bool PreparationOnly { get; init; }
@@ -200,6 +204,9 @@ public static partial class PcrAlphaOwner
                 var arguments = owner.SelectedConfigPath is { } selectedPath
                     ? new[] { "-B", script, request.Identifier, selectedPath }
                     : new[] { "-B", script, request.Identifier };
+                if (owner.DiagnosticRunId is { } logId && Path.GetFileName(script) == "start-alpha-owned-agent.py")
+                    arguments = arguments.Concat(new[] { "--player-log", logId,
+                        owner.Selection["selected_modules"] is JArray { Count: 1 } chosen && ((string?)chosen[0])?.StartsWith("clan_battle_",StringComparison.Ordinal) == true ? "clan" : "daily" }).ToArray();
                 process.Start(PcrRuntimePaths.ResolvePython(root), root, arguments);
                 _ = process.Send(owner.Config.Json).ContinueWith(RevokeChannel,
                     CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
@@ -242,6 +249,11 @@ public static partial class PcrAlphaOwner
                         {
                             var reply = await ConfirmClanConsumptionAsync(session, PcrClanConsumptionConsent.Parse(line[PcrClanConsumptionConsent.Prefix.Length..]));
                             await ((bool?)reply["ok"] == true ? process.SendGrant(reply.ToString(Formatting.None)) : process.Send(reply.ToString(Formatting.None)));
+                        }
+                        else if (line.StartsWith("pcr-player-log:", StringComparison.Ordinal))
+                        {
+                            try { if (line.Length <= 16384) owner.ReportPlayerLog?.Invoke(JObject.Parse(line[15..])); }
+                            catch { /* Display-only packets never revoke an Owner. */ }
                         }
                         else if (line.StartsWith("info:") || line.StartsWith("error:") || line.StartsWith("warning:"))
                         {

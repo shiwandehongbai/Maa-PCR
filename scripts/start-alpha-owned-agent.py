@@ -17,6 +17,10 @@ def bind_selected_config(entry, snapshot, selected_path):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) == 6 and sys.argv[3] == '--player-log':
+        from pcr_maa import player_log
+        player_log.configure(Path(__file__).resolve().parents[1], sys.argv[4], sys.argv[5])
+        del sys.argv[3:]
     if len(sys.argv) != 3:
         raise SystemExit('expected_owned_identifier_and_selected_config')
     from maa.agent.agent_server import AgentServer  # select server mode first
@@ -31,3 +35,5 @@ if __name__ == '__main__':
         raise SystemExit(agent_entry.main([sys.argv[1]], execution_context=provider))
     finally:
         provider.revoke()
+        from pcr_maa import player_log
+        player_log.close()

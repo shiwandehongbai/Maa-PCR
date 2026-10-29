@@ -19,6 +19,9 @@ def main(*, runner=run_owned):
         with output_lock:
             output.write(json.dumps(message,ensure_ascii=False,separators=(',',':'))+'\n')
             output.flush()
+    from pcr_maa import player_log
+    if len(sys.argv) == 3 and sys.argv[1] == '--player-log':
+        player_log.configure(ROOT, sys.argv[2], 'labyrinth', emit)
     try:
         line=sys.stdin.readline(65537)
         if len(line)>65536:
@@ -29,6 +32,7 @@ def main(*, runner=run_owned):
         request=parse_request(value)
         value=None
         result=runner(request,sys.stdin,emit)
+        player_log.flush()
         emit(public_result(result))
         return 0
     except (ConfigurationError, ValueError, TypeError):
@@ -38,6 +42,7 @@ def main(*, runner=run_owned):
         emit(dict(kind='result',outcome='adapter_failed',batch_complete=False))
         return 3
     finally:
+        player_log.close()
         line=None
         if request is not None:
             request.clear()

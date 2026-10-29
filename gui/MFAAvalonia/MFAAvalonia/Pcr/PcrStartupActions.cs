@@ -63,6 +63,7 @@ internal static class PcrStartupActions
             var message = "启动后操作未完成：" + ex.Message;
             vm.ShowPcrStartError(vm.BeginPcrRunFeedback(), message);
             vm.Processor.AddLog(message, useMarkdown: false);
+            vm.FinishPlayerLog("not_started");
         }
         finally
         {

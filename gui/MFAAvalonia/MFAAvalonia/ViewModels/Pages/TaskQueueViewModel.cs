@@ -164,7 +164,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(Idle))]
     private bool _isRunning;
 
-    public bool Idle => !IsRunning;
+    public bool Idle => !IsRunning && !PcrCleanupPending;
 
     partial void OnIsRunningChanged(bool value)
     {
@@ -172,6 +172,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         if (MaaProcessorManager.IsInstanceCreated) PcrProfileRunGate.Notify();
         OnPropertyChanged(nameof(CanEditPcrTarget));
         OnPropertyChanged(nameof(PcrRunStatus));
+        OnPropertyChanged(nameof(CanExportPlayerLog));
     }
 
     public long BeginTaskRun(IReadOnlyCollection<DragItemViewModel> tasks)
@@ -804,6 +805,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         // Reflect the user's stop request immediately.  The processor still owns the
         // actual cancellation/cleanup and prevents another run from starting until its
         // task chain has unwound.
+        PcrCleanupPending = Processor.IsTaskRunActive;
         IsRunning = false;
         Processor.Stop(MFATask.MFATaskStatus.STOPPED, action: action);
     }
@@ -1280,7 +1282,8 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     /// <summary>黎明界实时日志的一行：时间与内容分开，才能对齐显示并逐行选中复制。</summary>
     public sealed record LabyrinthLogRow(string Time, string Content);
 
-    public ObservableCollection<LabyrinthLogRow> LabyrinthLogRows { get; } = new();
+    private ObservableCollection<LabyrinthLogRow>? pcrLiveRows;
+    public ObservableCollection<LabyrinthLogRow> LabyrinthLogRows => pcrLiveRows ??= new();
 
     /// <summary>
     /// 写一行黎明界实时日志。文件那一份同步写（导出读的就是日志文件，
@@ -1289,28 +1292,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     /// </summary>
     public void AddLabyrinthLog(string content)
     {
-        if (string.IsNullOrEmpty(content)) return;
-        try
-        {
-            LoggerHelper.Info("[黎明界] " + content);
-        }
-        catch
-        {
-            // 文件写入失败不影响面板与运行。
-        }
-
-        DispatcherHelper.PostOnMainThread(() =>
-        {
-            try
-            {
-                LabyrinthLogRows.Add(new LabyrinthLogRow(DateTime.Now.ToString("HH':'mm':'ss"), content));
-                while (LabyrinthLogRows.Count > LabyrinthMaxLogCount) LabyrinthLogRows.RemoveAt(0);
-            }
-            catch
-            {
-                // A trace line is never business evidence.
-            }
-        }, DispatcherPriority.Normal);
+        AddPcrLiveLog(content);
     }
 
     /// <summary>
@@ -1503,7 +1485,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     private string _pcrRunSummary = "";
     public bool PcrHasRunSummary => !string.IsNullOrEmpty(PcrRunSummary);
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(PcrHasStartError), nameof(PcrRunStatus))]
+    [NotifyPropertyChangedFor(nameof(PcrHasStartError), nameof(PcrRunStatus), nameof(CanExportPlayerLog))]
     private string _pcrStartError = "";
     public bool PcrHasStartError => !string.IsNullOrEmpty(PcrStartError);
 
@@ -1512,6 +1494,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         var run = Interlocked.Increment(ref _pcrFeedbackRun);
         PcrRunSummary = "";
         PcrStartError = "";
+        BeginPlayerLog();
         return run;
     }
 
@@ -1527,17 +1510,23 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         if (run != Interlocked.Read(ref _pcrFeedbackRun) || Volatile.Read(ref _isDisposed) != 0
             || !line.StartsWith(prefix, StringComparison.Ordinal)) return;
         string? summary;
+        bool failed;
         try
         {
             var result = JObject.Parse(line[prefix.Length..]);
             summary = result["summary"]?.Type == JTokenType.String ? (string?)result["summary"] : null;
+            failed = (bool?)result["action_success"] == false;
         }
         catch (JsonException) { return; }
         if (string.IsNullOrWhiteSpace(summary)) return;
         // A previous child's queued UI update must not replace a newer run's result.
         Dispatcher.UIThread.Post(() => {
             if (run == Interlocked.Read(ref _pcrFeedbackRun) && Volatile.Read(ref _isDisposed) == 0)
+            {
                 PcrRunSummary = summary;
+                AddPcrLiveLog(summary);
+                if (failed) PcrStartError = summary;
+            }
         });
     }
 
@@ -1590,6 +1579,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     {
         get
         {
+            if (PcrCleanupPending) return "正在释放执行资源，完成后可以切换功能…";
             if (PcrHasStartError) return PcrStartError;
             if (IsLabyrinthProfile) return LabyrinthSettings.Progress;
             var task = TaskItemViewModels.FirstOrDefault(item => item.InterfaceItem?.Entry == "PCRAlphaEntry");
@@ -1604,7 +1594,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public bool CanEditPcrTarget => !PcrProfileRunGate.UpdatePending && !PcrProfileRunGate.OtherProfileBusy(Processor.InstanceId) && !IsRunning && !Processor.IsTaskRunActive
+    public bool CanEditPcrTarget => !PcrCleanupPending && !PcrProfileRunGate.UpdatePending && !PcrProfileRunGate.OtherProfileBusy(Processor.InstanceId) && !IsRunning && !Processor.IsTaskRunActive
         && !Processor.IsConnecting && !PcrTargetBusy && !PcrConnectionPending && _isDisposed == 0
         && !(Processor.MaaTasker?.IsRunning ?? false)
         && !(Processor.MaaTasker?.IsStopping ?? false)
@@ -1612,47 +1602,8 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     public IEnumerable<object> VisibleDevices => Devices;
     internal void NotifyPcrDiagnosticBoundary() => OnPropertyChanged(nameof(CanEditPcrTarget));
 
-    [ObservableProperty] private string _pcrDiagnosticsStatus = "";
-
     [RelayCommand]
-    private async Task ExportPcrDiagnostics()
-    {
-        if (!IsPcrMode || !CanEditPcrTarget) return;
-        PcrDiagnosticsStatus = "正在导出本次诊断摘要……";
-        try
-        {
-            var app = AppContext.BaseDirectory;
-            var root = PcrRuntimePaths.ResolveRepository(app);
-            var info = new System.Diagnostics.ProcessStartInfo(PcrRuntimePaths.ResolvePython(root)) {
-                UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root,
-                RedirectStandardOutput = true, RedirectStandardError = true
-            };
-            foreach (var arg in new[] { "-X", "utf8", "-B", System.IO.Path.Combine(root, "scripts", "player-maintenance.py"),
-                "diagnostics", "--player", app, "--repository", root }) info.ArgumentList.Add(arg);
-            using var process = System.Diagnostics.Process.Start(info)
-                ?? throw new InvalidOperationException("诊断工具未能启动。");
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            try { await process.WaitForExitAsync(deadline.Token); }
-            catch (OperationCanceledException)
-            {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
-                throw new InvalidOperationException("诊断导出超时，请稍后重试。");
-            }
-            var response = JObject.Parse(await stdout);
-            await stderr;
-            if (process.ExitCode != 0 || (string?)response["status"] != "diagnostics_exported"
-                || response["private_state_included"]?.Type != JTokenType.Boolean
-                || (bool?)response["private_state_included"] != false
-                || response["path"]?.Type != JTokenType.String)
-                throw new InvalidOperationException("诊断导出失败：" + ((string?)response["error"] ?? "工具返回无效结果"));
-            PcrDiagnosticsStatus = "已导出：" + (string)response["path"]!;
-            Processor.AddLog("PCR " + PcrDiagnosticsStatus + "；请查看摘要后自行分享。", (IBrush?)null);
-        }
-        catch (Exception ex) { PcrDiagnosticsStatus = ex.Message; }
-    }
-
+    private Task ExportPcrDiagnostics() => Export();
 
     private static bool IsValidManualPcrAdbTarget(AdbDeviceInfo device) =>
         AdbEditorDialogViewModel.TryNormalizePcrAdbTarget(device.AdbPath, device.AdbSerial,
@@ -2656,6 +2607,11 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private Task Export()
     {
+        if (IsPcrMode)
+        {
+            new PcrLiveLogView { DataContext = this }.ShowExport(false);
+            return Task.CompletedTask;
+        }
         using var _ = BeginUiLogScope("ExportLogs");
         LoggerHelper.UserAction("导出日志", null,
             operation: "ExportLogs", instanceId: Processor.InstanceId, instanceName: InstanceName);

@@ -147,8 +147,8 @@ class OwnerProvider:
         root = context.get_task_job().job_id
         uuid = context.tasker.controller.uuid
         request = dict(root_task_id=root, controller_uuid=uuid, combination=selection)
-        self.outgoing.write(PREFIX + json.dumps(request, allow_nan=False) + '\n')
-        self.outgoing.flush()
+        from .player_log import write_protocol
+        write_protocol(self.outgoing, PREFIX + json.dumps(request, allow_nan=False) + '\n')
         threading.Thread(target=self._read, daemon=True).start()
         try:
             answer = self._answers.get(timeout=self.timeout)
@@ -202,8 +202,8 @@ class OwnerProvider:
             request = dict(root_task_id=key[1], controller_uuid=key[2],
                            invocation_id=key[3], probe_id=uuid4().hex)
             try:
-                self.outgoing.write(SOURCE_PREFIX + json.dumps(request) + '\n')
-                self.outgoing.flush()
+                from .player_log import write_protocol
+                write_protocol(self.outgoing, SOURCE_PREFIX + json.dumps(request) + '\n')
                 try:
                     answer = self._source_answers.get(timeout=self.timeout)
                 except queue.Empty:
@@ -240,8 +240,8 @@ class OwnerProvider:
             self._pending_clan = request
             timed_out = False
             try:
-                self.outgoing.write(CLAN_PREFIX + json.dumps(request, allow_nan=False) + '\n')
-                self.outgoing.flush()
+                from .player_log import write_protocol
+                write_protocol(self.outgoing, CLAN_PREFIX + json.dumps(request, allow_nan=False) + '\n')
                 try:
                     answer = self._clan_answers.get(timeout=wait)
                 except queue.Empty:

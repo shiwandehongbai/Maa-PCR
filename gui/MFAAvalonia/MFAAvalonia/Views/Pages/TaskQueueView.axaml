@@ -228,7 +228,7 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        
+
         <Style Selector="Border#TaskToggleBorder:pointerover, Border#TaskToggleBorder1:pointerover">
             <Setter Property="RenderTransform">
                 <ScaleTransform ScaleX="1.12" ScaleY="1.12" />
@@ -491,99 +491,11 @@
                                     </StackPanel>
                                 </Expander>
                                 <TextBlock Text="{Binding PcrSettings.Summary}" TextWrapping="Wrap" FontSize="12" />
-                                <Button Content="导出诊断" Command="{Binding ExportPcrDiagnosticsCommand}" HorizontalAlignment="Left" ToolTip.Tip="导出版本、选集、运行编号和结果摘要；不含截图、设备信息或账本，不会自动发送。" />
-                                <TextBlock Text="{Binding PcrDiagnosticsStatus}" TextWrapping="Wrap" FontSize="12" />
+                                <Button Content="导出诊断" Command="{Binding ExportPcrDiagnosticsCommand}" HorizontalAlignment="Left" IsEnabled="{Binding CanExportPlayerLog}" ToolTip.Tip="导出当前功能最近一次运行的日志和可选截图；分享前可预览、取消截图，不会自动发送。" />
                             </StackPanel>
                         </Expander>
                     </suki:GlassCard>
-                    <suki:GlassCard Padding="12,4" IsAnimated="False">
-                        <Expander x:Name="PcrRunLog" Header="运行日志" IsExpanded="False" HorizontalAlignment="Stretch">
-                            <StackPanel Spacing="8">
-                                <WrapPanel>
-                                    <Button Content="导出日志" Command="{Binding ExportCommand}" Margin="0,0,8,0" IsEnabled="{Binding CurrentInstanceIdle, Source={x:Static helper:Instances.RootViewModel}}" />
-                                    <Button Content="清空日志" Command="{Binding ClearCommand}" IsEnabled="{Binding Idle, Source={x:Static helper:Instances.RootViewModel}}" />
-                                </WrapPanel>
-                            <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" extensions:ScrollViewerExtensions.AutoScroll="True">
-                    <ItemsControl ItemsSource="{Binding Path=LogItemViewModels}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Spacing="8" />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Grid Name="PcrLogParentGrid">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.Resources>
-                                        <suki:IfConditionConverter x:Key="IfConditionConverter">
-                                            <suki:IfConditionConverter.False>
-                                                <DataTemplate DataType="other:LogItemViewModel">
-                                                    <TextBlock FontSize="12"
-                                                               FontWeight="{Binding Weight}"
-                                                               Foreground="{Binding Color}"
-                                                               Background="{Binding BackgroundColor}"
-                                                               HorizontalAlignment="Stretch"
-                                                               IsVisible="{Binding !UseMarkdown}"
-                                                               Margin="0,4.8,0,0"
-                                                               TextWrapping="WrapWithOverflow"
-                                                               Text="{Binding Content}"
-                                                               VerticalAlignment="Stretch" />
-                                                </DataTemplate>
-                                            </suki:IfConditionConverter.False>
-                                            <suki:IfConditionConverter.True>
-                                                <DataTemplate DataType="other:LogItemViewModel">
-                                                    <mdxaml:MarkdownScrollViewer IsVisible="{Binding UseMarkdown}"
-                                                            Markdown="{Binding Content}"
-                                                            Margin="0,4.8,0,0">
-                                                        <mdxaml:MarkdownScrollViewer.Engine>
-                                                            <extensions:MarkdownExtension />
-                                                        </mdxaml:MarkdownScrollViewer.Engine>
-                                                        <mdxaml:MarkdownScrollViewer.Styles>
-                                                            <StyleInclude
-                                                                Source="avares://MFAAvalonia.Core/Assets/Style/MdXamlDocStyle.axaml" />
-                                                        </mdxaml:MarkdownScrollViewer.Styles>
-                                                        <mdxaml:MarkdownScrollViewer.Plugins>
-                                                            <StaticResource ResourceKey="MdXamlPlugin" />
-                                                        </mdxaml:MarkdownScrollViewer.Plugins>
-                                                    </mdxaml:MarkdownScrollViewer>
-                                                </DataTemplate>
-                                            </suki:IfConditionConverter.True>
-                                        </suki:IfConditionConverter>
-                                    </Grid.Resources>
-                                    <TextBlock FontSize="12"
-                                               Name="PcrLogFirstCol"
-                                               Foreground="{DynamicResource SukiDisabledText}"
-                                               Grid.Column="0"
-                                               HorizontalAlignment="Left"
-                                               IsVisible="{Binding ShowTime}"
-                                               Margin="0,5,2,0"
-                                               MinWidth="55"
-                                               Text="{Binding Time}"
-                                               TextWrapping="Wrap"
-                                               VerticalAlignment="Top" />
-                                    <ContentControl Grid.Column="1"
-                                                    Content="{Binding}"
-                                                    HorizontalAlignment="Stretch"
-                                                    VerticalAlignment="Top"
-                                                    ContentTemplate="{Binding UseMarkdown,Converter={StaticResource IfConditionConverter}}">
-                                        <ContentControl.MaxWidth>
-                                            <MultiBinding Converter="{converters:MaxWidthConverter}">
-                                                <Binding ElementName="PcrLogParentGrid" Path="Bounds.Width" />
-                                                <Binding ElementName="PcrLogFirstCol" Path="Bounds.Width" />
-                                            </MultiBinding>
-                                        </ContentControl.MaxWidth>
-                                    </ContentControl>
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                            </ScrollViewer>
-                            </StackPanel>
-                        </Expander>
-                    </suki:GlassCard>
+
                     <suki:GlassCard Padding="12,4" IsAnimated="False" IsVisible="{Binding EnableLiveView}">
                         <Expander Header="设备画面" IsExpanded="False" HorizontalAlignment="Stretch">
                             <Image Source="{Binding LiveViewImage}" MaxHeight="240" Stretch="Uniform" />
@@ -615,53 +527,9 @@
             </Grid>
         </suki:GlassCard>
 
-        <!-- 黎明界实时日志：只属于黎明界档案，固定在开始任务栏下方，默认折叠成一行标题。
-             内容来自 Owner 的逐步 trace（开局/选人/编队/战斗/商店/停止原因），纯展示。 -->
-        <suki:GlassCard Grid.Row="3" Padding="14,8" IsAnimated="False" IsVisible="{Binding IsLabyrinthProfile}">
-            <!-- 不设 RowSpacing：折叠时底部那行不可见，间距改由 Border 的 Margin 提供。 -->
-            <Grid RowDefinitions="Auto,Auto">
-                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
-                    <ToggleButton x:Name="PcrLiveLogToggle" Content="实时日志" IsChecked="False" FontSize="12" Padding="10,4"
-                                  Checked="PcrLiveLogToggle_OnChecked"
-                                  ToolTip.Tip="展开或收起实时日志面板；收起时日志仍照常写入日志文件。" />
-                    <TextBlock Grid.Column="1" FontSize="12" VerticalAlignment="Center" MaxLines="1"
-                               Foreground="{DynamicResource SukiLowText}" TextTrimming="CharacterEllipsis"
-                               Text="实时显示开局筛选、选人、编队、战斗与停止原因；每行可拖动选中并 Ctrl+C 复制。" />
-                    <Button Grid.Column="2" Content="滚到底部" Click="PcrLiveLogBottom_OnClick" FontSize="12" Padding="10,4"
-                            ToolTip.Tip="滚回最新一行；手动上滚后用它恢复自动跟随底部。" />
-                    <Button Grid.Column="3" Content="清空" Command="{Binding ClearLabyrinthLogCommand}" FontSize="12"
-                            Padding="10,4" ToolTip.Tip="只清空这个面板，不影响日志文件。" />
-                    <Button Grid.Column="4" Content="导出" Command="{Binding ExportCommand}" FontSize="12" Padding="10,4"
-                            ToolTip.Tip="打开日志导出窗口；黎明界逐步日志已写入 GUI 日志文件，账本与原生 trace 随“黎明界运行日志”导出。" />
-                </Grid>
-                <Border Grid.Row="1" Margin="0,6,0,0" BorderThickness="1" CornerRadius="6" Padding="6,4"
-                        BorderBrush="{DynamicResource SukiControlBorderBrush}"
-                        IsVisible="{Binding IsChecked, ElementName=PcrLiveLogToggle}">
-                    <ScrollViewer x:Name="PcrLiveLogScroll" Height="170" VerticalScrollBarVisibility="Auto"
-                                  extensions:ScrollViewerExtensions.AutoScroll="True"
-                                  extensions:ScrollViewerExtensions.PanningMode="VerticalOnly">
-                        <ItemsControl ItemsSource="{Binding LabyrinthLogRows}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel Spacing="2" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <!-- 逐行 SelectableTextBlock：单行拖动选中 + Ctrl+C。 -->
-                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
-                                        <SelectableTextBlock FontSize="12" MinWidth="58" VerticalAlignment="Top"
-                                                             Foreground="{DynamicResource SukiDisabledText}"
-                                                             Text="{Binding Time}" />
-                                        <SelectableTextBlock Grid.Column="1" FontSize="12" TextWrapping="WrapWithOverflow"
-                                                             Text="{Binding Content}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </Border>
-            </Grid>
+        <!-- 三个功能共享日志布局，数据按当前功能和运行隔离。 -->
+        <suki:GlassCard Grid.Row="3" Padding="14,8" IsAnimated="False">
+            <pcr:PcrLiveLogView />
         </suki:GlassCard>
     </Grid>
     <!-- 非 PCR 资源继续使用原任务仪表盘。 -->
@@ -703,7 +571,7 @@
                     <!-- 分隔符已注释 -->
                     <!-- <Border x:Name="Spliter1" Grid.Column="1" Width="1" Height="30"
                             Background="{DynamicResource SukiControlBorderBrush}" Margin="20,0" /> -->
-    
+
                     <!-- 左侧：资源选择 -->
                     <Grid x:Name="ResourceSelectorPanel" Grid.Column="0" VerticalAlignment="Center"
                           ColumnDefinitions="Auto,*">

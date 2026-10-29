@@ -262,6 +262,8 @@ public static partial class PcrAlphaOwner
                     throw new InvalidOperationException("Offline allocation and fixed readback must be installed together");
                 current = new Session(vm.Processor, selection, snapshot, consent) {
                     ReportSummary = line => vm.ReceivePcrRunOutput(feedbackRun, line),
+                    ReportPlayerLog = value => vm.ReceivePlayerLog(feedbackRun, value),
+                    DiagnosticRunId = vm.PlayerLog?.RunId,
                     SelectedConfigPath = review ? selectedPath : null,
                     ConfigFileHash = review ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(selectedPath))) : null,
                     PreparationOnly = !offline && offlineMuMu != null,
@@ -325,7 +327,7 @@ public static partial class PcrAlphaOwner
         finally
         {
             lock (Gate) { pendingStart = null; prompting = 0; }
-            if (!handedToProcessor) vm.IsRunning = false;
+            if (!handedToProcessor) { vm.IsRunning = false; vm.FinishPlayerLog("not_started"); }
             attempt.Cancel.Dispose();
             PcrFormalPreflight.Trace("owner_finally");
         }

@@ -505,6 +505,9 @@ class OwnedRuntime:
         finally:
             try:self.timings.transition(None)
             except Exception:self.timing_collection = 'incomplete'
+            if self.tasker is not None:
+                from .. import player_log
+                player_log.capture(self.tasker, 'complete' if self.ocr_success else 'stopped')
             self.request.clear()
             if self.ocr_diagnostics is not None:
                 try:self.ocr_diagnostics.finish(not self.ocr_success)

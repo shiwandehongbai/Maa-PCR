@@ -99,7 +99,7 @@ def test_formal_batch_tail_reminder_reaches_player_summary(daily_request,tmp_pat
     from test_clan_battle_batch import Port
     from pcr_maa.clan_battle_batch import execute_batch
     from pcr_maa.preset_execution import Journal
-    port=Port(daily_request);port.issue={1};port.refresh=False
+    port=Port(daily_request);port.issue={3};port.refresh=False
     result=execute_batch(port,Journal(tmp_path/'ledger'),daily_request,now=port.now(),explicit_start=True)
     assert result['outcome']=='remind_carryover' and result['remaining_count']==0
     text=gui_contract.result_text(dict(selected_modules=[MODULE],steps=[dict(result=result)]))

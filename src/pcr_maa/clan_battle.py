@@ -638,6 +638,8 @@ def execute_simulation(port, journal, plan):
         try:
             support = support_requirement(plan, load_snapshot(plan))
             port.checkpoint()
+            from . import player_log
+            player_log.text('公会战模拟：正在核对目标和队伍。')
             port.prepare(plan)
             ready = port.verify_team(plan)
             if (type(ready) is not dict or not _team(ready, plan, support)
@@ -653,6 +655,7 @@ def execute_simulation(port, journal, plan):
                 team_evidence=deepcopy(ready))
             journal.append(intent)
             report.update(simulation_started=True, consumption_sent=True)
+            player_log.text('公会战模拟：编队已核对，正在执行并等待结果。')
             result = port.start_and_read(plan)
             if (type(result) is not dict or not _team(result, plan, support)
                     or result.get('result_verified') is not True or result.get('settings_verified') is not True
@@ -663,6 +666,7 @@ def execute_simulation(port, journal, plan):
             journal.append(dict(intent, state='settled', outcome='simulated', simulation=True,
                 damage=result['damage'], damage_verified=True, settings_verified=True,
                 result_evidence=deepcopy(result), resolved_at=time.time()))
+            player_log.text(f"模拟战结果已确认，伤害 {result['damage']}。")
             report.update(outcome='simulated', damage=result['damage'], damage_verified=True,
                 settings_verified=True, settlement_verified=True, result=result,
                 intent_id=intent['intent_id'])

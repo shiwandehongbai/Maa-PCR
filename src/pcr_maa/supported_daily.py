@@ -743,6 +743,11 @@ def execute_supported(tasker, config, *, game_day, context, directory, execute=F
         except Exception:
             timing_collection = 'unavailable'
         for index, step in enumerate(report['steps']):
+            from . import player_log
+            labels = {'schedule_onekey': '日程', 'event': '活动', 'abyss': '深渊前哨',
+                      'deep': '深域', 'very_hard': '高难', 'hard': '困难 / 外传',
+                      'normal': '普通', 'rewards': '领取奖励', 'rewards_final': '末尾补领'}
+            player_log.text('开始：' + labels.get(step['name'], step['name']))
             reason = boundary_error()
             if reason:
                 report.update(outcome='stopped', error=reason)
@@ -784,8 +789,11 @@ def execute_supported(tasker, config, *, game_day, context, directory, execute=F
                 with _control_lock(directory):
                     save()
             if step['status'] in ('stopped', 'failed', 'interrupted'):
+                player_log.text(labels.get(step['name'], step['name']) + '未完成，已停止；详情见结束摘要。')
                 report['outcome'] = step['status']
                 break
+            player_log.text(labels.get(step['name'], step['name']) + '：' +
+                ('目标已满足，跳过' if step['status'].startswith('skipped') else '本项执行结束'))
             if step.get('result', {}).get('original_execution_unresolved'):
                 report['original_execution_unresolved'] = True
                 if step['status'] != 'skipped_goal_met' and index + 1 < len(report['steps']):

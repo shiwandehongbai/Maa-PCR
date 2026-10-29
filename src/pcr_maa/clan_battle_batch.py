@@ -717,6 +717,8 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                     report['outcome'] = chosen['status']
                     return report
                 action = chosen['action']
+                from . import player_log
+                player_log.text(f"正在核对第 {action['slot']} 刀：Boss {action['boss']}，第 {action['round']} 轮。")
                 job = request['slot_plans'][str(action['slot'])]
                 permission, action_key = None, None
                 if callable(consent):
@@ -754,6 +756,7 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                         raise ValueError('daily_consumption_authorization_already_reserved')
                 simulation.require_timing(port, job)
                 ready = _ready(port.prepare(deepcopy(action), deepcopy(job), deepcopy(binding)), action, request, binding)
+                player_log.text(f"第 {action['slot']} 刀编队和目标已核对，正在准备出刀。")
                 if action['kind'] == 'carryover':
                     grant = grants[action['stock_index']]
                     if (ready['unit_ids'] != grant['using_unit'] or ready['support_unit'] != grant['support_unit']
@@ -822,6 +825,7 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                 previously_sent = report['consumption_sent']
                 report['consumption_sent'] = True
                 try:
+                    player_log.text(f"第 {action['slot']} 刀开始执行；正在等待战斗与结算。")
                     value = port.execute(deepcopy(intent), deepcopy(job))
                 except Exception as exc:
                     from .native import NativeInputNotSent
@@ -837,6 +841,7 @@ def execute_batch(port, journal, request, *, now=None, explicit_start=False):
                 proposed = events + [intent, dict(intent, state='settled', result=deepcopy(result))]
                 regular, grants, consumed, pending, external = _history(proposed, request, binding)
                 day_journal.append(proposed[-1])
+                player_log.text(f"第 {action['slot']} 刀已结算，伤害 {value.get('damage', '未知')}；记录已保存。")
                 events = proposed
                 report['attempts'].append(dict(slot=action['slot'], kind=action['kind'],
                     intent_id=intent['intent_id'], stock_index=action['stock_index'], damage=result['damage']))

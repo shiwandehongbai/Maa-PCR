@@ -164,6 +164,7 @@ internal static class PcrLabyrinthOwner
                 vm.LabyrinthSettings.Status=ex.Message;
                 vm.ShowPcrStartError(feedbackRun,"本次未能开始："+ex.Message);
                 Trace(vm,"本次未能开始："+ex.Message);
+                vm.FinishPlayerLog("not_started");
                 vm.Processor.AddLog(ex.Message,(IBrush?)null);
                 return;
             }
@@ -171,6 +172,7 @@ internal static class PcrLabyrinthOwner
         var released=false;
         var cancelled=false;
         var finished=false;
+        var terminalOutcome="stopped";
         using var timeout=new CancellationTokenSource(TimeSpan.FromHours(24));
         using var startup=new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var cancel=CancellationTokenSource.CreateLinkedTokenSource(run.Cancel.Token,timeout.Token,startup.Token);
@@ -181,7 +183,9 @@ internal static class PcrLabyrinthOwner
             if (!File.Exists(script)) throw new InvalidOperationException("黎明界执行组件缺失，请重新解压完整候选包。");
             cancel.Token.ThrowIfCancellationRequested();
             run.Child=new PcrWindowsChild();
-            run.Child.Start(PcrRuntimePaths.ResolvePython(root),root,"-X","utf8","-B","-u",script);
+            var arguments = new[] { "-X", "utf8", "-B", "-u", script };
+            if (vm.PlayerLog is { } playerLog) arguments = arguments.Concat(new[] { "--player-log", playerLog.RunId }).ToArray();
+            run.Child.Start(PcrRuntimePaths.ResolvePython(root),root,arguments);
             await run.Child.Send(request.ToString(Formatting.None)).WaitAsync(cancel.Token);
             request.Remove("credentials");
             bool receipt=false;
@@ -197,6 +201,7 @@ internal static class PcrLabyrinthOwner
                         DuplicatePropertyNameHandling=DuplicatePropertyNameHandling.Error });
                 } catch { throw new InvalidOperationException("黎明界组件返回了无效消息，本次任务已停止。"); }
                 var kind=(string?)value["kind"];
+                if (kind=="player_log") { vm.ReceivePlayerLog(feedbackRun,value); continue; }
                 if (kind=="control") {
                     var state=(string?)value["state"];
                     if (value.Properties().Count()!=2 || state is not ("paused" or "running"))
@@ -265,6 +270,7 @@ internal static class PcrLabyrinthOwner
                         throw new InvalidOperationException("黎明界通关结果不完整，本次未确认完成。");
                     receipt=true;
                     var outcome=(string?)value["outcome"];
+                    terminalOutcome=outcome ?? "unknown";
                     finished=!string.IsNullOrWhiteSpace(outcome) && outcome!="stopped";
                     vm.LabyrinthSettings.Progress=outcome=="complete" ? "目标次数已全部完成。" : "本次任务已停止。";
                     vm.LabyrinthSettings.Status=SettingsStatusFor(outcome);
@@ -281,6 +287,7 @@ internal static class PcrLabyrinthOwner
             if (!receipt) throw new InvalidOperationException("黎明界执行组件未返回有效结果，任务未确认完成。");
         } catch (OperationCanceledException) {
             cancelled=true;
+            vm.PcrCleanupPending=true;
             var timedOut=startup.IsCancellationRequested && !run.Cancel.IsCancellationRequested;
             var waiting=vm.LabyrinthSettings.Progress.TrimEnd('…');
             vm.LabyrinthSettings.Progress="已请求停止；正在回收执行组件…";
@@ -302,6 +309,8 @@ internal static class PcrLabyrinthOwner
             vm.ShowPcrStartError(feedbackRun,vm.LabyrinthSettings.Status);
             Trace(vm,vm.LabyrinthSettings.Status);
         } finally {
+            vm.PcrCleanupPending=true;
+            Trace(vm,"任务已结束，正在释放执行资源…");
             request.Remove("credentials");
             try {
                 if (run.Child!=null) await Task.Run(run.Child.Dispose);
@@ -323,6 +332,8 @@ internal static class PcrLabyrinthOwner
                 }
             }
             vm.Processor.AddLog(vm.LabyrinthSettings.Status,(IBrush?)null);
+            vm.PcrCleanupPending=false;
+            vm.FinishPlayerLog(released ? cancelled ? "stopped" : terminalOutcome : "cleanup_unconfirmed");
         }
         if (released && finished && !cancelled)
             vm.Processor.HandleAfterTaskOperation();

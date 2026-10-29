@@ -145,6 +145,7 @@ internal static class StartupActionsChecks
             Require(ownerStarts == selected && vm.PcrStartError.Contains("游戏路径"), "invalid_game_path_never_starts_script");
         }
         CheckAfterActions(vm.Processor);
+        CheckShortcut(vm, root);
         var labyrinth = Owner(manager, "pcr-labyrinth-v1");
         labyrinth.Processor.InstanceConfiguration.SetValue(ConfigurationKeys.BeforeTask, "StartupScriptOnly");
         Complete(Start(labyrinth));
@@ -177,7 +178,42 @@ internal static class StartupActionsChecks
         }
         Require(PcrAlphaOwner.ControllerCreations == 0 && PcrAlphaOwner.AgentCreations == 0 && PcrAlphaOwner.Grants == 0,
             "no_real_controller_agent_or_grant");
+        PlayerLogChecks.Run(directory, id => Owner(manager, id));
         Console.WriteLine($"PCR startup/completion actions checks passed: {checks}; two fresh processes, real harmless launch marker; game inputs=0; OS shutdowns=0");
+    }
+
+    private static void CheckShortcut(TaskQueueViewModel vm, string root)
+    {
+        var work = Path.Combine(root, "中文 启动目录"); Directory.CreateDirectory(work);
+        var shortcutPath = Path.Combine(root, "带 参数.lnk");
+        var marker = Path.Combine(work, "shortcut-marker.txt");
+        dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!)!;
+        dynamic link = shell.CreateShortcut(shortcutPath);
+        link.TargetPath = Environment.ProcessPath!;
+        link.Arguments = $"\"{typeof(StartupActionsChecks).Assembly.Location}\" \"{marker}\" --startup-launch-marker";
+        link.WorkingDirectory = work; link.Save();
+        var config = vm.Processor.InstanceConfiguration;
+        config.SetValue(ConfigurationKeys.SoftwarePath, shortcutPath);
+        config.SetValue(ConfigurationKeys.EmulatorConfig, "");
+        config.SetValue(ConfigurationKeys.WaitSoftwareTime, 0.0);
+        Complete(vm.Processor.StartSoftware());
+        var timer = Stopwatch.StartNew();
+        while (!File.Exists(marker) && timer.ElapsedMilliseconds < 5000) Thread.Sleep(10);
+        Require(File.Exists(marker), "shortcut_keeps_its_arguments");
+        var child = (Process)typeof(MaaProcessor).GetField("_softwareProcess", Hidden)!.GetValue(null)!;
+        Require(child.WaitForExit(5000) && child.ExitCode == 0, "shortcut_helper_exits_cleanly");
+        var explicitMarker = Path.Combine(work, "explicit.txt");
+        config.SetValue(ConfigurationKeys.EmulatorConfig, $"\"{typeof(StartupActionsChecks).Assembly.Location}\" \"{explicitMarker}\" --startup-launch-marker");
+        Complete(vm.Processor.StartSoftware());
+        child = (Process)typeof(MaaProcessor).GetField("_softwareProcess", Hidden)!.GetValue(null)!;
+        Require(child.WaitForExit(5000) && child.ExitCode == 0 && File.Exists(explicitMarker)
+            && File.ReadAllLines(marker).Length == 1, "explicit_arguments_override_shortcut");
+        var resolved = typeof(MaaProcessor).GetMethod("ResolveShortcut", Hidden)!.Invoke(null, [shortcutPath]);
+        Require(resolved is ValueTuple<string,string,string> target && target.Item3 == work, "shortcut_keeps_working_directory");
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+        try { Complete(vm.Processor.StartSoftware(cancelled.Token)); throw new Exception("cancelled_shortcut_started"); }
+        catch (OperationCanceledException) { checks++; }
+        Require(File.ReadAllLines(explicitMarker).Length == 1, "cancelled_shortcut_does_not_launch");
     }
 
     private static TaskQueueViewModel Owner(MaaProcessorManager manager, string id)

@@ -288,6 +288,8 @@ def run(tasker, entry, *, reset_hits=()):
             raise
         # Nested synchronous tasks share owner IDs. No correlated task start/end
         # proof is available here; do not attach sinks to borrowed/RPC proxies.
+        from . import player_log
+        player_log.observe(receipt, entry)
         return receipt
     if tasker_blocked(tasker):
         raise RuntimeError('Native tasker stopped or blocked; outcome unknown, no retry')
@@ -325,6 +327,8 @@ def run(tasker, entry, *, reset_hits=()):
         raise
     finally:
         proof.close()
+    from . import player_log
+    player_log.observe(receipt, entry)
     receipt['native_evidence'] = proof.receipt_proof(receipt['task_id'])
     proof=getattr(tasker,'_labyrinth_input_evidence',{}).get(job.job_id)
     if (reset_hits and type(proof) is dict

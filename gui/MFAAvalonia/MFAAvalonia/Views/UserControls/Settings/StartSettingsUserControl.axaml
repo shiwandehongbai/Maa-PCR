@@ -145,6 +145,7 @@
                     Text="{Binding StartupWaitDescription}" />
 
                 <Border
+                    IsVisible="{Binding ShowBatchStartup}"
                     BorderBrush="{DynamicResource SukiLightBorderBrush}"
                     BorderThickness="0,1,0,0"
                     Margin="0,10,0,0"

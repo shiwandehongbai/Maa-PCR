@@ -207,7 +207,10 @@ class AlphaEntry(CustomAction):
         with receipt.open('x', encoding='utf-8') as stream:
             json.dump(result, stream, ensure_ascii=False, indent=2, allow_nan=False)
         # MFA AgentHelper handles the existing "info:" protocol in its run log.
-        print('info: PCR Alpha ' + json.dumps(result, ensure_ascii=False, allow_nan=False), flush=True)
+        from . import player_log
+        import sys
+        player_log.flush()
+        player_log.write_protocol(sys.stdout, 'info: PCR Alpha ' + json.dumps(result, ensure_ascii=False, allow_nan=False) + '\n')
 
     def run(self, context, argv):
         """SDK boundary: explicit failure for every exception, no retry or wait."""
@@ -238,21 +241,25 @@ class AlphaEntry(CustomAction):
             try:
                 with self.registry.scope(context, deadline=native.RUN_DEADLINE.get(),
                                          owner_source=grant.observation_source) as facade:
-                    if selection['selected_modules'] == ['clan_battle_simulation']:
-                        from .clan_battle import run_owned
-                        report = run_owned(facade, config, directory)
-                    elif selection['selected_modules'] == ['clan_battle_daily']:
-                        from .clan_battle_batch import run_owned
-                        report = run_owned(facade, config, directory,
-                            consumption_consent=grant.clan_consumption_consent, owner_core_sha256=grant.owner_core_sha256)
-                    else:
-                        report = supported_daily.execute_supported(facade, config,
-                            execute=grant.execute, game_day=grant.game_day, context=grant.count_context,
-                            directory=directory, source='Alpha Agent owner-bound invocation',
-                            schedule_authorizations=grant.schedule_authorizations,
-                            schedule_attest_current_plan=grant.schedule_attest_current_plan,
-                            **(dict(schedule_confirm_new_cycle=True) if grant.schedule_confirm_new_cycle else {}),
-                            selected_modules=selection['selected_modules'], rewards_final=selection['rewards_final'])
+                    try:
+                        if selection['selected_modules'] == ['clan_battle_simulation']:
+                            from .clan_battle import run_owned
+                            report = run_owned(facade, config, directory)
+                        elif selection['selected_modules'] == ['clan_battle_daily']:
+                            from .clan_battle_batch import run_owned
+                            report = run_owned(facade, config, directory,
+                                consumption_consent=grant.clan_consumption_consent, owner_core_sha256=grant.owner_core_sha256)
+                        else:
+                            report = supported_daily.execute_supported(facade, config,
+                                execute=grant.execute, game_day=grant.game_day, context=grant.count_context,
+                                directory=directory, source='Alpha Agent owner-bound invocation',
+                                schedule_authorizations=grant.schedule_authorizations,
+                                schedule_attest_current_plan=grant.schedule_attest_current_plan,
+                                **(dict(schedule_confirm_new_cycle=True) if grant.schedule_confirm_new_cycle else {}),
+                                selected_modules=selection['selected_modules'], rewards_final=selection['rewards_final'])
+                    finally:
+                        from . import player_log
+                        player_log.capture(facade, report.get('outcome', 'unknown') if isinstance(report, dict) else 'unknown')
                 # Scope exit must succeed before interpreting a business report.
             finally:
                 native.RUN_DEADLINE.reset(token)

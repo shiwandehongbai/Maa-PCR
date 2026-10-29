@@ -22,6 +22,7 @@ namespace MFAAvalonia.ViewModels.UsersControls.Settings;
 
 public partial class StartSettingsUserControlModel : ViewModelBase
 {
+    public bool ShowBatchStartup => !MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled;
     private readonly LocalizationViewModel _closeSoftwareItem = new(LangKeys.CloseEmulator);
     private readonly LocalizationViewModel _closeSoftwareAndMFAItem = new(LangKeys.CloseEmulatorAndMFA);
     private readonly LocalizationViewModel _closeSoftwareAndRestartMFAItem = new(LangKeys.CloseEmulatorAndRestartMFA);

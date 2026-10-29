@@ -3351,7 +3351,8 @@ public class MaaProcessor
                 }
                 catch (Exception ex)
                 {
-                    LoggerHelper.Error($"停止窗口焦点监听失败：reason={ex.Message}", ex);
+                    LoggerHelper.Error($"执行队列命令失败：reason={ex.Message}", ex);
+                    if (IsTaskRunActive) Stop(MFATask.MFATaskStatus.FAILED, finished: true);
                 }
             }
         }
@@ -3560,7 +3561,7 @@ public class MaaProcessor
             return Task.CompletedTask;
         }
 
-        EndTaskRun();
+        Stop(MFATask.MFATaskStatus.FAILED, finished: true, onlyStart: onlyStart);
         return Task.CompletedTask;
     }
 
@@ -3585,8 +3586,10 @@ public class MaaProcessor
             if (ViewModel != null)
             {
                 ViewModel.IsRunning = TaskQueue.Count > 0;
+                ViewModel.PcrCleanupPending = false;
                 // IsRunning may already be false while the run was still active.
                 ViewModel.NotifyPcrDiagnosticBoundary();
+                MFAAvalonia.Pcr.PcrProfileRunGate.Notify();
             }
         });
     }
@@ -3600,16 +3603,13 @@ public class MaaProcessor
         catch (OperationCanceledException)
         {
             Status = MFATask.MFATaskStatus.STOPPED;
+            Stop(Status, true, onlyStart);
         }
         catch (Exception ex)
         {
             Status = MFATask.MFATaskStatus.FAILED;
             LoggerHelper.Error($"任务链执行异常：reason={ex.Message}", ex);
             Stop(Status, true, onlyStart);
-        }
-        finally
-        {
-            EndTaskRun();
         }
     }
 
@@ -4643,29 +4643,26 @@ public class MaaProcessor
             LoggerHelper.Info("停止前状态：" + Status);
             if (Status == MFATask.MFATaskStatus.STOPPING)
                 return Task.CompletedTask;
+            if (!ShouldProcessStop(finished))
+            {
+                ToastHelper.Warn(LangKeys.NoTaskToStop.ToLocalization());
+                return Task.CompletedTask;
+            }
             Status = MFATask.MFATaskStatus.STOPPING;
             ViewModel?.SetAdbRecoverySelectionLock(false);
             DispatcherHelper.PostOnMainThread(() =>
             {
-                if (ViewModel != null) ViewModel.ToggleEnable = false;
+                if (ViewModel != null) { ViewModel.ToggleEnable = false; ViewModel.PcrCleanupPending = true; }
             });
             try
             {
                 var isUpdateRelated = TaskQueue.Any(task => task.IsUpdateRelated);
                 ViewModel?.SetCurrentTaskName(string.Empty);
-                if (!ShouldProcessStop(finished))
-                {
-                    ToastHelper.Warn(LangKeys.NoTaskToStop.ToLocalization());
-
-                    TaskQueue.Clear();
-                    return Task.CompletedTask;
-                }
-
                 CancelOperations(status == MFATask.MFATaskStatus.STOPPED && !_agentStarted && _agentContexts.Count > 0);
 
                 TaskQueue.Clear();
 
-                ExecuteStopCore(finished, async () =>
+                return ExecuteStopCore(finished, async () =>
                 {
                     var stopResult = MaaJobStatus.Succeeded;
 
@@ -4690,6 +4687,7 @@ public class MaaProcessor
                         }
 
                     }
+                    await FinalizePcrRunAsync(status);
                     HandleStopResult(status, stopResult, onlyStart, queueCompleted, action, isUpdateRelated);
                     DispatcherHelper.PostOnMainThread(() =>
                     {
@@ -4733,20 +4731,50 @@ public class MaaProcessor
 
     private bool ShouldProcessStop(bool finished)
     {
-        return CancellationTokenSource?.IsCancellationRequested == false
+        return IsTaskRunActive || CancellationTokenSource?.IsCancellationRequested == false
             || finished;
     }
 
-    private void ExecuteStopCore(bool finished, Action stopAction)
+    private async Task ExecuteStopCore(bool finished, Func<Task> stopAction)
     {
-        TaskManager.RunTaskAsync(() =>
+        try
         {
             if (!finished) DispatcherHelper.PostOnMainThread(() => AddLogByKey(LangKeys.Stopping, (IBrush?)null));
-
-            stopAction.Invoke();
-
+            await stopAction().ConfigureAwait(false);
             DispatcherHelper.PostOnMainThread(() => Instances.RootViewModel.Idle = true);
-        }, null, "停止maafw任务");
+        }
+        catch (Exception ex)
+        {
+            var message = "执行资源退出尚未确认，请重启 Maa-PCR 后继续。原记录已保留。";
+            ViewModel?.FinishPlayerLog("cleanup_unconfirmed");
+            ViewModel?.AddPcrLiveLog(message);
+            DispatcherHelper.PostOnMainThread(() =>
+            {
+                if (ViewModel is { } vm)
+                {
+                    vm.ShowPcrStartError(vm.CurrentPcrFeedbackRun, message);
+                    vm.PcrCleanupPending = false;
+                    vm.ToggleEnable = false;
+                    vm.NotifyPcrDiagnosticBoundary();
+                }
+            });
+            HandleStopException(ex);
+        }
+    }
+
+    private async Task FinalizePcrRunAsync(MFATask.MFATaskStatus status)
+    {
+        if (MFAAvalonia.Pcr.PcrAlphaPolicy.Enabled)
+        {
+            ViewModel?.AddPcrLiveLog("任务已结束，正在释放执行资源…");
+            // The command queue owns this cleanup; keep the run busy until exit is proved.
+            await Task.Run(() => SetTasker(requireAllStopped: true));
+        }
+        EndTaskRun();
+        if (status == MFATask.MFATaskStatus.FAILED && ViewModel is { PcrHasStartError: false } failedVm)
+            DispatcherHelper.PostOnMainThread(() => failedVm.ShowPcrStartError(failedVm.CurrentPcrFeedbackRun, "本次任务未完成，请查看本次实时日志。"));
+        ViewModel?.FinishPlayerLog(status == MFATask.MFATaskStatus.SUCCEEDED ? "complete"
+            : status == MFATask.MFATaskStatus.FAILED ? "failed" : "stopped");
     }
 
     private MaaJobStatus AbortCurrentTasker()
@@ -5036,17 +5064,18 @@ public class MaaProcessor
             return;
         }
 
+        var arguments = InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
+        string? workingDirectory = null;
         if (OperatingSystem.IsWindows() && exePath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
         {
             var resolved = ResolveShortcut(exePath);
-            if (!string.IsNullOrEmpty(resolved) && File.Exists(resolved))
+            if (resolved is { } shortcut && File.Exists(shortcut.Path))
             {
-                LoggerHelper.Info($"快捷方式解析结果：{exePath} -> {resolved}");
-                exePath = resolved;
+                exePath = shortcut.Path;
+                if (string.IsNullOrWhiteSpace(arguments)) arguments = shortcut.Arguments;
+                if (!string.IsNullOrWhiteSpace(shortcut.WorkingDirectory)) workingDirectory = shortcut.WorkingDirectory;
             }
         }
-
-        var processName = Path.GetFileNameWithoutExtension(exePath);
 
         // 检查当前控制器是否需要管理员权限
         var requiresAdmin = ShouldStartWithAdminPrivileges();
@@ -5054,6 +5083,8 @@ public class MaaProcessor
         var startInfo = new ProcessStartInfo
         {
             FileName = exePath,
+            Arguments = arguments,
+            WorkingDirectory = workingDirectory ?? string.Empty,
             UseShellExecute = true,
             CreateNoWindow = false
         };
@@ -5065,27 +5096,7 @@ public class MaaProcessor
             LoggerHelper.Info("以管理员权限启动软件");
         }
 
-        if (Process.GetProcessesByName(processName).Length == 0)
-        {
-            if (!string.IsNullOrWhiteSpace(InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty)))
-            {
-                startInfo.Arguments = InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
-                _softwareProcess =
-                    Process.Start(startInfo);
-            }
-            else
-                _softwareProcess = Process.Start(startInfo);
-        }
-        else
-        {
-            if (!string.IsNullOrWhiteSpace(InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty)))
-            {
-                startInfo.Arguments = InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
-                _softwareProcess = Process.Start(startInfo);
-            }
-            else
-                _softwareProcess = Process.Start(startInfo);
-        }
+        _softwareProcess = Process.Start(startInfo);
 
         await WaitForStartupConnectionWindowAsync(waitTimeInSeconds, token);
     }
@@ -5170,7 +5181,7 @@ public class MaaProcessor
     }
 
     [SupportedOSPlatform("windows")]
-    private static string? ResolveShortcut(string path)
+    private static (string Path, string Arguments, string WorkingDirectory)? ResolveShortcut(string path)
     {
         try
         {
@@ -5179,7 +5190,7 @@ public class MaaProcessor
             {
                 dynamic shell = Activator.CreateInstance(type);
                 dynamic shortcut = shell.CreateShortcut(path);
-                return shortcut.TargetPath;
+                return ((string)shortcut.TargetPath, (string)shortcut.Arguments, (string)shortcut.WorkingDirectory);
             }
         }
         catch (Exception ex)
