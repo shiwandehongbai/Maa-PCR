@@ -17,7 +17,14 @@ EVIDENCE=ROOT.parent/'evidence'
 FRAME=EVIDENCE/'link-node-live-01/observe-choice-after.png'
 
 
-def receipt(elements=('火','水','光'),quantity='3',marker='×'):
+def icon_slots(elements, *, trusted=True, score=.98, rival=.40, margin=.58):
+    flags=trusted if isinstance(trusted,tuple) else (trusted,)*len(elements)
+    return dict(mode='offers', slots=[dict(element=element, trusted=flag, score=score,
+        rival=rival, margin=margin, candidates=[[element, score]], art=[295, 346, 55, 55])
+        for element,flag in zip(elements,flags)])
+
+
+def receipt(elements=('火','水','光'),quantity='3',marker='×',*,icons=None,attrs=None,trusted=True):
     rows=[]
     def word(name,text,roi):
         x,y,w,h=roi
@@ -25,8 +32,11 @@ def receipt(elements=('火','水','光'),quantity='3',marker='×'):
     word('LabyLinkTitle','获得道具的机会！',links.TITLE_ROI)
     word('LabyLinkSubtitle','请选择要获得的连结印记。',links.SUBTITLE_ROI)
     word('LabyLinkRemaining','还剩1次',links.REMAINING_ROI)
-    for i,element in enumerate(elements):
-        word(f'LabyLinkName{i}',element+'属性的随机印记',links.NAME_ROIS[i])
+    icons=tuple(elements) if icons is None else tuple(icons)
+    attrs=tuple(elements) if attrs is None else tuple(attrs)
+    rows.append(dict(name='LabyLinkIconIdentity',algorithm='Custom',
+        detail=dict(filtered=[dict(detail=icon_slots(icons,trusted=trusted))])))
+    for i,element in enumerate(attrs):
         word(f'LabyLinkQuantity{i}',element+'属性的随机印记'+marker+quantity,links.QUANTITY_ROIS[i])
         word(f'LabyLinkButton{i}','选择',links.BUTTON_ROIS[i])
         rows.append(dict(name=f'LabyLinkBright{i}',detail=dict(filtered=[dict(box=list(links.BRIGHT_ROIS[i]),count=1400)])))
@@ -36,11 +46,58 @@ def receipt(elements=('火','水','光'),quantity='3',marker='×'):
 def row(value,label):return next(r['detail'] for r in value['nodes'][0]['recognition'] if r['name']=='LabyLink'+label)
 
 
+def icon_detail(value):
+    return row(value,'IconIdentity')['filtered'][0]['detail']
+
+
+def changed_offer(offer,element):
+    return replace(offer,element=element,icon=links.LinkIcon(element,.98,.4,.58),
+        identity=links.IDENTITY_BADGE,
+        quantity_words=(replace(offer.quantity_words[0],text=element+'属性的随机印记×'+str(offer.quantity)),))
+
+
 def test_reader_preserves_complete_quantity_and_does_not_claim_inventory():
     offers=links.link_offers(receipt())
     assert [(o.slot,o.element,o.quantity) for o in offers]==[(0,'火',3),(1,'水',3),(2,'光',3)]
     assert all(not hasattr(o,'inventory_added') and not hasattr(o,'character_ids') for o in offers)
     assert all(o.quantity_words[0].text.endswith('×3') for o in offers)
+    assert [o.icon.element for o in offers]==['火','水','光']
+    assert all(o.icon.score==.98 and o.icon.margin==.58 for o in offers)
+    assert [o.identity for o in offers]==[links.IDENTITY_BADGE]*3
+
+
+def test_attribute_identity_comes_from_the_badge_not_the_name_text():
+    offers=links.link_offers(receipt(attrs=('伙','水','光')))
+    assert [o.element for o in offers]==['火','水','光']
+    assert [o.identity for o in offers]==[links.IDENTITY_BADGE]*3
+
+
+@pytest.mark.parametrize('attrs',[('水','水','光'),('火','水','闇'),('','水','光')])
+def test_readable_attribute_text_must_agree_with_the_badge(attrs):
+    if attrs[0]=='水':
+        with pytest.raises(BatchStopped,match='link_identity_conflict'):
+            links.link_offers(receipt(attrs=attrs))
+    else:
+        # An unreadable glyph is not a contradiction; the badge stays the identity.
+        assert [o.element for o in links.link_offers(receipt(attrs=attrs))]==['火','水','光']
+
+
+def test_untrusted_badge_falls_back_to_the_readable_text_line():
+    offers=links.link_offers(receipt(trusted=False))
+    assert [(o.element,o.quantity,o.identity,o.icon) for o in offers]==[
+        ('火',3,links.IDENTITY_TEXT,None),('水',3,links.IDENTITY_TEXT,None),
+        ('光',3,links.IDENTITY_TEXT,None)]
+
+
+def test_untrusted_badge_with_unreadable_text_stops():
+    with pytest.raises(BatchStopped,match='link_element_unknown'):
+        links.link_offers(receipt(trusted=False,attrs=('伙','水','光')))
+
+
+def test_mixed_badge_and_text_identities_are_allowed_when_distinct():
+    offers=links.link_offers(receipt(trusted=(True,False,True)))
+    assert [o.identity for o in offers]==[links.IDENTITY_BADGE,links.IDENTITY_TEXT,links.IDENTITY_BADGE]
+    assert [o.element for o in offers]==['火','水','光']
 
 
 @pytest.mark.parametrize('ending', ['', '.', '。'])
@@ -57,8 +114,12 @@ def test_selection_guard_matches_semantic_quantity_across_ocr_separator_changes(
     guard=override['LabyLinkGuardQuantity0']
     assert guard['only_rec'] is True
     assert re.fullmatch(guard['expected'],'火属性的随机印记×3')
+    assert re.fullmatch(guard['expected'],'伙属性的随机印记?3')
     assert not re.fullmatch(guard['expected'],'火属性的随机印记×13')
-    assert not re.fullmatch(guard['expected'],'水属性的随机印记×3')
+    assert not re.fullmatch(guard['expected'],'水属性的随机印记×3迷宫金币')
+    icon=override['LabyLinkIconGuard']
+    assert icon['custom_recognition_param']==dict(mode='guard',slot=0,element='火')
+    assert 'LabyLinkIconGuard' in override['LabyLinkSelectOnce']['all_of']
     assert not any('GuardName' in name for name in override['LabyLinkSelectOnce']['all_of'])
 
 
@@ -83,8 +144,9 @@ def test_invalid_priority_and_unknown_choices_have_no_first_slot_fallback(priori
 
 
 @pytest.mark.parametrize('kind',['native_false','completed_truthy','duplicate_root','missing_leaf','duplicate_leaf',
-    'bad_leaf_name','bad_leaf','wrong_title','wrong_subtitle','remaining_zero','wrong_button',
-    'duplicate_attribute','unknown_attribute','different_quantity_attribute'])
+    'bad_leaf_name','bad_leaf','wrong_title','wrong_subtitle','remaining_zero',
+    'wrong_button','duplicate_attribute','different_quantity_attribute',
+    'missing_identity','bad_identity_mode','untrusted_badge_unreadable_text','ambiguous_badge','bad_badge_score'])
 def test_incomplete_wrong_or_ambiguous_page_stops(kind):
     value=receipt();rows=value['nodes'][0]['recognition']
     if kind=='native_false':value['native_ok']=False
@@ -94,11 +156,16 @@ def test_incomplete_wrong_or_ambiguous_page_stops(kind):
     elif kind=='duplicate_leaf':rows[-1]=deepcopy(rows[0])
     elif kind=='bad_leaf_name':rows[-1]['name']={}
     elif kind=='bad_leaf':rows[-1]=None
-    elif kind=='duplicate_attribute':value=receipt(('火','火','光'))
+    elif kind=='duplicate_attribute':value=receipt(icons=('火','火','光'))
+    elif kind=='missing_identity':rows[:]=[r for r in rows if r['name']!='LabyLinkIconIdentity']
+    elif kind=='bad_identity_mode':icon_detail(value)['mode']='guard'
+    elif kind=='untrusted_badge_unreadable_text':value=receipt(trusted=False,attrs=('伙','水','光'))
+    elif kind=='ambiguous_badge':value=receipt(elements=('火','水','光'),icons=('火','火','光'),attrs=('火','火','光'))
+    elif kind=='bad_badge_score':icon_detail(value)['slots'][1]['score']=1.01
     else:
         leaf,text={'wrong_title':('Title','获得道具'),'wrong_subtitle':('Subtitle','请选择要获得的迷宫遗物。'),
             'remaining_zero':('Remaining','还剩0次'),'remaining_two':('Remaining','还剩2次'),
-            'wrong_button':('Button0','确认'),'unknown_attribute':('Name0','未知属性的随机印记'),
+            'wrong_button':('Button0','确认'),
             'different_quantity_attribute':('Quantity0','水属性的随机印记×3')}[kind]
         row(value,leaf)['filtered'][0]['text']=text
     with pytest.raises(BatchStopped):links.link_offers(value)
@@ -117,10 +184,21 @@ def test_non_numeric_separator_is_preserved_without_fabricating_multiplication(m
 
 
 @pytest.mark.parametrize('score',[True,float('nan'),float('inf'),.8499,1.01])
-@pytest.mark.parametrize('leaf',['Name0','Quantity1','Button2'])
+@pytest.mark.parametrize('leaf',['Quantity1','Button2'])
 def test_leaf_confidence_must_be_finite_and_non_boolean(score,leaf):
     value=receipt();row(value,leaf)['filtered'][0]['score']=score
     with pytest.raises(BatchStopped):links.link_offers(value)
+
+
+@pytest.mark.parametrize('score',[True,float('nan'),float('inf'),None])
+def test_badge_evidence_score_must_be_finite_and_non_boolean(score):
+    value=receipt();icon_detail(value)['slots'][0]['score']=score
+    with pytest.raises(BatchStopped):links.link_offers(value)
+
+
+def test_badge_evidence_margin_must_clear_the_calibrated_floor():
+    value=receipt();icon_detail(value)['slots'][0]['margin']=.10
+    with pytest.raises(BatchStopped,match='link_element_unknown'):links.link_offers(value)
 
 
 @pytest.mark.parametrize('box',[None,[134,450,275,47],[135,450,0,47],[135,450,1000,47],[True,450,275,47]])
@@ -135,16 +213,41 @@ def test_all_three_buttons_require_observed_bright_state(count):
     with pytest.raises(BatchStopped):links.link_offers(value)
 
 
-@pytest.mark.parametrize('kind',['bool_slot','bool_quantity','wrong_property','wrong_raw_quantity','duplicate','partial'])
+@pytest.mark.parametrize('kind',['bool_slot','bool_quantity','wrong_property','wrong_raw_quantity','duplicate','partial',
+    'bad_icon_type','bad_icon_margin','icon_text_conflict','text_identity_with_icon','badge_identity_without_icon'])
 def test_guard_revalidates_every_offer_before_input(kind):
     offers=list(links.link_offers(receipt()))
     if kind=='bool_slot':offers[0]=replace(offers[0],slot=False)
     elif kind=='bool_quantity':offers[0]=replace(offers[0],quantity=True)
     elif kind=='wrong_property':offers[0]=replace(offers[0],element='暗')
     elif kind=='wrong_raw_quantity':offers[0]=replace(offers[0],quantity_words=(replace(offers[0].quantity_words[0],text='火属性的随机印记×13'),))
-    elif kind=='duplicate':offers=links.link_offers(receipt());offers=list(offers);offers[1]=replace(offers[1],element='火')
+    elif kind=='duplicate':offers=links.link_offers(receipt());offers=list(offers);offers[1]=changed_offer(offers[1],'火')
+    elif kind=='bad_icon_type':offers[0]=replace(offers[0],icon=dict(element='火',score=.98,rival=.4,margin=.58))
+    elif kind=='bad_icon_margin':offers[0]=replace(offers[0],icon=links.LinkIcon('火',.98,.4,.10))
+    elif kind=='icon_text_conflict':
+        offers[0]=replace(offers[0],icon=links.LinkIcon('火',.98,.4,.58),
+            quantity_words=(replace(offers[0].quantity_words[0],text='水属性的随机印记×3'),))
+    elif kind=='text_identity_with_icon':offers[0]=replace(offers[0],identity=links.IDENTITY_TEXT)
+    elif kind=='badge_identity_without_icon':offers[0]=replace(offers[0],icon=None)
     else:offers.pop()
     with pytest.raises(BatchStopped):links.selection_override(offers,0)
+
+
+def test_text_incapable_badge_uses_the_text_guard():
+    offers=links.link_offers(receipt(trusted=False))
+    override=links.selection_override(offers,0)
+    assert override['LabyLinkGuardQuantity0']['expected']==r'^火属性的随机印记[×?？xX*]?3$'
+    assert 'LabyLinkIconGuard' not in override
+    assert 'LabyLinkIconGuard' not in override['LabyLinkSelectOnce']['all_of']
+
+
+def test_badge_capable_offer_uses_the_badge_guard():
+    offers=links.link_offers(receipt())
+    override=links.selection_override(offers,0)
+    assert override['LabyLinkGuardQuantity0']['expected']==r'^.*属性的随机印记[×?？xX*]?3$'
+    assert override['LabyLinkIconGuard']['custom_recognition_param']==dict(
+        mode='guard',slot=0,element='火')
+    assert 'LabyLinkIconGuard' in override['LabyLinkSelectOnce']['all_of']
 
 
 def test_default_input_is_disabled_and_full_quantity_guard_never_crops_last_digit():
@@ -155,6 +258,7 @@ def test_default_input_is_disabled_and_full_quantity_guard_never_crops_last_digi
         assert override[f'LabyLinkGuardQuantity{i}']['roi']==list(links.QUANTITY_ROIS[i])
         assert links.QUANTITY_ROIS[i][2]==275
     assert 'LabyLinkGuardQuantity1' not in override and 'LabyLinkGuardQuantity2' not in override
+    assert pipe['LabyLinkIconGuard']['custom_recognition_param']==dict(mode='guard')
 
 
 @pytest.fixture
@@ -166,6 +270,8 @@ def offline(request,monkeypatch,tmp_path):
     label=re.sub(r'[^A-Za-z0-9_.-]','_',request.node.name)
     monkeypatch.setattr(native,'RUNTIME',tmp_path/'native'/label)
     resource=native.load_resource(ROOT/'assets/resource');assert resource.override_pipeline(links.link_pipeline())
+    from pcr_maa.labyrinth.link_imprint import LinkImprintIconCapture, load_catalog
+    assert resource.register_custom_recognition(links.LINK_ICON, LinkImprintIconCapture(load_catalog()))
     controller=SavedImages([[native.read_image(FRAME)]]);tasker=native.bind(resource,controller);receipts=[]
     try:yield resource,controller,tasker,receipts
     finally:
@@ -195,10 +301,9 @@ def test_native_actual_fire_water_light_and_exact_one_shot_guard(offline):
 
 
 @pytest.mark.parametrize('changed_slot,allowed',[(0,False),(2,True)])
-def test_native_selected_attribute_stays_exact_unselected_does_not_block(offline,changed_slot,allowed):
-    _,controller,tasker,receipts=offline;offers=list(observe(tasker,receipts));offer=offers[changed_slot]
-    offers[changed_slot]=replace(offer,element='暗',name_words=(replace(offer.name_words[0],text='暗属性的随机印记'),),
-        quantity_words=(replace(offer.quantity_words[0],text='暗属性的随机印记×3'),))
+def test_native_selected_badge_stays_exact_unselected_does_not_block(offline,changed_slot,allowed):
+    _,controller,tasker,receipts=offline;offers=list(observe(tasker,receipts))
+    offers[changed_slot]=changed_offer(offers[changed_slot],'暗')
     with links.selection_guard(tasker,offers,0):
         value=native.run(tasker,'LabyLinkSelectOnce');receipts.append(value)
     assert value['native_ok'] is allowed and len(controller.clicks)==int(allowed) and not controller.swipes
@@ -380,6 +485,8 @@ def result_offline(request,monkeypatch,tmp_path):
     monkeypatch.setattr(native,'RUNTIME',tmp_path/'native'/label)
     resource=native.load_resource(ROOT/'assets/resource')
     assert resource.override_pipeline({**links.link_pipeline(),**links.result_pipeline()})
+    from pcr_maa.labyrinth.link_imprint import LinkImprintIconCapture, load_catalog
+    assert resource.register_custom_recognition(links.LINK_ICON, LinkImprintIconCapture(load_catalog()))
     controller=SavedImages([[native.read_image(RESULT_FRAME)]]);tasker=native.bind(resource,controller);receipts=[]
     try:yield resource,controller,tasker,receipts
     finally:

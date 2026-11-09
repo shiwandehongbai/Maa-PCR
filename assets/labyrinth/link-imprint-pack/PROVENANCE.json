@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "pack": "labyrinth-link-imprint-pack",
+  "clientVersion": "11.7.2",
+  "origin": "B服 11.7.2 客户端资源包提取（adb root 后从 /data/data/com.bilibili.priconne/files/a/ 拉出）。本包只保留「连结印记」卡面右下角的属性徽章：从 09_其他 目录下 icon_labyrinth_icon_summon_unit_<id>.png 的 (84,84) 起裁剪 44x44 RGBA 区域，重命名为 fire/water/wind/light/dark 五个 ASCII 文件名；中文名、原 CSV 与整张 128 图标不进入运行包。主选 31xxxxxx 系列：其右下角徽章在 2026-11-09 的两张实机 1280x720 卡面帧上 NCC 0.983-0.987，错误元素 0.44-0.68；11xxxxxx 系列的同形徽章在实机帧上只有 0.886-0.903，因此不采用。1100x000 系列右下角是效果徽章（攻击、治疗等），不是五属性，不收录。",
+  "sourceIndex": {
+    "file": "索引.csv",
+    "sha256": "c0d742eeb122bbb301ab75890b11a9ad7add99698b7c027d8d48303a1f2cb3f8",
+    "bytes": 83146
+  },
+  "author": "MAA PCR contributors",
+  "image_rights": "Princess Connect Re:Dive game imagery; copyright belongs to the original rights holders (Cygames). Project and upstream code licenses do not grant image rights.",
+  "distribution_permission_not_inferred": true,
+  "private_captures_included": false,
+  "private_uid_included": false,
+  "icons": [
+    {
+      "path": "icons/fire.png",
+      "element": "火",
+      "sourceId": "31100000",
+      "sourceBundle": "icon_labyrinth_icon_summon_unit_31100000.unity3d",
+      "sourceSha256": "a10384c5c919c6dba0c701b6069c2e72e48f23e6c3adfb61afd2f23d2a5c70e8",
+      "sourceBytes": 19341,
+      "crop": [
+        84,
+        84,
+        44,
+        44
+      ],
+      "sha256": "84e9242023235a5436e3a0a2687d0273df168eb35ced2ac38c85e8a82a057fc6",
+      "bytes": 3747,
+      "width": 44,
+      "height": 44,
+      "pixelFormat": "32bppArgb"
+    },
+    {
+      "path": "icons/water.png",
+      "element": "水",
+      "sourceId": "31200000",
+      "sourceBundle": "icon_labyrinth_icon_summon_unit_31200000.unity3d",
+      "sourceSha256": "fceaa795aac09e3a35d223776174c20e0b97011510236344c0bae0bd493497a7",
+      "sourceBytes": 19180,
+      "crop": [
+        84,
+        84,
+        44,
+        44
+      ],
+      "sha256": "71b9bf68f0f864557e866aa8a74df233642d8378b1a3cca275bd2ecb92d11607",
+      "bytes": 3575,
+      "width": 44,
+      "height": 44,
+      "pixelFormat": "32bppArgb"
+    },
+    {
+      "path": "icons/wind.png",
+      "element": "风",
+      "sourceId": "31300000",
+      "sourceBundle": "icon_labyrinth_icon_summon_unit_31300000.unity3d",
+      "sourceSha256": "1edf05a2a6b240587db31e94ba7bd95ab35cc35469f1ce093cef94318009cc16",
+      "sourceBytes": 19492,
+      "crop": [
+        84,
+        84,
+        44,
+        44
+      ],
+      "sha256": "466674e54bd893f39e9b724ac40a05487791128b771eeba920686a271e2f6a99",
+      "bytes": 4011,
+      "width": 44,
+      "height": 44,
+      "pixelFormat": "32bppArgb"
+    },
+    {
+      "path": "icons/light.png",
+      "element": "光",
+      "sourceId": "31400000",
+      "sourceBundle": "icon_labyrinth_icon_summon_unit_31400000.unity3d",
+      "sourceSha256": "8e62d3042f1b2b040f044f5c45b9bd68b528621809604103446426b0f57c104b",
+      "sourceBytes": 19613,
+      "crop": [
+        84,
+        84,
+        44,
+        44
+      ],
+      "sha256": "b4008d5e7f55e0bab9dc8a392d1a4ed8173239d3c0a6f19a67ef45622c32dbd5",
+      "bytes": 3863,
+      "width": 44,
+      "height": 44,
+      "pixelFormat": "32bppArgb"
+    },
+    {
+      "path": "icons/dark.png",
+      "element": "暗",
+      "sourceId": "31500000",
+      "sourceBundle": "icon_labyrinth_icon_summon_unit_31500000.unity3d",
+      "sourceSha256": "7d6c9e3bf0b227e22ad00631e03ab0d137cf7d112997385a68327428d4b613bf",
+      "sourceBytes": 19383,
+      "crop": [
+        84,
+        84,
+        44,
+        44
+      ],
+      "sha256": "e6b0ebe9457feb783b6ff431de9f4a0fac7f172446cd99f4d55810edf116d78b",
+      "bytes": 3669,
+      "width": 44,
+      "height": 44,
+      "pixelFormat": "32bppArgb"
+    }
+  ]
+}

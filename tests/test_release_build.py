@@ -95,6 +95,38 @@ def test_relic_payload_must_match_catalog_and_provenance(tmp_path, monkeypatch):
         builder.require_relic_payload(player)
 
 
+def test_link_imprint_payload_is_required(tmp_path, monkeypatch):
+    player = tmp_path / 'player'
+    player.mkdir()
+    monkeypatch.setattr(builder, 'ROOT', tmp_path / 'source')
+    metadata = {'python': {'version': '3.13.16'}, 'dotnet': {'version': '10.0.1'}}
+    with pytest.raises(ValueError, match='release_payload_missing: ') as missing:
+        builder.require_payload(player, metadata)
+    assert 'assets/labyrinth/link-imprint-pack/PROVENANCE.json' in str(missing.value)
+
+
+def test_link_imprint_payload_must_match_provenance(tmp_path, monkeypatch):
+    source = tmp_path / 'source'
+    assets = source / 'assets/labyrinth'
+    shutil.copytree(ROOT / 'assets/labyrinth/link-imprint-pack', assets / 'link-imprint-pack')
+    player = tmp_path / 'player'
+    shutil.copytree(assets / 'link-imprint-pack', player / 'assets/labyrinth/link-imprint-pack')
+    monkeypatch.setattr(builder, 'ROOT', source)
+    builder.require_link_imprint_payload(player)
+    icon = player / 'assets/labyrinth/link-imprint-pack/icons/fire.png'
+    pristine = icon.read_bytes()
+    icon.write_bytes(pristine + b'\0')
+    with pytest.raises(ValueError, match='labyrinth_link_imprint_icon_missing_or_changed'):
+        builder.require_link_imprint_payload(player)
+    icon.write_bytes(pristine)
+    provenance = json.loads((assets / 'link-imprint-pack/PROVENANCE.json').read_text(encoding='utf-8'))
+    provenance['icons'] = provenance['icons'][:-1]
+    (assets / 'link-imprint-pack/PROVENANCE.json').write_text(
+        json.dumps(provenance, ensure_ascii=False), encoding='utf-8')
+    with pytest.raises(ValueError, match='labyrinth_link_imprint_inventory_mismatch'):
+        builder.require_link_imprint_payload(player)
+
+
 def test_runtime_copy_excludes_only_the_local_guide_handoff(tmp_path, monkeypatch):
     source = tmp_path / 'source'
     docs = source / 'docs'

@@ -1,0 +1,56 @@
+{
+  "source": "2026-11-09 user-provided 1280x720 screenshots of the three-card link-imprint choice page. Full frames retained; no player name, account ID, device ID or run ID is visible.",
+  "purpose": "Link-imprint offer regression: five element badges, OCR quantity binding and the fresh selection guard. Offline SavedImages replay; does not establish live-game acceptance.",
+  "page": "link_reward",
+  "frames": {
+    "labyrinth-link-choice-20261109.png": {
+      "sha256": "4db1d7e9c2197beca8d8a9d463eb7311ff2917c6c0b6f2e466dd6aa6fba242d6",
+      "width": 1280,
+      "height": 720
+    },
+    "labyrinth-link-choice-20261109-b.png": {
+      "sha256": "dbd5ba19825c369edc861350cea851903f9a58cde02b75ac43a09bfe392295dc",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "expected": {
+    "remaining": 1,
+    "quantity": 3,
+    "offers": {
+      "labyrinth-link-choice-20261109.png": [
+        {
+          "slot": 0,
+          "element": "光"
+        },
+        {
+          "slot": 1,
+          "element": "火"
+        },
+        {
+          "slot": 2,
+          "element": "风"
+        }
+      ],
+      "labyrinth-link-choice-20261109-b.png": [
+        {
+          "slot": 0,
+          "element": "光"
+        },
+        {
+          "slot": 1,
+          "element": "水"
+        },
+        {
+          "slot": 2,
+          "element": "暗"
+        }
+      ]
+    },
+    "priority_choice": {
+      "labyrinth-link-choice-20261109.png": "火",
+      "labyrinth-link-choice-20261109-b.png": "暗"
+    },
+    "notes": "The two frames cover all five attributes (light twice) and were used to pick the 31xxxxxx badge series over 11xxxxxx: NCC 0.983-0.987 vs 0.886-0.903 on these cards."
+  }
+}

@@ -207,7 +207,7 @@
 | EVENT_FREE_ROLE_CONFIRM | LabyrinthPostEntryActionKind.kt:24 | rewards.choose_free | InviteOnce→驱动→actual joined | 对应共享链离线检查见下；新增实机待验 |
 | CONFIRM_GENERIC_DIALOG | LabyrinthPostEntryActionKind.kt:26 | scene.close_reward | 仅“无法获得报酬”明确标题正文确认 | 对应共享链离线检查见下；新增实机待验 |
 | SELECT_RELIC | LabyrinthPostEntryActionKind.kt:29 | relics.MaaRelicReward.choose | 实际层数/主追→选择→结果→关闭 | 对应共享链离线检查见下；新增实机待验 |
-| SELECT_LINK_IMPRINT | LabyrinthPostEntryActionKind.kt:30 | links.MaaLinkReward.choose + autoplay.choose_reward | 实际imprint数量→结果关闭→召唤驱动→actual joined | 对应共享链离线检查见下；新增实机待验 |
+| SELECT_LINK_IMPRINT | LabyrinthPostEntryActionKind.kt:30 | links.MaaLinkReward.choose + autoplay.choose_reward | 卡面属性徽章（不可信回退属性文字）+实际imprint数量→结果关闭→召唤驱动→actual joined | 对应共享链离线检查见下；新增实机待验 |
 | CLOSE_ITEM_REWARD | LabyrinthPostEntryActionKind.kt:31 | autoplay._do(close_reward) | owned奖励后继；最终item关闭后只等home | 对应共享链离线检查见下；新增实机待验 |
 | SHOP_BUY_RELIC | LabyrinthPostEntryActionKind.kt:34 | shop_execution.purchase_once | 独立purchase proposal | 对应共享链离线检查见下；新增实机待验 |
 | SHOP_BUY_IMPRINT | LabyrinthPostEntryActionKind.kt:35 | shop_execution.purchase_once | 随机/选择印记真实name/price proposal | 对应共享链离线检查见下；新增实机待验 |

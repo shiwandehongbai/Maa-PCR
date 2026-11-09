@@ -12,7 +12,7 @@ from .batch import BatchStopped
 from .game_session import _root,_box
 from .interruptions import date_changed_pipeline,date_changed_readback
 from .session import reconnect_pipeline
-from .links import link_pipeline,link_offers
+from .links import link_pipeline,link_offers,install_link_imprint
 from .relics import _words,_normalized
 
 
@@ -144,6 +144,9 @@ def _checkpoint(tasker,stopped):
 def observe_movement_page(tasker,block_type,*,phase,stopped=None):
     """Single new native read; no hit reset, input, recovery or business retry."""
     entry,_,_=_scope(block_type,phase)
+    # The link arrival page's And contains the badge-identity custom node; the
+    # reader must exist before its native page is probed.
+    if (block_type,phase)==(4,'arrival'):install_link_imprint(tasker)
     _checkpoint(tasker,stopped)
     receipt=native.run(tasker,entry)
     _checkpoint(tasker,stopped)

@@ -1,22 +1,43 @@
 """Maa link-imprint offers, fixed upstream priority, and exact one-shot input.
 
+Attribute identity is the element badge drawn on each card (see
+``link_imprint``), with the OCR text path as the fallback, like the relic
+choice: a trusted badge is the identity; when a badge is untrusted the same
+frame's readable ``X属性的随机印记`` text supplies the element; when neither is
+available the batch stops. Quantity, button and remaining-choice counts stay
+OCR because they are text on the frame. A readable attribute that contradicts
+a trusted badge stops the batch (``link_identity_conflict``).
+
 Attribute priority is ported from LabyrinthLinkChoiceRecognition.kt
 (CC BY-NC-SA 4.0): fire > dark > light > wind > water. It uses no roster,
 relic, pool, or team-quality inputs. The upstream session's unknown first-slot
 fallback is excluded: incomplete/unknown choices stop here.
 
 This layout supports three distinct observed attributes. Complete positive
-quantities and remaining-choice counts are read from the current frame. Random imprints are not confirmed recruited roles.
+quantities and remaining-choice counts are read from the current frame. Random
+imprints are not confirmed recruited roles.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
+import math
 import re
 from .batch import BatchStopped
-from .relics import (Word, THRESHOLD, TITLE_ROI, SUBTITLE_ROI, REMAINING_ROI,
+from .link_imprint import (ELEMENTS, LINK_ICON, CONFIDENCE, RIVAL_MARGIN,
+                           LinkImprintIconCapture, load_catalog)
+from .relics import (Word, TITLE_ROI, SUBTITLE_ROI, REMAINING_ROI,
                      _ocr, _words, _normalized, _pattern, _inside, RESULT_TITLE_ROI,
                      RESULT_MESSAGE_ROI, RESULT_ITEM_ROI, RESULT_CLOSE_ROI)
 
-ELEMENT_PRIORITY = ('火', '暗', '光', '风', '水')
+ELEMENT_PRIORITY = ELEMENTS
+QUANTITY_ROIS = tuple((x,450,275,47) for x in (135,505,875))
+BUTTON_ROIS = tuple((x+40,542,195,92) for x in (135,505,875))
+BRIGHT_ROIS = tuple((x+85,552,100,14) for x in (135,505,875))
+# The text tail of the full card line; the attribute prefix in front of it is
+# the optional cross-check, never the identity.
+_QUANTITY_TEXT = r'属性的随机印记[×?？xX*]?[0-9]+$'
+_QUANTITY = re.compile(r'^(.*?)属性的随机印记([×?？xX*]?)([0-9]+)$')
+
+
 def _positive(value):
     return type(value) is int and 1<=value<=2**63-1
 
@@ -26,11 +47,15 @@ def _positive_text(value):
     result=int(value)
     if not _positive(result):raise BatchStopped('link_quantity_unknown')
     return result
-NAME_ROIS = tuple((x,454,215,41) for x in (140,510,880))
-# Full card text line, including all quantity digits; never crop its last digit.
-QUANTITY_ROIS = tuple((x,450,275,47) for x in (135,505,875))
-BUTTON_ROIS = tuple((x+40,542,195,92) for x in (135,505,875))
-BRIGHT_ROIS = tuple((x+85,552,100,14) for x in (135,505,875))
+
+
+@dataclass(frozen=True)
+class LinkIcon:
+    """The trusted badge identity of one card plus its evidence score."""
+    element: str
+    score: float
+    rival: float
+    margin: float
 
 
 @dataclass(frozen=True)
@@ -39,10 +64,16 @@ class LinkOffer:
     element: str
     quantity: int
     quantity_marker: str
-    name_words: tuple[Word, ...]
+    # None means this slot's badge was untrusted and the element came from text.
+    icon: LinkIcon | None
+    identity: str
     quantity_words: tuple[Word, ...]
     button_words: tuple[Word, ...]
     remaining: int = 1
+
+
+IDENTITY_BADGE = 'badge'
+IDENTITY_TEXT = 'text'
 
 
 def link_pipeline():
@@ -52,10 +83,20 @@ def link_pipeline():
         'LabyLinkRemaining':_ocr(r'^还剩\s*[1-9][0-9]{0,18}\s*次$',REMAINING_ROI),
         'LabyLinkGuardRequired':_ocr('^__qualified_link_offer_required__$',TITLE_ROI),
     }
-    observed = ['LabyLinkTitle','LabyLinkSubtitle','LabyLinkRemaining']
+    # Same-frame badge identity of all three cards. It always returns a hit so
+    # the page observation is stable; `trusted` decides whether identity exists.
+    nodes['LabyLinkIconIdentity']=dict(recognition='Custom',custom_recognition=LINK_ICON,
+        custom_recognition_param=dict(mode='offers'),action='DoNothing',next=[],
+        timeout=1500,pre_delay=0,post_delay=0)
+    # Unusable until the selection guard supplies the intended slot and element;
+    # then it is the click's identity proof instead of the card-name OCR.
+    nodes['LabyLinkIconGuard']=dict(recognition='Custom',custom_recognition=LINK_ICON,
+        custom_recognition_param=dict(mode='guard'),action='DoNothing',next=[],
+        timeout=1500,pre_delay=0,post_delay=0)
+    observed = ['LabyLinkTitle','LabyLinkSubtitle','LabyLinkRemaining','LabyLinkIconIdentity']
     for slot in range(3):
-        for kind,expected,roi in (('Name',r'^[火暗光风水]属性的随机印记$',NAME_ROIS[slot]),
-                ('Quantity',r'^[火暗光风水]属性的随机印记[×?？xX*]?[0-9]+$',QUANTITY_ROIS[slot]),('Button','^选择$',BUTTON_ROIS[slot])):
+        for kind,expected,roi in (('Quantity',r'^.*'+_QUANTITY_TEXT,QUANTITY_ROIS[slot]),
+                ('Button','^选择$',BUTTON_ROIS[slot])):
             name=f'LabyLink{kind}{slot}';nodes[name]=_ocr(expected,roi)
             if kind=='Quantity':nodes[name]['only_rec']=True
             observed.append(name)
@@ -73,22 +114,100 @@ def link_pipeline():
     return nodes
 
 
+def install_link_imprint(tasker):
+    """Register the badge reader once per resource; a corrupt pack stops here."""
+    from .scene import runtime_resource
+    resource=runtime_resource(tasker)
+    state=getattr(resource,'_labyrinth_link_imprint',None)
+    if state is not None:return state
+    capture=LinkImprintIconCapture(load_catalog())
+    register=getattr(resource,'register_custom_recognition',None)
+    # Receipt-shape fakes never run native recognition; a real resource without
+    # the registration hook is a wiring error surfaced by its native page miss.
+    if callable(register) and not register(LINK_ICON,capture):
+        raise BatchStopped('link_runtime_unavailable')
+    resource._labyrinth_link_imprint=capture
+    return capture
+
+
 def _link_words(detail,roi,*,maximum=1):
     try:return _words(detail,roi,maximum=maximum)
     except BatchStopped:raise BatchStopped('link_offers_unknown') from None
 
 
-def _offer(slot,name_words,quantity_words,button_words,remaining=1):
-    text=_normalized(''.join(w.text for w in name_words))
-    element=re.fullmatch(r'([火暗光风水])属性的随机印记',text)
-    if element is None:raise BatchStopped('link_element_unknown')
+def _custom_detail(detail):
+    """Raw custom-recognition detail from a native node receipt."""
+    rows=detail.get('filtered') if type(detail) is dict else None
+    if type(rows) is list and len(rows)==1 and type(rows[0]) is dict:
+        inner=rows[0].get('detail')
+        if type(inner) is dict:return inner
+    return None
+
+
+def _float(value):
+    return (type(value) in (int,float) and not isinstance(value,bool)
+            and math.isfinite(value) and 0<=value<=1)
+
+
+def _icon(value):
+    """One validated trusted badge identity; untrusted is not an identity."""
+    if type(value) is not LinkIcon:raise BatchStopped('link_offers_unknown')
+    if (value.element not in ELEMENTS or not _float(value.score) or not _float(value.rival)
+            or not _float(value.margin) or value.score<CONFIDENCE or value.margin<RIVAL_MARGIN
+            or value.rival>value.score):raise BatchStopped('link_element_unknown')
+    return value
+
+
+def _icons(detail):
+    """Per-slot badge identities; ``None`` means "use the readable text path".
+
+    A missing/absent badge detail is a degraded pack, not a frame error, so it
+    falls back to the same OCR text the relic choice keeps. A structurally
+    invalid detail (wrong mode/list, trusted-but-invalid evidence) is refused,
+    never guessed around.
+    """
+    if detail is None:return (None,None,None)
+    if type(detail) is not dict or detail.get('mode')!='offers':
+        raise BatchStopped('link_element_unknown')
+    slots=detail.get('slots')
+    if type(slots) is not list or len(slots)!=3:raise BatchStopped('link_element_unknown')
+    icons=[]
+    for slot in range(3):
+        item=slots[slot]
+        if type(item) is not dict:raise BatchStopped('link_element_unknown')
+        trusted=item.get('trusted')
+        if trusted is False:
+            icons.append(None);continue
+        if trusted is not True:raise BatchStopped('link_element_unknown')
+        element=item.get('element')
+        if type(element) is not str or element not in ELEMENTS:
+            raise BatchStopped('link_element_unknown')
+        score,rival,margin=item.get('score'),item.get('rival'),item.get('margin')
+        if not (_float(score) and _float(rival) and _float(margin)):
+            raise BatchStopped('link_element_unknown')
+        icons.append(_icon(LinkIcon(element,float(score),float(rival),float(margin))))
+    return tuple(icons)
+
+
+def _offer(slot,icon,quantity_words,button_words,remaining=1):
     quantity=_normalized(''.join(w.text for w in quantity_words))
-    count=re.fullmatch(r'([火暗光风水])属性的随机印记([×?？xX*]?)([0-9]+)',quantity)
-    if count is None or count[1]!=element[1]:
-        raise BatchStopped('link_quantity_unknown')
+    count=_QUANTITY.fullmatch(quantity)
+    if count is None:raise BatchStopped('link_quantity_unknown')
+    prefix=count[1]
+    readable=len(prefix)==1 and prefix in ELEMENTS
+    if icon is not None:
+        element,identity=icon.element,IDENTITY_BADGE
+        # The same frame's readable attribute must agree with a trusted badge.
+        if readable and prefix!=element:raise BatchStopped('link_identity_conflict')
+    elif readable:
+        # Relic-style fallback: the full line's attribute text is the identity.
+        element,identity=prefix,IDENTITY_TEXT
+    else:
+        raise BatchStopped('link_element_unknown')
     if _normalized(''.join(w.text for w in button_words))!='选择':
         raise BatchStopped('link_button_unknown')
-    return LinkOffer(slot,element[1],_positive_text(count[3]),count[2],name_words,quantity_words,button_words,remaining)
+    return LinkOffer(slot,element,_positive_text(count[3]),count[2],icon,identity,
+                     quantity_words,button_words,remaining)
 
 
 def _validate_offers(offers):
@@ -97,24 +216,30 @@ def _validate_offers(offers):
     for slot,offer in enumerate(offers):
         if (type(offer) is not LinkOffer or type(offer.slot) is not int or offer.slot!=slot
                 or type(offer.element) is not str or type(offer.quantity) is not int
-                or type(offer.quantity_marker) is not str or not _positive(offer.remaining)):
+                or type(offer.quantity_marker) is not str or not _positive(offer.remaining)
+                or offer.identity not in (IDENTITY_BADGE,IDENTITY_TEXT)):
+            raise BatchStopped('link_offers_unknown')
+        if offer.identity==IDENTITY_BADGE:
+            icon=_icon(offer.icon)
+            if icon.element!=offer.element:raise BatchStopped('link_offers_unknown')
+        elif offer.icon is not None:
             raise BatchStopped('link_offers_unknown')
         groups=[]
-        for words,roi,maximum in ((offer.name_words,NAME_ROIS[slot],2),
-                (offer.quantity_words,QUANTITY_ROIS[slot],1),(offer.button_words,BUTTON_ROIS[slot],1)):
+        for words,roi,maximum in ((offer.quantity_words,QUANTITY_ROIS[slot],1),
+                (offer.button_words,BUTTON_ROIS[slot],1)):
             if (type(words) is not tuple or any(type(w) is not Word or type(w.box) is not tuple
                     or not _inside(w.box,roi) for w in words)):
                 raise BatchStopped('link_offers_unknown')
             groups.append(_link_words(dict(filtered=[dict(text=w.text,box=list(w.box),score=w.score)
                 for w in words]),roi,maximum=maximum))
-        if _offer(slot,*groups,remaining=offer.remaining)!=offer:raise BatchStopped('link_offers_unknown')
+        if _offer(slot,offer.icon,*groups,remaining=offer.remaining)!=offer:raise BatchStopped('link_offers_unknown')
     if len({o.remaining for o in offers})!=1:raise BatchStopped('link_remaining_unknown')
     if len({o.element for o in offers})!=3:raise BatchStopped('link_elements_ambiguous')
     return tuple(offers)
 
 
 def link_offers(receipt):
-    """One same-frame native page; quantities are read independently of × OCR."""
+    """One same-frame native page; badge identity first, readable text fallback."""
     if type(receipt) is not dict or receipt.get('native_ok') is not True:
         raise BatchStopped('link_offers_unknown')
     nodes=receipt.get('nodes')
@@ -136,6 +261,7 @@ def link_offers(receipt):
     match=re.fullmatch(r'还剩([1-9][0-9]{0,18})次',_normalized(words[0].text))
     if match is None:raise BatchStopped('link_remaining_unknown')
     remaining=_positive_text(match[1])
+    icons=_icons(_custom_detail(rows.get('LabyLinkIconIdentity')))
     offers=[]
     for slot in range(3):
         bright=rows[f'LabyLinkBright{slot}']
@@ -145,7 +271,7 @@ def link_offers(receipt):
                 or type(values[0].get('count')) is not int
                 or not 800<=values[0]['count']<=values[0]['box'][2]*values[0]['box'][3]):
             raise BatchStopped('link_button_unknown')
-        offers.append(_offer(slot,_link_words(rows[f'LabyLinkName{slot}'],NAME_ROIS[slot],maximum=2),
+        offers.append(_offer(slot,icons[slot],
             _link_words(rows[f'LabyLinkQuantity{slot}'],QUANTITY_ROIS[slot]),
             _link_words(rows[f'LabyLinkButton{slot}'],BUTTON_ROIS[slot]),remaining))
     return _validate_offers(offers)
@@ -171,11 +297,23 @@ def selection_override(offers,slot):
     offer=offers[slot]
     overrides={'LabyLinkRemaining':_ocr(r'^还剩\s*'+str(offer.remaining)+r'\s*次$',REMAINING_ROI)}
     name=f'LabyLinkGuardQuantity{slot}'
-    # The full line binds attribute and quantity; separator OCR does not change either.
-    overrides[name]=dict(_ocr(r'^'+offer.element+r'属性的随机印记[×?？xX*]?'+str(offer.quantity)+r'$',
-        QUANTITY_ROIS[slot]),only_rec=True)
+    if offer.identity==IDENTITY_BADGE:
+        # The full line binds quantity and item type; the badge guard is the
+        # attribute proof, so an unreadable prefix cannot veto the click.
+        overrides[name]=dict(_ocr(r'^.*属性的随机印记[×?？xX*]?'+str(offer.quantity)+r'$',
+            QUANTITY_ROIS[slot]),only_rec=True)
+        icon='LabyLinkIconGuard'
+        overrides[icon]=dict(recognition='Custom',custom_recognition=LINK_ICON,
+            custom_recognition_param=dict(mode='guard',slot=slot,element=offer.element),
+            action='DoNothing',next=[],timeout=1500,pre_delay=0,post_delay=0)
+        guards=[name,icon]
+    else:
+        # Text fallback: the same line must spell this attribute and count.
+        overrides[name]=dict(_ocr(r'^'+offer.element+r'属性的随机印记[×?？xX*]?'+str(offer.quantity)+r'$',
+            QUANTITY_ROIS[slot]),only_rec=True)
+        guards=[name]
     first=f'LabyLinkButton{slot}'
-    rest=['LabyLinkTitle','LabyLinkSubtitle','LabyLinkRemaining',name]
+    rest=['LabyLinkTitle','LabyLinkSubtitle','LabyLinkRemaining']+guards
     rest += [f'LabyLinkBright{slot}']
     overrides['LabyLinkSelectOnce']=dict(recognition='And',all_of=[first]+rest,
         action='Click',target=True,max_hit=1,next=[],timeout=2500,rate_limit=250,
@@ -303,6 +441,7 @@ class MaaLinkReward:
         self.tasker, self.stamp = tasker, stamp
         self.timings = timings or Timings()
         self.attempted = set()
+        self.capture = install_link_imprint(tasker)
 
     def _run(self, node, *, input=False):
         from .. import native
@@ -336,7 +475,8 @@ class MaaLinkReward:
         with self.timings.measure('strategy'):
             selected = preferred_choice(offers, ordered_elements)
         fields = dict(enter_id=enter_id, reward_id=reward_id, slot=selected.slot,
-                      element=selected.element, imprint_name=selected.element+'属性的随机印记',
+                      element=selected.element, element_source=selected.identity,
+                      imprint_name=selected.element+'属性的随机印记',
                       quantity=selected.quantity)
         self.attempted.add(key)
         def send(operation_id):

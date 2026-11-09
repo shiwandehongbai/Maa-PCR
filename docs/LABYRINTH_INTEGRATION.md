@@ -94,6 +94,18 @@ review 二次收口（`b6927c1` 之后）：上面把“到期”和“坏回执
 
 未做/边界：每局启动仍会做一次全量读+逐条校验（约 15 s），且 `owned_runtime` 的 `pending_intent` 与 `Batch.run` 在两次加锁中各读一次（合计约 30 s/局）；下一步可用 sidecar 记录已校验 offset/stamp 只校验新增行，或跨锁复用已验证缓存（本轮未做，避免改动校验语义）。账本体积本身（每条内嵌完整回执）未处理。日常/公会战共用 `Journal` 类，`events()` 行为未变。
 
+## 2026-11-09 连结印记属性身份改为卡面元素徽章（先图标，失败回退 OCR）
+
+现状：三选一页的属性一直由 `links.py` 的 `LabyLinkName*` OCR「X属性的随机印记」决定，数量、按钮和剩余次数也是 OCR。用户要求改用 `D:\pcr_assets\黎明界资源\09_其他` 的 `icon_labyrinth_icon_summon_unit_*.png`，并确认属性系列从 `311xxx` 开始：`31100000`/`31200000`/`31300000`/`31400000`/`31500000` 才是火/水/风/光/暗；`1100x000`/`3100x000` 是攻击/治疗/加速等效果徽章，`11xxxxxx` 是与 31xxxxxx 同形的另一套（实机卡面匹配较差）。
+
+资源与选择：新增 `assets/labyrinth/link-imprint-pack/`，5 张 44×44 RGBA 徽章（fire/water/wind/light/dark），逐字节取自 31xxxxxx 系列 `icon_labyrinth_icon_summon_unit_<id>.png` 的 `(84,84,44,44)` 右下角徽章。`PROVENANCE.json` 逐张记录 sha256/bytes/尺寸/32bppArgb/sourceBundle/crop/element，`origin` 写明选择依据。选 31xxxxxx 而非 11xxxxxx：两张 2026-11-09 实机 1280×720 卡面帧上 31 系列 NCC 0.983-0.987，11 系列只有 0.886-0.903。
+
+代码：`src/pcr_maa/labyrinth/link_imprint.py` 的 `load_catalog()` 校验 manifest 的五属性全集与逐张 sha256/bytes/44×44/32bpp，缺包/漂移抛 `link_imprint_resource_changed`，坏帧抛 `link_frame_unknown`；`ImprintCatalog.match(frame, slot)` 在固定 720p 徽章区域（`SEARCH_ROIS` 65×65）做 53-57px 尺度 + `TM_CCOEFF_NORMED` 平移搜索，输出 element/score/rival/margin/candidates/art，`trusted` 需 score ≥ .85 且 margin ≥ .15；`LinkImprintIconCapture` 提供 `offers`（三槽同帧身份，始终命中以稳定 And 页观察）与 `guard`（只命中指定 slot/element）两种 custom recognition 模式。`links.py` 用 `LabyLinkIconIdentity`/`LabyLinkIconGuard` 替换 `LabyLinkName*`（删除 `NAME_ROIS`），并采用与遗物一致的「先图标、失败回退 OCR」：`LinkOffer` 携带可为 `None` 的 `LinkIcon` 和 `identity`（`badge`/`text`）；徽章可信时以徽章为属性，同帧可读属性字只做交叉核对（矛盾→`link_identity_conflict`，读不出不拦截）；某槽徽章不可信时回退该槽同帧文字「X属性的随机印记×N」，此时文字属性就是身份；两者都不可用抛 `link_element_unknown`。数量仍要求 canonical 正整数。点击守卫按身份选择：徽章身份用 `LabyLinkIconGuard` + 属性字形无关的数量整行；文字身份用 `^X属性的随机印记[×?？xX*]?N$` 严格整行守卫、不装图标守卫。`element_source` 写入账本字段，`install_link_imprint()` 在 `MaaLinkReward` 构造和 LINK 到达页读取前注册。
+
+验证（离线，非实机整局）：两张用户提供的实机帧加入 `tests/data/labyrinth-link-choice-20261109.png`、`…-20261109-b.png` 与同名 `.json`（来源/用途/sha256/1280×720；画面不含玩家名、账号、设备或运行标识）。`tests/test_labyrinth_link_offers_frame.py` 8 项：两帧的元素/数量/剩余/优先级（光火风→火、光水暗→暗）、五属性 NCC ≥ .95 且 rival ≤ .70、margin ≥ .25、真实按钮点击、空徽章回退文字并保持身份、文字回退守卫真实点击、空徽章且文字不可用停止、重复徽章冲突、错元素零输入。`tests/test_labyrinth_link_imprint_pack.py` 4 项：五属性清单与逐张 SHA/尺寸/来源 id、文件双向一致、坏包/缺属性拒绝、来源说明保留实机与 31/11 系列对照。`tests/test_labyrinth_links.py` 改为图标 receipt 并新增回退/身份/证据边界用例（`215 passed / 22 skipped` 为 links+帧合计）。相关套件（links、帧、pack、autoplay、independent debug、scene、channels parity、pixel-free、遗物帧、reward/shop upstream、release build）`563 passed / 64 skipped`；`pytest -k labyrinth` `1930 passed / 127 skipped / 5997 deselected`（18 subtests，4:09）。发布侧 `scripts/build_release.py` 增加必选项与 `require_link_imprint_payload`，`tests/test_release_build.py` 新增 2 项。
+
+未做/边界：本改动未实机整局复跑。领取结果弹窗仍按已选 element 校验「X属性的随机印记×N」文字；其后的「角色加入」页是具体角色结果，由既有 joined/角色奖励逻辑处理，本轮不改成属性图标。商店/事件里的印记名称仍是 text/role-class 身份。`docs/LABYRINTH_SOURCES.json` 增加 link-imprint-pack 资源条目。
+
 ## 2026-11-08 遗物点击守卫改为同帧图鉴身份（OCR 丢字不再拦截）
 
 实机失败记录 player-log run `cb977ae3ac554d2da0f01ce814e72313`（业务 run `489c2c929c68495ab0163ba396239c0d`，`enter_id=13475`，`reward_id=20701:relic_reward:1`）：15:13:58 进入第四次三选一遗物页，选择 slot 0「杀戮之矛」（`relic_id=13001`，会心+1，当前 4）。15:14:09 账本 `relic_reward_select` 已写入意图，15:14:13 以 `native_input_not_sent` 停止（`relics.py:851`、`relics.py:807`、`native.py:340`），进度 1:0，没有发出点击。

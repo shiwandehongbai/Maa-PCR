@@ -204,7 +204,7 @@
           "sha256": "74badfd997f8b59c371f4447988f9bb51cab39397d11becc8b2b76be8ae66dd5"
         }
       ],
-      "local_sha256": "16a4868b0f21e3ed87d4c98f191c0158369b20a7b5f7481b496f1548ae3f90d1",
+      "local_sha256": "c6db49c4816281d021cca047c0d5a69c08c42fb36768a76f6c8ec5a3c6f366e6",
       "production_runtime": true
     },
     {
@@ -870,7 +870,7 @@
   "game_icons_copied": true,
   "landosol_roster_catalog_copied": true,
   "release_status": "r38_user_approved_reused_clear_delivery",
-  "updated_at": "2026-11-07T15:27:12.796719+00:00",
+  "updated_at": "2026-11-09T13:32:12.379069+00:00",
   "asset_packages": [
     {
       "local_root": "assets/labyrinth/character-pack",
@@ -8512,6 +8512,49 @@
           "local_sha256": "575b79986682de082ce5d353cd471a023ce101b9f76294497838c51e8c1da1ca"
         }
       ]
+    },
+    {
+      "local_root": "assets/labyrinth/link-imprint-pack",
+      "kind": "local-game-imprint-element-badge-pack",
+      "file_count": 6,
+      "icon_count": 5,
+      "icon_formats": {
+        "png": 5
+      },
+      "inventory_sha256": "2e61653ac623b3547d228a31e250ac5b25156e5c8905b5025b30dad4b3cb83f3",
+      "inventory_sha256_format": "sorted local path TAB local_sha256 LF, UTF-8",
+      "provenance": {
+        "local": "assets/labyrinth/link-imprint-pack/PROVENANCE.json",
+        "sha256": "0552179452907e07e18989e5b3b94aad5aa5f46b0b3ecccc670f2da3168b00e3"
+      },
+      "image_rights": "Game imagery retains respective rights",
+      "distribution_status": "permission-and-combination-compatibility-review-pending",
+      "files": [
+        {
+          "local": "assets/labyrinth/link-imprint-pack/PROVENANCE.json",
+          "local_sha256": "0552179452907e07e18989e5b3b94aad5aa5f46b0b3ecccc670f2da3168b00e3"
+        },
+        {
+          "local": "assets/labyrinth/link-imprint-pack/icons/dark.png",
+          "local_sha256": "e6b0ebe9457feb783b6ff431de9f4a0fac7f172446cd99f4d55810edf116d78b"
+        },
+        {
+          "local": "assets/labyrinth/link-imprint-pack/icons/fire.png",
+          "local_sha256": "84e9242023235a5436e3a0a2687d0273df168eb35ced2ac38c85e8a82a057fc6"
+        },
+        {
+          "local": "assets/labyrinth/link-imprint-pack/icons/light.png",
+          "local_sha256": "b4008d5e7f55e0bab9dc8a392d1a4ed8173239d3c0a6f19a67ef45622c32dbd5"
+        },
+        {
+          "local": "assets/labyrinth/link-imprint-pack/icons/water.png",
+          "local_sha256": "71b9bf68f0f864557e866aa8a74df233642d8378b1a3cca275bd2ecb92d11607"
+        },
+        {
+          "local": "assets/labyrinth/link-imprint-pack/icons/wind.png",
+          "local_sha256": "466674e54bd893f39e9b724ac40a05487791128b771eeba920686a271e2f6a99"
+        }
+      ]
     }
   ],
   "licenses": [
@@ -8684,8 +8727,14 @@
       "production_runtime": true
     },
     {
+      "local": "src/pcr_maa/labyrinth/link_imprint.py",
+      "local_sha256": "427e56e6f11ccd8517a297a68e1cfbdbe061fceecc3c872d7c03686e5b8eabf8",
+      "kind": "frozen-labyrinth-source-file",
+      "production_runtime": true
+    },
+    {
       "local": "src/pcr_maa/labyrinth/links.py",
-      "local_sha256": "16a4868b0f21e3ed87d4c98f191c0158369b20a7b5f7481b496f1548ae3f90d1",
+      "local_sha256": "c6db49c4816281d021cca047c0d5a69c08c42fb36768a76f6c8ec5a3c6f366e6",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": true
     },
@@ -8697,7 +8746,7 @@
     },
     {
       "local": "src/pcr_maa/labyrinth/movement.py",
-      "local_sha256": "7f04bbe9b28e938b1afb2854d8773cee725682b566315ca28bebf4b1c63abafb",
+      "local_sha256": "94c119af7a1fb4509c4366414b9a96919b1af558130e74f520f084c10b4591dc",
       "kind": "frozen-labyrinth-source-file",
       "production_runtime": false
     },
@@ -9746,7 +9795,7 @@
   "live_two_run_cycle_verified": false,
   "documentation": {
     "current": "docs/LABYRINTH_INTEGRATION.md",
-    "current_sha256": "1f4ed8b55f58bb78113c6b3171fcd7db41bf010c56d76fdcdca21365f8a45805",
+    "current_sha256": "d4b47bc910a252ff1e0413bd57606b287996e066af21d062badcaa5e49e177f0",
     "history": "docs/LABYRINTH_INTEGRATION_HISTORY.md",
     "history_sha256": "6b0cce9d25a4b0ce1600bd40699df01bd2efa411bb7cd4594d9998d57c5abfc4",
     "history_preserved_as_original_bytes": true,
