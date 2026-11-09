@@ -41,10 +41,11 @@ R39 retains the labyrinth integration, including its upstream CC BY-NC-SA code,
 GPL-derived catalog and game-image provenance in `docs/LABYRINTH_SOURCES.json`,
 `licenses/labyrinth/`, `assets/labyrinth/character-pack/PROVENANCE.json`,
 `assets/labyrinth/boss-pack/PROVENANCE.json`,
-`assets/labyrinth/relic-pack/PROVENANCE.json` and
-`assets/labyrinth/link-imprint-pack/PROVENANCE.json` (Boss, relic and link
-imprint badge icons: game imagery rights retained; no distribution permission
-inferred).
+`assets/labyrinth/relic-pack/PROVENANCE.json`,
+`assets/labyrinth/link-imprint-pack/PROVENANCE.json` and
+`assets/labyrinth/summon-unit-pack/PROVENANCE.json` (Boss, relic, link
+imprint badge and summon-unit icons: game imagery rights retained; no
+distribution permission inferred).
 Original component terms and unresolved provenance statements are retained;
 the root MIT license applies only to original project source, not this entire
 aggregate. No maintainer settings, private game frames, journals, sessions or

@@ -94,6 +94,10 @@ review 二次收口（`b6927c1` 之后）：上面把“到期”和“坏回执
 
 未做/边界：每局启动仍会做一次全量读+逐条校验（约 15 s），且 `owned_runtime` 的 `pending_intent` 与 `Batch.run` 在两次加锁中各读一次（合计约 30 s/局）；下一步可用 sidecar 记录已校验 offset/stamp 只校验新增行，或跨锁复用已验证缓存（本轮未做，避免改动校验语义）。账本体积本身（每条内嵌完整回执）未处理。日常/公会战共用 `Journal` 类，`events()` 行为未变。
 
+## 2026-11-09 召唤单位图标数据迁移（110*/111*/310*/311*，商店与奖励印记）
+
+用户确认 `icon_labyrinth_icon_summon_unit_*` 按用途分系列：`311*` 是连结印记/角色奖励卡面上的属性随机印记（对应本次 `role_select1/2` 实机帧），`111*` 推测是属性选择印记但还没有实机帧；`110*`/`310*` 是商店里的职能印记（对应 `shop_1.png` 与仓库既有商店帧）。本轮按「先迁移数据、用 TODO/文档标注未验证项」处理：新增 `assets/labyrinth/summon-unit-pack/`（28 张 128×128 RGBA，按召唤单位 id 命名，逐字节取自客户端 `icon_labyrinth_icon_summon_unit_<id>.png`，逐张 SHA 入 `PROVENANCE.json`）和 `assets/labyrinth/summon-units.json`（master `labyrinth_summon_unit` 202611021739 的名称/价格/`summon_type`，加系列 `verified`/`evidence`/`todo`、八职能与五属性映射、28 条 `units`）。证据：`110*` 金框=选择印记、`310*` 灰框=随机印记；`tests/data/labyrinth-shop-choice-imprint-20261109.png` 第 2 行 11003000 NCC 0.855、31004000 NCC 0.853，`tests/data/labyrinth-shop-relics-after-20261108.png` 上 31006000/31004000/31002000 0.853-0.859，异系列同格 ≤0.56；`311*` 由连结印记帧 NCC 0.983-0.987 确认。`111*`（属性选择印记）**无实机帧**，catalog 与本文档均标 `verified=false`/TODO，确认前不得用于自动选择或账本身份。运行时尚未接线：商店/事件仍用文字与职能解析。新增 `tests/test_labyrinth_summon_unit_pack.py` 6 项（pack/清单、系列语义、master 映射、111 未验证、TODO、商店证据帧），发布侧增加必选项与 `require_summon_unit_payload`。详见 `docs/LABYRINTH_SUMMON_UNITS.md`。`pytest -k labyrinth` `1936 passed / 127 skipped / 5999 deselected`（18 subtests，5:05）。
+
 ## 2026-11-09 连结印记属性身份改为卡面元素徽章（先图标，失败回退 OCR）
 
 现状：三选一页的属性一直由 `links.py` 的 `LabyLinkName*` OCR「X属性的随机印记」决定，数量、按钮和剩余次数也是 OCR。用户要求改用 `D:\pcr_assets\黎明界资源\09_其他` 的 `icon_labyrinth_icon_summon_unit_*.png`，并确认属性系列从 `311xxx` 开始：`31100000`/`31200000`/`31300000`/`31400000`/`31500000` 才是火/水/风/光/暗；`1100x000`/`3100x000` 是攻击/治疗/加速等效果徽章，`11xxxxxx` 是与 31xxxxxx 同形的另一套（实机卡面匹配较差）。

@@ -265,6 +265,7 @@ def require_payload(player, metadata):
         'assets/labyrinth/boss-pack/PROVENANCE.json', 'assets/labyrinth/character-pack/icons.json',
         'assets/labyrinth/labyrinth-relics.json', 'assets/labyrinth/relic-pack/PROVENANCE.json',
         'assets/labyrinth/link-imprint-pack/PROVENANCE.json',
+        'assets/labyrinth/summon-units.json', 'assets/labyrinth/summon-unit-pack/PROVENANCE.json',
         'assets/labyrinth/character-pack/characters.landosolroster.json',
         'docs/RELEASE_STATUS.md', 'docs/SOURCE_AND_LICENSES.md', 'docs/LABYRINTH_INTEGRATION.md',
         'docs/LABYRINTH_SOURCES.json',
@@ -338,6 +339,29 @@ def require_link_imprint_payload(player):
         if (not source.is_file() or digest(source) != record['sha256']
                 or not copied.is_file() or digest(copied) != record['sha256']):
             raise ValueError('labyrinth_link_imprint_icon_missing_or_changed')
+
+
+def require_summon_unit_payload(player):
+    """The summon-unit icon pack and catalog must ship byte-identical.
+
+    This is migrated data for shop/reward imprint icons; the catalog and the
+    manifest must name exactly the same 28 icons. Kept separate from
+    require_payload for the same offline-fixture reason as the other packs.
+    """
+    pack = ROOT / 'assets/labyrinth/summon-unit-pack'
+    catalog = json.loads((ROOT / 'assets/labyrinth/summon-units.json').read_text(encoding='utf-8'))
+    provenance = json.loads((pack / 'PROVENANCE.json').read_text(encoding='utf-8'))
+    icons = {row['path']: row for row in provenance['icons']}
+    if (len(icons) != 28 or len(catalog['units']) != 28
+            or {unit['icon'] for unit in catalog['units']} != set(icons)
+            or {row['sourceId'] for row in provenance['icons']} != {unit['summonId'] for unit in catalog['units']}):
+        raise ValueError('labyrinth_summon_unit_inventory_mismatch')
+    for name, record in icons.items():
+        source = pack / name
+        copied = player / 'assets/labyrinth/summon-unit-pack' / name
+        if (not source.is_file() or digest(source) != record['sha256']
+                or not copied.is_file() or digest(copied) != record['sha256']):
+            raise ValueError('labyrinth_summon_unit_icon_missing_or_changed')
 
 
 def archive_player(player, output):
@@ -544,6 +568,7 @@ def build(args):
     require_boss_payload(player)
     require_relic_payload(player)
     require_link_imprint_payload(player)
+    require_summon_unit_payload(player)
     save(player / 'build-source-manifest.json', {
         'schema_version': 1, 'purpose': 'GUI build input source binding',
         'bit_for_bit_rebuild_claimed': False,

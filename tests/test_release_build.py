@@ -127,6 +127,40 @@ def test_link_imprint_payload_must_match_provenance(tmp_path, monkeypatch):
         builder.require_link_imprint_payload(player)
 
 
+def test_summon_unit_payload_is_required(tmp_path, monkeypatch):
+    player = tmp_path / 'player'
+    player.mkdir()
+    monkeypatch.setattr(builder, 'ROOT', tmp_path / 'source')
+    metadata = {'python': {'version': '3.13.16'}, 'dotnet': {'version': '10.0.1'}}
+    with pytest.raises(ValueError, match='release_payload_missing: ') as missing:
+        builder.require_payload(player, metadata)
+    text = str(missing.value)
+    assert 'assets/labyrinth/summon-units.json' in text
+    assert 'assets/labyrinth/summon-unit-pack/PROVENANCE.json' in text
+
+
+def test_summon_unit_payload_must_match_catalog_and_provenance(tmp_path, monkeypatch):
+    source = tmp_path / 'source'
+    assets = source / 'assets/labyrinth'
+    shutil.copytree(ROOT / 'assets/labyrinth/summon-unit-pack', assets / 'summon-unit-pack')
+    shutil.copyfile(ROOT / 'assets/labyrinth/summon-units.json', assets / 'summon-units.json')
+    player = tmp_path / 'player'
+    shutil.copytree(assets / 'summon-unit-pack', player / 'assets/labyrinth/summon-unit-pack')
+    monkeypatch.setattr(builder, 'ROOT', source)
+    builder.require_summon_unit_payload(player)
+    icon = player / 'assets/labyrinth/summon-unit-pack/icons/31006000.png'
+    pristine = icon.read_bytes()
+    icon.write_bytes(pristine + b'\0')
+    with pytest.raises(ValueError, match='labyrinth_summon_unit_icon_missing_or_changed'):
+        builder.require_summon_unit_payload(player)
+    icon.write_bytes(pristine)
+    catalog = json.loads((assets / 'summon-units.json').read_text(encoding='utf-8'))
+    catalog['units'] = catalog['units'][:-1]
+    (assets / 'summon-units.json').write_text(json.dumps(catalog, ensure_ascii=False), encoding='utf-8')
+    with pytest.raises(ValueError, match='labyrinth_summon_unit_inventory_mismatch'):
+        builder.require_summon_unit_payload(player)
+
+
 def test_runtime_copy_excludes_only_the_local_guide_handoff(tmp_path, monkeypatch):
     source = tmp_path / 'source'
     docs = source / 'docs'

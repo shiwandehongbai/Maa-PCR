@@ -870,7 +870,7 @@
   "game_icons_copied": true,
   "landosol_roster_catalog_copied": true,
   "release_status": "r38_user_approved_reused_clear_delivery",
-  "updated_at": "2026-11-09T13:32:12.379069+00:00",
+  "updated_at": "2026-11-09T14:29:50.664035+00:00",
   "asset_packages": [
     {
       "local_root": "assets/labyrinth/character-pack",
@@ -8555,6 +8555,141 @@
           "local_sha256": "466674e54bd893f39e9b724ac40a05487791128b771eeba920686a271e2f6a99"
         }
       ]
+    },
+    {
+      "local_root": "assets/labyrinth/summon-unit-pack",
+      "kind": "local-game-summon-unit-icon-pack",
+      "file_count": 29,
+      "icon_count": 28,
+      "icon_formats": {
+        "png": 28
+      },
+      "inventory_sha256": "d05eda73aaf23b89f9014aa9a589b89fc5e30544921402b238c97ff6ff8b19ed",
+      "inventory_sha256_format": "sorted local path TAB local_sha256 LF, UTF-8",
+      "provenance": {
+        "local": "assets/labyrinth/summon-unit-pack/PROVENANCE.json",
+        "sha256": "3fc87e7ab9061ee4cc698958a64cf44b102f7c1eb9458cf758905116cc771265"
+      },
+      "image_rights": "Game imagery retains respective rights",
+      "distribution_status": "permission-and-combination-compatibility-review-pending",
+      "files": [
+        {
+          "local": "assets/labyrinth/summon-unit-pack/PROVENANCE.json",
+          "local_sha256": "3fc87e7ab9061ee4cc698958a64cf44b102f7c1eb9458cf758905116cc771265"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11000000.png",
+          "local_sha256": "a96e1f88597620e7a47093a201ecb97660bd56e6fd66bd13665848092b99c777"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11001000.png",
+          "local_sha256": "9013b96cee3c3716b4ba5c944750a37b45d7811014f53260acbd8f6afee8c299"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11002000.png",
+          "local_sha256": "fafe6d1bd7fc64b8172be924d8b29b8e95f63e66e76186e9f251e6541dc7c4a4"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11003000.png",
+          "local_sha256": "9f6e7c014a225b109583a2335c8a6be26bec2c93b1528d2838e7306245388b3f"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11004000.png",
+          "local_sha256": "6d766fed07f42d7a82973fe961809a977d98034b667a0e403236866e91db5cc5"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11005000.png",
+          "local_sha256": "940100cc2dc9fad33d59a7d8dc18cd1d6538eed34af78454d4da5b6225096578"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11006000.png",
+          "local_sha256": "03f71351dbbb26a8b98d5e6bb54d62510df821fe889358fa8d823c46ca6638d7"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11007000.png",
+          "local_sha256": "bd0e13f2dc6f86895c3488cfbd078400a5fd039ddfdb3fd105f65a806ca28d40"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11008000.png",
+          "local_sha256": "5b0473f4885b939e15da79150455e49603baa16fc897a3d11403c17fb4b56a15"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11100000.png",
+          "local_sha256": "b4f7a3226b1e8e821077425575f16244f8317c8ac72e4e79be25acacf588544d"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11200000.png",
+          "local_sha256": "0e6afc3e0573c5864a7827b99353cb369ed2b8c7f9a0c42df9994a7e201a9577"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11300000.png",
+          "local_sha256": "d7dfe906dd1d7152d2935ff3260854e41b2f7442175af83ef4eb16cbe329fe9a"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11400000.png",
+          "local_sha256": "f3ed6f939788e42ef0514aea00d31caabb6906adf08fa1ac7ec94059798d36b4"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/11500000.png",
+          "local_sha256": "9a4b24d585388a18c6b5c1ffa60a1214d378bdb4fe9db87d2be0ca84ec527008"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31000000.png",
+          "local_sha256": "b3304256ebdc9bbab0306302f016734f8c4f421b462a6cb9583d730147aa5c4f"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31001000.png",
+          "local_sha256": "a558eac0b3e9af2e16340b97680b8175400463cf24d6a988bff1ba00afbc37a5"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31002000.png",
+          "local_sha256": "fa6c72e5fe61e891a2f1d93078b65b7e25ba9573fece5ae888d857184a540265"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31003000.png",
+          "local_sha256": "6c8be2ec3a695f9b0439bff9b4abe2a5635c40f3cedb2189bd35cd69f41c5bb6"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31004000.png",
+          "local_sha256": "a09087a39cc80f248986e8cf12260741ec3d3d2c308fdc42c97aadaa7d7037dd"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31005000.png",
+          "local_sha256": "1cfc9e64bf8fe56d7c3e31a10813c008304ba2f1429eccdaa63f03998e721737"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31006000.png",
+          "local_sha256": "31f664ca3c9ce5ba827dcfcf64783845868fb2e23b21bf5675f5f72094ef2bb1"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31007000.png",
+          "local_sha256": "bb25791c7e65a73ac9bef8f65fd52b45978546f7b66d890902948e52f25088eb"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31008000.png",
+          "local_sha256": "6c83dc13be16edefcb12eb4d620b63374968e4fea5cbf1941032a2a76ccf5fee"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31100000.png",
+          "local_sha256": "a10384c5c919c6dba0c701b6069c2e72e48f23e6c3adfb61afd2f23d2a5c70e8"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31200000.png",
+          "local_sha256": "fceaa795aac09e3a35d223776174c20e0b97011510236344c0bae0bd493497a7"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31300000.png",
+          "local_sha256": "1edf05a2a6b240587db31e94ba7bd95ab35cc35469f1ce093cef94318009cc16"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31400000.png",
+          "local_sha256": "8e62d3042f1b2b040f044f5c45b9bd68b528621809604103446426b0f57c104b"
+        },
+        {
+          "local": "assets/labyrinth/summon-unit-pack/icons/31500000.png",
+          "local_sha256": "7d6c9e3bf0b227e22ad00631e03ab0d137cf7d112997385a68327428d4b613bf"
+        }
+      ]
     }
   ],
   "licenses": [
@@ -9597,6 +9732,12 @@
       "local_sha256": "4b3c818a7841fc298d784fc21b843dd0727759e92edc11515de1d28b2b573985"
     },
     {
+      "local": "assets/labyrinth/summon-units.json",
+      "local_sha256": "e2e6a54af07933381e0a2437c8456476f1856292d3a15932e091012f4932ae70",
+      "kind": "resource-data-or-configuration",
+      "production_runtime": false
+    },
+    {
       "local": "assets/resource/pipeline/home_text.json",
       "kind": "local-home-recognition-file",
       "production_runtime": true,
@@ -9795,14 +9936,16 @@
   "live_two_run_cycle_verified": false,
   "documentation": {
     "current": "docs/LABYRINTH_INTEGRATION.md",
-    "current_sha256": "d4b47bc910a252ff1e0413bd57606b287996e066af21d062badcaa5e49e177f0",
+    "current_sha256": "3da675a6e2c98b85f936959d1efedd81db737a58b86f2cb1e4a1574eeb7192c8",
     "history": "docs/LABYRINTH_INTEGRATION_HISTORY.md",
     "history_sha256": "6b0cce9d25a4b0ce1600bd40699df01bd2efa411bb7cd4594d9998d57c5abfc4",
     "history_preserved_as_original_bytes": true,
     "coverage": "docs/LABYRINTH_UPSTREAM_COVERAGE.md",
     "coverage_sha256": "b3d8496678aebf2412a16f64cf238c157e1812ffffa276c31e16b78ded1a02c5",
     "parity": "docs/LABYRINTH_UPSTREAM_PARITY.md",
-    "parity_sha256": "45f51b9674cd15caabf89cb9e19eb76f2b84bde5f180327bee347530b9d48a63"
+    "parity_sha256": "45f51b9674cd15caabf89cb9e19eb76f2b84bde5f180327bee347530b9d48a63",
+    "summon_units": "docs/LABYRINTH_SUMMON_UNITS.md",
+    "summon_units_sha256": "9e85cd6a4477f5cf7bc999be002b0df5f47d12097d14976be0515ffa7dcd3065"
   },
   "baseline": {
     "feature_development_revision": 24,

@@ -1,0 +1,45 @@
+{
+  "source": "2026-11-09 user-provided 1280x720 screenshot of the labyrinth coin shop page with a 增益型职能的选择印记 (11003000) and two 减益型职能的随机印记 (31004000). Full frame retained; no player name, account ID, device ID or run ID is visible.",
+  "purpose": "Summon-unit icon series evidence: gold-frame 110* is the shop choice imprint and gray-frame 310* is the shop random imprint. Offline icon matching only; not live-game acceptance.",
+  "page": "shop",
+  "frames": {
+    "labyrinth-shop-choice-imprint-20261109.png": {
+      "sha256": "612550e3cc8246531c55942d34abeeb28ed604b7d1e06bcc596bbdb741c71059",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "expected": {
+    "balance": 4676,
+    "items": [
+      {
+        "slot": 0,
+        "row": 2,
+        "kind": "role_imprint",
+        "choice": true,
+        "summonId": 11003000,
+        "name": "增益型职能的选择印记",
+        "observed_ncc": 0.855
+      },
+      {
+        "slot": 1,
+        "row": 2,
+        "kind": "role_imprint",
+        "choice": false,
+        "summonId": 31004000,
+        "name": "减益型职能的随机印记",
+        "observed_ncc": 0.853
+      },
+      {
+        "slot": 2,
+        "row": 2,
+        "kind": "role_imprint",
+        "choice": false,
+        "summonId": 31004000,
+        "name": "减益型职能的随机印记",
+        "observed_ncc": 0.853
+      }
+    ],
+    "notes": "Icons are drawn at ~102px in the shop tile. Correct ids win at NCC 0.853-0.859; the other frame family stays <=0.56 on both cards."
+  }
+}
