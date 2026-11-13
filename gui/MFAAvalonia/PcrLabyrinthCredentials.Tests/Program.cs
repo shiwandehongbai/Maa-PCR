@@ -179,10 +179,12 @@ try
     var rosterOwner = Owner(rosterConfig);
     var rosterSettings = new PcrLabyrinthSettings(rosterOwner);
     var catalog = rosterSettings.CharacterCatalog;
-    Require(catalog.Guilds.Count == 5, "opening_catalog_has_five_guilds");
-    Require(catalog.Guilds.Select(guild => guild.Characters.Count).SequenceEqual(new[] { 18, 15, 15, 12, 9 }),
+    Require(catalog.Guilds.Count == 10, "opening_catalog_has_ten_guilds");
+    Require(catalog.Guilds.Select(guild => guild.Characters.Count).SequenceEqual(new[] { 18, 15, 15, 12, 9, 13, 17, 11, 14, 17 }),
         "opening_catalog_guild_sizes: " + string.Join(",", catalog.Guilds.Select(guild => guild.Characters.Count)));
-    Require(catalog.Guilds.Select(guild => guild.Name).SequenceEqual(new[] { "美食殿堂", "破晓之星", "咲恋救济院", "王宫骑士团", "拉比林斯" }),
+    Require(catalog.Guilds.Select(guild => guild.Name).SequenceEqual(new[] {
+            "美食殿堂", "破晓之星", "咲恋救济院", "王宫骑士团", "拉比林斯",
+            "慈乐之音", "恶魔伪王国军", "伊丽莎白牧场", "墨丘利财团", "暮光流星群" }),
         "opening_catalog_guild_names");
     var rosterCharacters = catalog.Guilds.SelectMany(guild => guild.Characters).ToArray();
     Require(rosterCharacters.Select(character => character.Id).Distinct().Count() == rosterCharacters.Length,
@@ -201,20 +203,71 @@ try
     // 该字段只由图鉴生成，不写回加载路径。
     var snapshotStrategy = rosterSettings.Snapshot()["strategy"] as JObject;
     var snapshotGuildUnits = snapshotStrategy?["guild_units"] as JObject;
-    Require(snapshotGuildUnits is not null && snapshotGuildUnits.Count == 5,
-        "guild_units_snapshot_has_five_guilds: " + snapshotStrategy?["guild_units"]?.ToString(Newtonsoft.Json.Formatting.None));
-    Require(snapshotGuildUnits!.Properties().Select(property => property.Name).SequenceEqual(new[] { "1", "2", "3", "4", "5" }),
+    Require(snapshotGuildUnits is not null && snapshotGuildUnits.Count == 10,
+        "guild_units_snapshot_has_ten_guilds: " + snapshotStrategy?["guild_units"]?.ToString(Newtonsoft.Json.Formatting.None));
+    Require(snapshotGuildUnits!.Properties().Select(property => property.Name).SequenceEqual(new[] { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" }),
         "guild_units_snapshot_keys_are_guild_ids");
     var snapshotGuildArrays = snapshotGuildUnits.Properties().Select(property => property.Value as JArray).ToArray();
     Require(snapshotGuildArrays.All(array => array is not null)
-        && snapshotGuildArrays.Select(array => array!.Count).SequenceEqual(new[] { 18, 15, 15, 12, 9 }),
+        && snapshotGuildArrays.Select(array => array!.Count).SequenceEqual(new[] { 18, 15, 15, 12, 9, 13, 17, 11, 14, 17 }),
         "guild_units_snapshot_guild_sizes: " + string.Join(",", snapshotGuildArrays.Select(array => array?.Count)));
     Require(snapshotGuildArrays.Select((array, index) => array!.Values<string>()
             .SequenceEqual(catalog.Guilds[index].Characters.Select(character => character.Id))).All(matches => matches),
         "guild_units_snapshot_matches_catalog");
     var snapshotGuildIds = snapshotGuildArrays.SelectMany(array => array!.Values<string>()).ToArray();
-    Require(snapshotGuildIds.Length == 69 && snapshotGuildIds.Distinct().Count() == snapshotGuildIds.Length,
-        "guild_units_snapshot_ids_unique_across_guilds");
+    Require(snapshotGuildIds.Length == 141 && snapshotGuildIds.Distinct().Count() == snapshotGuildIds.Length,
+        "guild_units_snapshot_ids_unique_across_guilds: " + snapshotGuildIds.Length);
+    // 6–10 号公会没有上游默认开局候选：启用后必须选满三个槽位，否则保存/开始被阻止。
+    var newGuildConfig = new InstanceConfiguration("pcr-labyrinth-new-guild-roster");
+    var newGuildSettings = new PcrLabyrinthSettings(Owner(newGuildConfig));
+    Require(newGuildSettings.Goals.Select(goal => goal.GuildId).SequenceEqual(Enumerable.Range(1, 10)),
+        "opening_goals_cover_guild_ids_one_to_ten");
+    Require(newGuildSettings.Goals.Select(goal => goal.Name).SequenceEqual(new[] {
+            "美食殿堂", "破晓之星", "咲恋救济院", "王宫骑士团", "拉比林斯",
+            "慈乐之音", "恶魔伪王国军", "伊丽莎白牧场", "墨丘利财团", "暮光流星群" }),
+        "opening_goal_names_match_guild_selection_order");
+    foreach (var newGoal in newGuildSettings.Goals.Where(goal => goal.GuildId >= 6))
+    {
+        newGoal.Enabled = true;
+        try
+        {
+            newGuildSettings.Snapshot();
+            throw new InvalidOperationException("new_guild_empty_roster_not_blocked: " + newGoal.GuildId);
+        }
+        catch (InvalidOperationException error) when (error.Message.Contains("没有上游默认开局候选")) { }
+        newGoal.Enabled = false;
+    }
+    // 1–5 号公会三个槽位留空仍等于沿用上游默认，不算错误。
+    newGuildSettings.Goals[1].Enabled = true;
+    Require(newGuildSettings.Snapshot()["strategy"]?["opening_rosters"] is JObject { Count: 0 },
+        "opening_legacy_guild_empty_slots_keep_upstream_default");
+    newGuildSettings.Goals[1].Enabled = false;
+    // 6 号公会选满三个槽位后可以正常保存、重开与开始。
+    var newGuildGoal = newGuildSettings.Goals[5];
+    Require(newGuildGoal.Pool.Count == 13, "opening_guild_six_pool_size: " + newGuildGoal.Pool.Count);
+    var newGuildPicks = newGuildGoal.Pool.Take(3).Select(character => character.Id).ToArray();
+    newGuildGoal.Pool.First(character => character.Id == newGuildPicks[0]).ToggleCommand!.Execute(null);
+    Require(newGuildSettings.Status.Contains("三个槽位都至少选择一个角色"),
+        "opening_new_guild_partial_pick_blocked: " + newGuildSettings.Status);
+    foreach (var id in newGuildPicks.Skip(1))
+        newGuildGoal.Pool.First(character => character.Id == id).ToggleCommand!.Execute(null);
+    newGuildGoal.Enabled = true;
+    newGuildSettings.Save();
+    Require(!newGuildSettings.Status.StartsWith("保存失败"), "opening_new_guild_roster_saves: " + newGuildSettings.Status);
+    var savedNewGuild = JObject.Parse(newGuildConfig.GetValue(PcrLabyrinthSettings.Key, ""));
+    Require(savedNewGuild["goals"] is JArray savedNewGoals
+        && savedNewGoals.OfType<JObject>().Any(row => (int?)row["guild_id"] == 6),
+        "opening_new_guild_goal_saved_as_goal");
+    var savedNewRoster = savedNewGuild["strategy"]?["opening_rosters"]?["6"] as JArray;
+    Require(savedNewRoster is not null && savedNewRoster.Count == 3
+        && string.Join("/", savedNewRoster.Select(slot => string.Join(",", slot.Values<string>()))) == string.Join("/", newGuildPicks),
+        "opening_new_guild_roster_saved: " + savedNewRoster);
+    var restoredNewGuild = new PcrLabyrinthSettings(Owner(newGuildConfig));
+    Require(restoredNewGuild.Goals[5].Enabled && restoredNewGuild.Goals[5].HasCustomRoster
+        && restoredNewGuild.Goals[5].Slots.SelectMany(slot => slot.Candidates).Select(character => character.Id).SequenceEqual(newGuildPicks),
+        "opening_new_guild_roster_restored: " + string.Join("/", restoredNewGuild.Goals[5].Slots.Select(slot => slot.HeaderText)));
+    Require(restoredNewGuild.Snapshot()["strategy"]?["opening_rosters"]?["6"] is JArray,
+        "opening_new_guild_roster_snapshot_after_restore");
     var rosterView = new PcrLabyrinthView { DataContext = rosterOwner };
     Dispatcher.UIThread.RunJobs();
     var rosterXaml = XDocument.Load(Path.Combine(args[1], "gui", "MFAAvalonia", "MFAAvalonia", "Pcr", "PcrLabyrinthView.axaml"));
@@ -236,8 +289,11 @@ try
     Require(!rosterExpanderNode.Descendants(xaml + "TextBox").Any(), "opening_no_text_input_in_roster_ui");
     Require(!rosterExpanderNode.Descendants().Any(node => (string?)node.Attribute("Name") == "OpeningPickerPanel"),
         "opening_popup_removed_from_view");
-    Require(rosterSettings.Goals.Sum(goal => goal.Slots.Count) == 15, "opening_goals_have_three_slots_each");
-    Require(rosterSettings.Goals.Select(goal => goal.Pool.Count).SequenceEqual(new[] { 18, 15, 15, 12, 9 }),
+    Require(rosterExpanderNode.Descendants(xaml + "TextBlock").Any(node =>
+            ((string?)node.Attribute("Text"))?.Contains("6–10 号公会没有上游默认开局候选") == true),
+        "opening_new_guild_requirement_hint_in_view");
+    Require(rosterSettings.Goals.Sum(goal => goal.Slots.Count) == 30, "opening_goals_have_three_slots_each");
+    Require(rosterSettings.Goals.Select(goal => goal.Pool.Count).SequenceEqual(new[] { 18, 15, 15, 12, 9, 13, 17, 11, 14, 17 }),
         "opening_goal_pools_match_guild_sizes");
     var rosterGoal = rosterSettings.Goals[0];
     PcrLabyrinthCharacter Pick(string id) => rosterGoal.Pool.First(character => character.Id == id);
@@ -263,7 +319,7 @@ try
         && string.Join("/", savedSlots.Select(slot => string.Join(",", slot.Values<string>()))) == "1075/1351/1059",
         "opening_roster_saved_legacy_format: " + savedRosterJson);
     var savedGuildUnits = JObject.Parse(rosterConfig.GetValue(PcrLabyrinthSettings.Key, ""))["strategy"]?["guild_units"] as JObject;
-    Require(savedGuildUnits is not null && savedGuildUnits.Count == 5,
+    Require(savedGuildUnits is not null && savedGuildUnits.Count == 10,
         "guild_units_persisted_in_saved_strategy: " + savedGuildUnits?.ToString(Newtonsoft.Json.Formatting.None));
     var restored = new PcrLabyrinthSettings(Owner(rosterConfig));
     Require(restored.Goals[0].Slots.Select(slot => string.Join(",", slot.Candidates.Select(character => character.Name)))
@@ -302,7 +358,7 @@ try
     Require(legacySaved is not null && string.Join("/", legacySaved.Select(slot => string.Join(",", slot.Values<string>()))) == "1077/1121/1308",
         "opening_legacy_priority_saved: " + legacySaved);
     var legacySavedStrategy = JObject.Parse(legacyRosterConfig.GetValue(PcrLabyrinthSettings.Key, ""))["strategy"] as JObject;
-    Require(legacySavedStrategy?["guild_units"] is JObject { Count: 5 },
+    Require(legacySavedStrategy?["guild_units"] is JObject { Count: 10 },
         "guild_units_present_for_legacy_config: " + legacySavedStrategy);
     // 图鉴之外的旧 ID 保留为占位项：可显示、不可加入。
     var unknownRosterConfig = new InstanceConfiguration("pcr-labyrinth-unknown-roster");

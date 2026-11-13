@@ -150,7 +150,9 @@ public partial class PcrLabyrinthSettings : ObservableObject {
         vm=owner;
         Goals=new(new[] {
             new PcrLabyrinthGoal(1,"美食殿堂",this), new PcrLabyrinthGoal(2,"破晓之星",this), new PcrLabyrinthGoal(3,"咲恋救济院",this),
-            new PcrLabyrinthGoal(4,"王宫骑士团",this),new PcrLabyrinthGoal(5,"拉比林斯",this) });
+            new PcrLabyrinthGoal(4,"王宫骑士团",this),new PcrLabyrinthGoal(5,"拉比林斯",this),
+            new PcrLabyrinthGoal(6,"慈乐之音",this), new PcrLabyrinthGoal(7,"恶魔伪王国军",this), new PcrLabyrinthGoal(8,"伊丽莎白牧场",this),
+            new PcrLabyrinthGoal(9,"墨丘利财团",this),new PcrLabyrinthGoal(10,"暮光流星群",this) });
         Goals[0].Enabled=true;
         try { bossCatalog=PcrLabyrinthBossCatalog.Load(); }
         catch (Exception ex) { bossCatalogError=ex.Message; }
@@ -436,7 +438,12 @@ public partial class PcrLabyrinthSettings : ObservableObject {
         var rosters=new JObject();
         foreach (var goal in Goals) {
             var filled=goal.Slots.Where(slot=>slot.Candidates.Count>0).ToArray();
-            if (filled.Length==0) continue;
+            if (filled.Length==0) {
+                // 1–5 号公会有上游默认开局候选，留空即沿用；6–10 号公会没有上游默认，启用后必须选满三个槽位。
+                if (goal.Enabled && goal.GuildId>=6)
+                    throw new InvalidOperationException($"{goal.Name}没有上游默认开局候选，请为三个槽位各选一个角色。");
+                continue;
+            }
             if (filled.Length!=goal.Slots.Count)
                 throw new InvalidOperationException($"{goal.Name}的开局候选需要三个槽位都至少选择一个角色；若沿用上游默认，请把三个槽位都清空。");
             var roles=goal.Slots.SelectMany(slot=>slot.Candidates.Select(character=>character.Id)).ToArray();
