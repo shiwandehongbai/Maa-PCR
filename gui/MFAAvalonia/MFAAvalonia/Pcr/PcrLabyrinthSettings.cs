@@ -439,9 +439,8 @@ public partial class PcrLabyrinthSettings : ObservableObject {
         foreach (var goal in Goals) {
             var filled=goal.Slots.Where(slot=>slot.Candidates.Count>0).ToArray();
             if (filled.Length==0) {
-                // 1–5 号公会有上游默认开局候选，留空即沿用；6–10 号公会没有上游默认，启用后必须选满三个槽位。
-                if (goal.Enabled && goal.GuildId>=6)
-                    throw new InvalidOperationException($"{goal.Name}没有上游默认开局候选，请为三个槽位各选一个角色。");
+                // 1–10 号公会都带上游默认开局候选（6–10 号于 2026-11-13 从上游同步），
+                // 三个槽位都留空即沿用默认；部分槽位已选时必须补满三个。
                 continue;
             }
             if (filled.Length!=goal.Slots.Count)

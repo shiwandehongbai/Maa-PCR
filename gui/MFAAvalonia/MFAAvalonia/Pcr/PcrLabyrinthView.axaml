@@ -183,7 +183,7 @@
      <TextBlock Text="事件中的遗物类选项仍按「遗物与商店策略」里的层数目标和印记优先级估值。" TextWrapping="Wrap" FontSize="12" />
     </StackPanel></Expander>
     <Expander Name="OpeningSettings" Header="各公会开局三人候选" IsExpanded="False"><StackPanel Spacing="8" Margin="0,8">
-     <TextBlock Text="游戏内开局「角色选择」只列出所选同行公会的成员。点候选角色加入槽位，再点一次移除；1–5 号公会三个槽位都留空时沿用上游默认；6–10 号公会没有上游默认开局候选，启用后必须选满三个槽位。" TextWrapping="Wrap" FontSize="12" />
+     <TextBlock Text="游戏内开局「角色选择」只列出所选同行公会的成员。点候选角色加入槽位，再点一次移除；1–10 号公会三个槽位都留空时沿用上游默认（6–10 号默认候选已随上游同步）；只选了一部分槽位时需补满三个槽位才能保存。" TextWrapping="Wrap" FontSize="12" />
      <TextBlock Text="{Binding LabyrinthSettings.RosterStatus}" TextWrapping="Wrap" FontSize="12" Foreground="OrangeRed" IsVisible="{Binding LabyrinthSettings.HasRosterStatus}" />
      <ItemsControl ItemsSource="{Binding LabyrinthSettings.Goals}"><ItemsControl.ItemTemplate>
       <DataTemplate x:DataType="pcr:PcrLabyrinthGoal">

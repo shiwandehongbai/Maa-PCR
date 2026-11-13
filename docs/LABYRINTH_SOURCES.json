@@ -422,6 +422,15 @@
         }
       ],
       "local_sha256": "67c1f4a04d6c2effac10b93ddc8c9afe4d046e2093a3478db6de81661b899ec0",
+      "upstream_updates": [
+        {
+          "repository": "https://github.com/SatenRuiko10032/limingjie-assistant",
+          "commit": "a9ac22e67d3b6dc4ff4a90cd1d40089bdaef90a6",
+          "path": "android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthOpeningRosterPolicy.kt",
+          "sha256": "81ac1b0a23c3a93ecfdef8a6d449f715d353bed395e86b95c4e7dcfd70619da3",
+          "note": "2026-11-13 新增 5 个出发公会及默认开局三人候选；只同步默认候选数据，guild_id 6-10 在上游仍为占位。本文件 local_sha256 仍记录上次来源审查时的版本。"
+        }
+      ],
       "combined_distribution_compatibility": "not-established",
       "production_runtime": true
     },

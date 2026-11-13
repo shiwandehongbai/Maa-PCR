@@ -11,6 +11,25 @@ from .timing import Timings
 JOINED_CONFIRMATION_TIMEOUT_SECONDS=12
 INVITATION_TRANSITION_TIMEOUT_SECONDS=30
 
+# Upstream's configured opening trio per departure guild.  Guilds 1..5 keep the
+# picks sampled before the 2026-11-13 game update; 6..10 come from the upstream
+# 2026-11-13 commit a9ac22e67d3b6dc4ff4a90cd1d40089bdaef90a6
+# ("新增5个公会与开局角色配置", SatenRuiko10032/limingjie-assistant
+# sync/10087-batches) and are recorded in LABYRINTH_GUILD_ROSTERS.md and
+# LABYRINTH_UPSTREAM_PARITY.md.  A slot may hold priority candidates; ids never
+# repeat across slots.  An empty GUI selection always means "use these".
+UPSTREAM_OPENING_SLOTS={
+    1:(('1075',),('1351',),('1059',)),
+    2:(('1089',),('1088',),('1003','1801','1225')),
+    3:(('1025',),('1308',),('1145',)),
+    4:(('1242',),('1339',),('1136','1115','1236','1238')),
+    5:(('1091',),('1171',),('1011',)),
+    6:(('1348',),('1344',),('1054','1116')),
+    7:(('1082',),('1117',),('1138',)),
+    8:(('1038',),('1026',),('1128',)),
+    9:(('1079',),('1168',),('1251',)),
+    10:(('1056',),('1299',),('1051',)),
+}
 
 
 def _guild_units(settings,guild_id):
@@ -69,16 +88,14 @@ class MaaOpening:
         from .character_recognition import CharacterNavigation,canonical_id
         from .portrait_cache import joined_portrait_readback
         from .roles import configured_optimizer
-        defaults={1:(('1075',),('1351',),('1059',)),2:(('1089',),('1088',),('1003','1801','1225')),
-            3:(('1025',),('1308',),('1145',)),4:(('1242',),('1339',),('1136','1115','1236','1238')),
-            5:(('1091',),('1171',),('1011',))}
         if type(enter_id) is not int or enter_id<=0 or type(guild_id) is not int or not 1<=guild_id<=10:
             raise BatchStopped('opening_identity_required')
         if slots is None:
-            # Upstream defaults exist only for the five guilds sampled before this
-            # game update; 6..10 must carry the GUI's explicit selection.
-            if guild_id not in defaults:raise BatchStopped('opening_roster_required')
-            slots=defaults[guild_id]
+            # All ten departure guilds carry upstream defaults.  A guild without
+            # one must never borrow another guild's picks: stop and let the GUI
+            # supply three explicit slots instead.
+            slots=UPSTREAM_OPENING_SLOTS.get(guild_id)
+            if slots is None:raise BatchStopped('opening_roster_required')
         claim=self._creation_key(enter_id,creation_operation_id)
         if enter_id in self.used or claim in self.used:raise BatchStopped('opening_already_attempted')
         previous=self.grants.get(claim)

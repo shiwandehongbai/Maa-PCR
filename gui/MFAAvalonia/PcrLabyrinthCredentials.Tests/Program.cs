@@ -217,7 +217,7 @@ try
     var snapshotGuildIds = snapshotGuildArrays.SelectMany(array => array!.Values<string>()).ToArray();
     Require(snapshotGuildIds.Length == 141 && snapshotGuildIds.Distinct().Count() == snapshotGuildIds.Length,
         "guild_units_snapshot_ids_unique_across_guilds: " + snapshotGuildIds.Length);
-    // 6–10 号公会没有上游默认开局候选：启用后必须选满三个槽位，否则保存/开始被阻止。
+    // 1–10 号公会三个槽位留空都等于沿用上游默认（6–10 号默认候选于 2026-11-13 从上游同步）。
     var newGuildConfig = new InstanceConfiguration("pcr-labyrinth-new-guild-roster");
     var newGuildSettings = new PcrLabyrinthSettings(Owner(newGuildConfig));
     Require(newGuildSettings.Goals.Select(goal => goal.GuildId).SequenceEqual(Enumerable.Range(1, 10)),
@@ -226,22 +226,14 @@ try
             "美食殿堂", "破晓之星", "咲恋救济院", "王宫骑士团", "拉比林斯",
             "慈乐之音", "恶魔伪王国军", "伊丽莎白牧场", "墨丘利财团", "暮光流星群" }),
         "opening_goal_names_match_guild_selection_order");
-    foreach (var newGoal in newGuildSettings.Goals.Where(goal => goal.GuildId >= 6))
+    foreach (var newGoal in newGuildSettings.Goals)
     {
+        var wasEnabled = newGoal.Enabled;
         newGoal.Enabled = true;
-        try
-        {
-            newGuildSettings.Snapshot();
-            throw new InvalidOperationException("new_guild_empty_roster_not_blocked: " + newGoal.GuildId);
-        }
-        catch (InvalidOperationException error) when (error.Message.Contains("没有上游默认开局候选")) { }
-        newGoal.Enabled = false;
+        Require(newGuildSettings.Snapshot()["strategy"]?["opening_rosters"] is JObject { Count: 0 },
+            "opening_empty_slots_keep_upstream_default_for_guild_" + newGoal.GuildId);
+        newGoal.Enabled = wasEnabled;
     }
-    // 1–5 号公会三个槽位留空仍等于沿用上游默认，不算错误。
-    newGuildSettings.Goals[1].Enabled = true;
-    Require(newGuildSettings.Snapshot()["strategy"]?["opening_rosters"] is JObject { Count: 0 },
-        "opening_legacy_guild_empty_slots_keep_upstream_default");
-    newGuildSettings.Goals[1].Enabled = false;
     // 6 号公会选满三个槽位后可以正常保存、重开与开始。
     var newGuildGoal = newGuildSettings.Goals[5];
     Require(newGuildGoal.Pool.Count == 13, "opening_guild_six_pool_size: " + newGuildGoal.Pool.Count);
@@ -290,8 +282,8 @@ try
     Require(!rosterExpanderNode.Descendants().Any(node => (string?)node.Attribute("Name") == "OpeningPickerPanel"),
         "opening_popup_removed_from_view");
     Require(rosterExpanderNode.Descendants(xaml + "TextBlock").Any(node =>
-            ((string?)node.Attribute("Text"))?.Contains("6–10 号公会没有上游默认开局候选") == true),
-        "opening_new_guild_requirement_hint_in_view");
+            ((string?)node.Attribute("Text"))?.Contains("1–10 号公会三个槽位都留空时沿用上游默认") == true),
+        "opening_default_roster_hint_in_view");
     Require(rosterSettings.Goals.Sum(goal => goal.Slots.Count) == 30, "opening_goals_have_three_slots_each");
     Require(rosterSettings.Goals.Select(goal => goal.Pool.Count).SequenceEqual(new[] { 18, 15, 15, 12, 9, 13, 17, 11, 14, 17 }),
         "opening_goal_pools_match_guild_sizes");

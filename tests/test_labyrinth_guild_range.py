@@ -4,6 +4,8 @@ Guild ids remain the selection ordinal 1..10 and the protocol ENTER request is
 assumed to take that same ordinal; only the old 1..5 clamp is proven stale.
 """
 import asyncio
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +20,8 @@ from pcr_maa.labyrinth.routes import Node
 from pcr_maa.labyrinth.snapshots import OpeningSnapshot
 from pcr_maa.labyrinth.timing import Timings
 from pcr_maa.preset_execution import Journal
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def goals(*ids):
@@ -166,22 +170,57 @@ def test_restart_pending_enter_intent_scope(tmp_path, guild, valid):
             pending_intent(journal, binding)
 
 
-def test_opening_invite_requires_explicit_roster_for_new_guilds():
-    opening = MaaOpening(None, lambda **fields: dict(**fields))
-    for guild in (6, 10):
-        with pytest.raises(BatchStopped, match='^opening_roster_required$'):
-            opening.invite(None, 169, guild_id=guild)
+# Default trios synced from the upstream 2026-11-13 commit a9ac22e67d
+# ("新增5个公会与开局角色配置") for the five guilds added by the game update.
+SYNCED_NEW_GUILD_DEFAULTS = {
+    6: (('1348',), ('1344',), ('1054', '1116')),
+    7: (('1082',), ('1117',), ('1138',)),
+    8: (('1038',), ('1026',), ('1128',)),
+    9: (('1079',), ('1168',), ('1251',)),
+    10: (('1056',), ('1299',), ('1051',)),
+}
 
 
-def test_opening_invite_keeps_upstream_defaults_only_for_first_five_guilds():
+def test_opening_defaults_carry_the_synced_upstream_new_guild_roster():
+    from pcr_maa.labyrinth import opening as opening_module
+    for guild, slots in SYNCED_NEW_GUILD_DEFAULTS.items():
+        assert opening_module.UPSTREAM_OPENING_SLOTS[guild] == slots
+    for guild, slots in opening_module.UPSTREAM_OPENING_SLOTS.items():
+        assert len(slots) == 3
+        assert all(row and len(set(row)) == len(row) for row in slots)
+        assert len({unit for row in slots for unit in row}) == sum(map(len, slots))
+
+
+def test_synced_new_guild_defaults_belong_to_each_guild_roster():
+    payload = json.loads((ROOT / 'gui/MFAAvalonia/MFAAvalonia/Pcr/labyrinth-guilds.json')
+                         .read_text(encoding='utf-8'))
+    rosters = {guild['id']: {unit for person in guild['persons'] for unit in person['units']}
+               for guild in payload['guilds']}
+    catalog = {character['id']: character for character in json.loads(
+        (ROOT / 'assets/labyrinth/character-pack/characters.landosolroster.json')
+        .read_text(encoding='utf-8'))['characters']}
+    for guild, slots in SYNCED_NEW_GUILD_DEFAULTS.items():
+        for row in slots:
+            assert set(row) <= rosters[guild], guild
+            for unit in row:
+                assert catalog[unit]['available'] is True, unit
+
+
+def test_opening_invite_uses_upstream_defaults_for_all_ten_guilds():
     opening = MaaOpening(None, lambda **fields: dict(**fields))
     opening.used.add(169)
-    for guild in range(1, 6):
+    for guild in range(1, 11):
         # Reaching the consumed-enter guard proves the upstream default roster
         # was resolved; the guard itself supplies no new evidence.
         with pytest.raises(BatchStopped, match='^opening_already_attempted$'):
             opening.invite(None, 169, guild_id=guild)
-    # New guilds must not be silently mapped onto an old default roster.
+
+
+def test_opening_invite_stops_when_a_guild_has_no_upstream_default(monkeypatch):
+    from pcr_maa.labyrinth import opening as opening_module
+    monkeypatch.setattr(opening_module, 'UPSTREAM_OPENING_SLOTS',
+                        {1: opening_module.UPSTREAM_OPENING_SLOTS[1]})
+    opening = MaaOpening(None, lambda **fields: dict(**fields))
     with pytest.raises(BatchStopped, match='^opening_roster_required$'):
         opening.invite(None, 169, guild_id=6)
 

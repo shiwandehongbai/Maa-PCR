@@ -7,12 +7,13 @@ GUI 的「各公会开局三人候选」按公会内嵌展示：第一行是公�
 
 - 1–5 号公会来自 2026-10-17 游戏内「角色选择」截图，按顺序对应：美食殿堂、破晓之星、咲恋救济院、王宫骑士团、拉比林斯。
 - 6–10 号公会（慈乐之音、恶魔伪王国军、伊丽莎白牧场、墨丘利财团、暮光流星群）是 2026-11-13 游戏内容更新后新增的出发公会，名单由 B服 11.7.2 masterdata 的「单位公会归属」（`unit_profile` 表）推导：取该公会全部已上线变体，排除 `18xx` 公主／特殊形态与未实装单位；`persons` 分组按人物推导，组内按图鉴 ID 升序排列。
+- 6–10 号公会的**默认开局三人候选**来自上游项目的后续提交：`SatenRuiko10032/limingjie-assistant` 的 `sync/10087-batches` 分支 `a9ac22e67d3b6dc4ff4a90cd1d40089bdaef90a6`（2026-11-13，「新增5个公会与开局角色配置」）。上游把 `guild_id` 6–10 标为占位；本地协议同样按序号 1–10 使用。同步范围与缺口见 `LABYRINTH_UPSTREAM_PARITY.md`；默认候选本身仍待 6–10 号公会的实机开局验证。
 - 2026-11-13 用游戏内「角色选择」截图逐张核对全部 5 个新增公会（慈乐之音／恶魔伪王国军／伊丽莎白牧场／墨丘利财团／暮光流星群）：人物、每人变体数量与元素（火水风光暗）全部与预设一致，未发现预设外角色。游戏内列表按玩家选择的「拼音顺序」排序，与这里的推导顺序不同，不影响名单数据。
 - 截图中的卡片名与头像用 `assets/labyrinth/character-pack` 的图鉴/头像逐个核对；1–5 号公会的顺序为游戏里的显示顺序，6–10 号公会为推导顺序。
 - 名单共 141 个图鉴单位（1–5 号 69 个 + 6–10 号 72 个）；未出现的形态（公主系列、霸瞳天星、阿斯特赖亚、真龙、新年静流/璃乃等）没有列入。
 - 角色 ID、名称、别名、头像仍来自 `assets/labyrinth/character-pack/characters.landosolroster.json` 与 `icons.json`，不复制数据。
 - 选择器逻辑：`gui/MFAAvalonia/MFAAvalonia/Pcr/PcrLabyrinthCharacters.cs`、`PcrLabyrinthRoster.cs`、`PcrLabyrinthSettings.cs`。
-- 保存格式不变：`opening_rosters` 仍是 `公会 → 三个槽位 → 每槽角色 ID 列表`；三个槽位都留空 = 沿用上游默认（`src/pcr_maa/labyrinth/opening.py` 的 defaults）。旧配置里同一槽位的多候选优先级仍会按原顺序读取，可在界面上逐个点掉。
+- 保存格式不变：`opening_rosters` 仍是 `公会 → 三个槽位 → 每槽角色 ID 列表`；三个槽位都留空 = 沿用上游默认（`src/pcr_maa/labyrinth/opening.py` 的 `UPSTREAM_OPENING_SLOTS`）。1–5 号默认沿用固定上游；6–10 号默认候选 2026-11-13 从上游新增提交同步（见「来源」）。GUI 不需要为 6–10 号公会强制选人；只选了一部分槽位时仍需补满三个。旧配置里同一槽位的多候选优先级仍会按原顺序读取，可在界面上逐个点掉。
 
 ## 名单
 
@@ -113,7 +114,7 @@ GUI 的「各公会开局三人候选」按公会内嵌展示：第一行是公�
 - 名单变化时只改 `labyrinth-guilds.json` 的人物与 `units`（名称/头像自动来自图鉴）。
 - `PcrLabyrinthCredentials.Tests` 会校验各公会数量（18/15/15/12/9/13/17/11/14/17，合计 141）、ID 唯一、所有单位都有头像文件，并逐项核对美食殿堂的完整顺序；调整名单后同步更新测试里的数量/顺序断言。
 - 需要加入未出现的形态时，在对应 `persons` 的 `units` 里补图鉴 ID 即可（选择器只显示这里的名单）。
-- 6–10 号公会没有上游默认三人候选：GUI 在目标公会启用时必须为三个槽位各选一个角色，保存/开始前会报错提示；`opening_rosters` 里不写这三个值。1–5 号公会保持「三个槽位都留空 = 沿用上游默认」。
+- 1–10 号公会三个槽位都留空时沿用上游默认（`opening.py` 的 `UPSTREAM_OPENING_SLOTS`），GUI 不需要为 6–10 号公会强制选人；只选了一部分槽位时仍要求补满三个。若某个公会没有默认候选（未来新增或数据缺失），`invite` 以 `opening_roster_required` 停止，不会借用其他公会的候选。
 
 ## Python 端识别：名单限定 + 一对一分配（2026-10-18）
 
@@ -124,9 +125,10 @@ GUI 的「各公会开局三人候选」按公会内嵌展示：第一行是公�
   仍按原路径识别。
 - Python `MaaOpening.invite` 读取该公会的 `guild_units`，作为 `expected_roster` 传给
   `read` / `CharacterNavigation` / `ToggleOnce` / `InviteOnce`。
-- 6–10 号公会的三人候选只能来自 GUI 的显式选择：`opening_rosters` 没有这三个槽位时，
-  `invite` 以 `opening_roster_required` 停止，不会退回上游默认。1–5 号公会缺省仍使用
-  `opening.py` 的 upstream defaults。
+- 6–10 号公会的三人候选：`opening_rosters` 没有这三个槽位时沿用同步来的上游默认
+  （2026-11-13 上游提交，见「来源」）；GUI 也可以显式覆盖。1–5 号公会缺省仍使用
+  `opening.py` 的 upstream defaults。没有默认候选的公会仍以 `opening_roster_required`
+  停止，不会借用其他公会的候选。
 - 5 号公会（拉比林斯）的「赠送角色」开局衔接（`LabyPortraitJoined1Observed` /
   `consume_granted`，固定 1068 菈比莉斯塔）保持不变；6–10 号公会已由用户实机确认
   **没有**赠送角色，因此不进入该分支。
@@ -150,4 +152,5 @@ GUI 的「各公会开局三人候选」按公会内嵌展示：第一行是公�
   名字条与星级/属性徽章本来在采样带外，右上角“借用”图标被遮住；battle/boss 不变。
 - 公开回归：`tests/test_labyrinth_roster_assignment.py`（分配正确性/名单限定/配置校验/
   分配后排除与置信度门槛）、`tests/test_labyrinth_guild_range.py`（1–10 号公会范围、
-  6–10 号显式三人候选要求与 protocol/snapshot/restart 边界）。
+  6–10 号同步默认候选及其与公会的名单一致性、无默认时的 `opening_roster_required`
+  兜底与 protocol/snapshot/restart 边界）。
