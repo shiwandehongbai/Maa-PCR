@@ -135,7 +135,7 @@
 | 16 | 商店刷新起始区域 · refresh_from_area=5 · 1–5整数 | RefreshFromArea→payload/GUI Save/new Settings | shop_execution.py:334 (def run) | config48/Headless44；各决策离线专项；新实机待验 |
 | 17 | 普通战胜率 · normal_win_rate=95 · 0–100整数 | NormalWinRate→payload/GUI Save/new Settings | event_execution.py:36 (planner=Planner) | config48/Headless44；各决策离线专项；新实机待验 |
 | 18 | EX战胜率 · extreme_win_rate=70 · 0–100整数 | ExtremeWinRate→payload/GUI Save/new Settings | event_execution.py:36 (planner=Planner) | config48/Headless44；各决策离线专项；新实机待验 |
-| 19 | 各公会自定义开局三人候选 · opening_rosters={} · 公会1–10（2026-11-13 新增 6–10），三个槽，每槽有序有效ID列表，全部候选不重复；1–5 缺省沿用上游，6–10 无上游默认、必须显式选满三个槽位（opening_roster_required） | Goals[].OpeningRoster→payload/GUI Save/new Settings | game_port.py:193 (slots=batch.settings.strategy.opening_rosters) → opening.py:43 (def invite) | config48/Headless44；各决策离线专项；新实机待验 |
+| 19 | 各公会自定义开局三人候选 · opening_rosters={} · 公会1–10（2026-11-13 新增 6–10），三个槽，每槽有序有效ID列表，全部候选不重复；1–10 缺省沿用上游默认（6–10 默认候选 2026-11-13 从上游同步，上游 guild_id 6–10 仍为占位）；没有默认候选的公会以 opening_roster_required 兜底；GUI 逐槽回显内置默认（6–10 号标注上游同步、未实机验证） | Goals[].OpeningRoster→payload/GUI Save/new Settings | game_port.py:193 (slots=batch.settings.strategy.opening_rosters) → opening.py:43 (def invite) | config48/Headless44；各决策离线专项；新实机待验 |
 
 ## 33页面
 

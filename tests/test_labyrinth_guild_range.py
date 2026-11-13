@@ -206,6 +206,18 @@ def test_synced_new_guild_defaults_belong_to_each_guild_roster():
                 assert catalog[unit]['available'] is True, unit
 
 
+def test_gui_builtin_default_plan_matches_python_upstream_slots():
+    """GUI echoes the built-in plan; it must be the exact table Python executes."""
+    from pcr_maa.labyrinth import opening as opening_module
+    payload = json.loads((ROOT / 'gui/MFAAvalonia/MFAAvalonia/Pcr/labyrinth-guilds.json')
+                         .read_text(encoding='utf-8'))
+    gui_defaults = {guild['id']: tuple(tuple(slot) for slot in guild['defaults'])
+                    for guild in payload['guilds']}
+    assert gui_defaults == opening_module.UPSTREAM_OPENING_SLOTS
+    granted = {guild['id']: tuple(guild.get('granted') or ()) for guild in payload['guilds']}
+    assert granted == {guild: (('1068',) if guild == 5 else ()) for guild in range(1, 11)}
+
+
 def test_opening_invite_uses_upstream_defaults_for_all_ten_guilds():
     opening = MaaOpening(None, lambda **fields: dict(**fields))
     opening.used.add(169)

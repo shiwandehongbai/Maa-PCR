@@ -42,6 +42,39 @@ public partial class PcrLabyrinthGoal : ObservableObject {
     private string rosterHint = "";
     public bool HasRosterHint => RosterHint.Length>0;
     public bool HasCustomRoster => Slots.Any(slot=>!slot.IsEmpty);
+    // 未自定义时实际使用内置默认；GUI 把这份方案逐槽回显，避免“留空但不知道会邀请谁”。
+    public bool UsingBuiltInPlan => !HasCustomRoster;
+    public string PlanLabel => UsingBuiltInPlan ? "使用内置默认" : "已自定义";
+    public string DefaultPlanText {
+        get { EnsureDefaultPlan(); return defaultPlanText; }
+    }
+    public string GrantedText {
+        get { EnsureDefaultPlan(); return grantedText; }
+    }
+    public bool HasGrantedText => GrantedText.Length>0;
+    private string defaultPlanText = "";
+    private string grantedText = "";
+    private bool defaultPlanLoaded;
+    private void EnsureDefaultPlan() {
+        if (defaultPlanLoaded) return;
+        defaultPlanLoaded=true;
+        try {
+            if (owner.TryCharacterCatalog() is not { } catalog || catalog.ForGuild(GuildId) is not { } roster) return;
+            var slots=roster.Defaults.Select((candidates, index)=>new PcrLabyrinthDefaultSlot(
+                index+1, string.Join(" → ", candidates.Select(catalog.DisplayName)))).ToArray();
+            defaultPlanText=string.Join("；", slots.Select(slot=>$"{slot.Title}：{slot.Text}"));
+            grantedText=roster.Granted.Count==0
+                ? ""
+                : "公会附赠（不可编辑）："+string.Join("、", roster.Granted.Select(catalog.DisplayName));
+        } catch {
+            defaultPlanText=""; grantedText="";
+        }
+    }
+    private void NotifyPlanChanged() {
+        OnPropertyChanged(nameof(HasCustomRoster));
+        OnPropertyChanged(nameof(UsingBuiltInPlan));
+        OnPropertyChanged(nameof(PlanLabel));
+    }
     public void Toggle(PcrLabyrinthCharacter character) {
         var selected=Slots.FirstOrDefault(slot=>slot.Contains(character));
         if (selected is not null) {
@@ -54,6 +87,7 @@ public partial class PcrLabyrinthGoal : ObservableObject {
         }
         RosterHint="";
         RefreshPool();
+        NotifyPlanChanged();
         RosterEdited();
     }
     internal void RefreshPool() {
@@ -89,11 +123,17 @@ public partial class PcrLabyrinthGoal : ObservableObject {
         }
         foreach (var slot in Slots) slot.Refresh();
         RefreshPool();
+        NotifyPlanChanged();
     }
     internal void RosterEdited() {
         RosterWarning="";
         owner.RosterEdited();
     }
+}
+
+// GUI 回显用的内置默认槽位（只读）；实际执行仍由 Python 的默认表决定。
+public sealed record PcrLabyrinthDefaultSlot(int Index, string Text) {
+    public string Title => $"槽位 {Index}";
 }
 
 public sealed partial class PcrLabyrinthSlot : ObservableObject {

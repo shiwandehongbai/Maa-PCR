@@ -199,6 +199,17 @@ try
         "opening_catalog_guild_one_matches_game_screenshot");
     var iconProbe = catalog.Guilds[0].Characters[0].Icon;
     Require(iconProbe is null || iconProbe.PixelSize.Width == 128, "opening_catalog_icon_probe");
+    // 内置默认候选与公会附赠角色只用于 GUI 回显；未自定义时 Python 使用同一份默认（Python 回归校验一致）。
+    Require(catalog.Guilds.Sum(guild => guild.Defaults.Count) == 30
+        && catalog.Guilds.All(guild => guild.Defaults.Count == 3 && guild.Defaults.All(slot => slot.Count > 0)),
+        "opening_catalog_builtin_defaults_cover_three_slots_per_guild");
+    Require(catalog.Guilds[1].Defaults[2].SequenceEqual(new[] { "1003", "1801", "1225" }),
+        "opening_catalog_upstream_defaults_parsed: " + string.Join(",", catalog.Guilds[1].Defaults[2]));
+    Require(catalog.Guilds[4].Granted.SequenceEqual(new[] { "1068" })
+        && catalog.Guilds.Where(guild => guild.GuildId != 5).All(guild => guild.Granted.Count == 0),
+        "opening_catalog_granted_character_parsed");
+    Require(catalog.DisplayName("1801").Contains("日和") && catalog.DisplayName("9999") == "9999",
+        "opening_catalog_default_plan_names_resolve");
     // strategy 快照携带每个公会的完整角色 ID 名单（guild_units），供 Python 做名单限定的整页一对一分配；
     // 该字段只由图鉴生成，不写回加载路径。
     var snapshotStrategy = rosterSettings.Snapshot()["strategy"] as JObject;
@@ -234,11 +245,24 @@ try
             "opening_empty_slots_keep_upstream_default_for_guild_" + newGoal.GuildId);
         newGoal.Enabled = wasEnabled;
     }
+    // 未自定义时 GUI 回显内置默认：逐槽列出实际会使用的默认角色，5 号公会显示附赠角色。
+    var defaultPlanGoal = newGuildSettings.Goals[1];
+    Require(defaultPlanGoal.PlanLabel == "使用内置默认" && defaultPlanGoal.UsingBuiltInPlan && !defaultPlanGoal.HasCustomRoster,
+        "opening_builtin_plan_label_for_empty_slots");
+    Require(defaultPlanGoal.DefaultPlanText.Contains("怜") && defaultPlanGoal.DefaultPlanText.Contains("优衣")
+        && defaultPlanGoal.DefaultPlanText.Contains("日和") && defaultPlanGoal.DefaultPlanText.Split("；").Length == 3,
+        "opening_builtin_default_plan_echo: " + defaultPlanGoal.DefaultPlanText);
+    Require(!defaultPlanGoal.HasGrantedText, "opening_guild_without_grant_has_no_granted_echo");
+    var grantedGoal = newGuildSettings.Goals[4];
+    Require(grantedGoal.HasGrantedText && grantedGoal.GrantedText.Contains("菈比莉斯塔"),
+        "opening_guild_five_granted_character_echo: " + grantedGoal.GrantedText);
     // 6 号公会选满三个槽位后可以正常保存、重开与开始。
     var newGuildGoal = newGuildSettings.Goals[5];
     Require(newGuildGoal.Pool.Count == 13, "opening_guild_six_pool_size: " + newGuildGoal.Pool.Count);
     var newGuildPicks = newGuildGoal.Pool.Take(3).Select(character => character.Id).ToArray();
     newGuildGoal.Pool.First(character => character.Id == newGuildPicks[0]).ToggleCommand!.Execute(null);
+    Require(newGuildGoal.PlanLabel == "已自定义" && !newGuildGoal.UsingBuiltInPlan,
+        "opening_custom_plan_label_after_pick: " + newGuildGoal.PlanLabel);
     Require(newGuildSettings.Status.Contains("三个槽位都至少选择一个角色"),
         "opening_new_guild_partial_pick_blocked: " + newGuildSettings.Status);
     foreach (var id in newGuildPicks.Skip(1))
@@ -278,11 +302,17 @@ try
         "opening_slots_bound_in_view");
     Require(rosterExpanderNode.Descendants(xaml + "ItemsControl").Any(node => (string?)node.Attribute("ItemsSource") == "{Binding Pool}"),
         "opening_pool_bound_in_view");
+    Require(rosterExpanderNode.Descendants(xaml + "TextBlock").Any(node => (string?)node.Attribute("Text") == "{Binding PlanLabel}"),
+        "opening_builtin_plan_label_bound_in_view");
+    Require(rosterExpanderNode.Descendants(xaml + "TextBlock").Any(node => (string?)node.Attribute("Text") == "{Binding DefaultPlanText}"),
+        "opening_builtin_default_plan_bound_in_view");
+    Require(rosterExpanderNode.Descendants(xaml + "TextBlock").Any(node => (string?)node.Attribute("Text") == "{Binding GrantedText}"),
+        "opening_granted_character_bound_in_view");
     Require(!rosterExpanderNode.Descendants(xaml + "TextBox").Any(), "opening_no_text_input_in_roster_ui");
     Require(!rosterExpanderNode.Descendants().Any(node => (string?)node.Attribute("Name") == "OpeningPickerPanel"),
         "opening_popup_removed_from_view");
     Require(rosterExpanderNode.Descendants(xaml + "TextBlock").Any(node =>
-            ((string?)node.Attribute("Text"))?.Contains("1–10 号公会三个槽位都留空时沿用上游默认") == true),
+            ((string?)node.Attribute("Text"))?.Contains("逐槽显示默认角色") == true),
         "opening_default_roster_hint_in_view");
     Require(rosterSettings.Goals.Sum(goal => goal.Slots.Count) == 30, "opening_goals_have_three_slots_each");
     Require(rosterSettings.Goals.Select(goal => goal.Pool.Count).SequenceEqual(new[] { 18, 15, 15, 12, 9, 13, 17, 11, 14, 17 }),
