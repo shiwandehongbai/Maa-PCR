@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using Newtonsoft.Json.Linq;
 
 namespace MFAAvalonia.Pcr;
@@ -93,10 +94,10 @@ public sealed class PcrLabyrinthBossCatalog {
         foreach (var area in new[]{3,5}) {
             if (selection[area.ToString(System.Globalization.CultureInfo.InvariantCulture)] is not JArray values
                 || values.Any(value=>value.Type!=JTokenType.Integer))
-                throw new InvalidOperationException($"区域 {area} 的默认勾选格式无效。");
+                throw new InvalidOperationException($"区域 {area} 的默认选择格式无效。");
             var ids=values.Select(value=>value.Value<int>()).ToArray();
             if (ids.Distinct().Count()!=ids.Length || ids.Any(id=>ordered[area].All(row=>row.Id!=id)))
-                throw new InvalidOperationException($"区域 {area} 的默认勾选不在 Boss 目录内。");
+                throw new InvalidOperationException($"区域 {area} 的默认选择不在 Boss 目录内。");
             defaultIds[area]=ids;
         }
         return new PcrLabyrinthBossCatalog(ordered, defaultIds);
@@ -119,12 +120,15 @@ public partial class PcrLabyrinthBossChoice : ObservableObject {
     private bool iconLoaded;
     internal PcrLabyrinthBossChoice(PcrLabyrinthBossInfo info, PcrLabyrinthSettings owner) {
         Area=info.Area; Id=info.Id; Name=info.Name; IconPath=info.IconPath; this.owner=owner;
+        ToggleCommand=new RelayCommand(() => Selected=!Selected);
     }
     public int Area { get; }
     public int Id { get; }
     public string Name { get; }
     public string IconPath { get; }
-    /// <summary>图标只在首次绑定时解码；文件损坏或缺失时静默退化为纯文字，不阻断勾选。</summary>
+    /// <summary>整个标签就是开关：点击切换是否接受该首领，取代原先的复选框。</summary>
+    public IRelayCommand ToggleCommand { get; }
+    /// <summary>图标只在首次绑定时解码；文件损坏或缺失时静默退化为纯文字，不阻断选择。</summary>
     public Bitmap? Icon {
         get {
             if (!iconLoaded) {
