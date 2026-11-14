@@ -405,7 +405,7 @@ class LabyrinthClient:
             except ProtocolFailure:self.close();raise
 
     async def enter(self,guild_id,difficulty):
-        if type(guild_id) is not int or not 1<=guild_id<=5 or type(difficulty) is not int or not 1<=difficulty<=5:raise ProtocolFailure('request_rejected')
+        if type(guild_id) is not int or not 1<=guild_id<=10 or type(difficulty) is not int or not 1<=difficulty<=5:raise ProtocolFailure('request_rejected')
         async with self._operation():
             try:
                 value=await self._request_locked(Endpoint.ENTER,dict(guild_id=guild_id,difficulty=difficulty))
