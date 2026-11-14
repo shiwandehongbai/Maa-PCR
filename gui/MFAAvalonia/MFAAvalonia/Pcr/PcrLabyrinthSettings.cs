@@ -230,6 +230,9 @@ public partial class PcrLabyrinthSettings : ObservableObject {
                 goal.RosterWarning=""; goal.RosterHint="";
             }
             LoadSettings(account.Settings);
+            // 新账号可能没有某个公会的 opening_rosters；槽位已在上方清空，这里统一刷新
+            // 方案标签与默认名单，避免界面停在上一账号的「已自定义」。
+            foreach (var goal in Goals) goal.RefreshOpeningPlan();
             ExpectedPlayerId=Username=Password="";
             LoadCredentials(account.Credentials);
             ShowCredentials=false; credentialsDirty=false; DeleteAccountPending=false;

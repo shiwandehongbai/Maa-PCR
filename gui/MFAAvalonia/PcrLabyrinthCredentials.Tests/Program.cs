@@ -250,7 +250,8 @@ try
     Require(defaultPlanGoal.PlanLabel == "使用内置默认" && defaultPlanGoal.UsingBuiltInPlan && !defaultPlanGoal.HasCustomRoster,
         "opening_builtin_plan_label_for_empty_slots");
     Require(defaultPlanGoal.DefaultPlanText.Contains("怜") && defaultPlanGoal.DefaultPlanText.Contains("优衣")
-        && defaultPlanGoal.DefaultPlanText.Contains("日和") && defaultPlanGoal.DefaultPlanText.Split("；").Length == 3,
+        && defaultPlanGoal.DefaultPlanText.Contains("日和莉（公主）（当前公会不可选）")
+        && defaultPlanGoal.DefaultPlanText.Split("；").Length == 3,
         "opening_builtin_default_plan_echo: " + defaultPlanGoal.DefaultPlanText);
     Require(!defaultPlanGoal.HasGrantedText, "opening_guild_without_grant_has_no_granted_echo");
     var grantedGoal = newGuildSettings.Goals[4];
@@ -258,6 +259,8 @@ try
         "opening_guild_five_granted_character_echo: " + grantedGoal.GrantedText);
     // 6 号公会选满三个槽位后可以正常保存、重开与开始。
     var newGuildGoal = newGuildSettings.Goals[5];
+    Require(!newGuildGoal.DefaultPlanText.Contains("不可选"),
+        "opening_default_plan_marks_only_unselectable: " + newGuildGoal.DefaultPlanText);
     Require(newGuildGoal.Pool.Count == 13, "opening_guild_six_pool_size: " + newGuildGoal.Pool.Count);
     var newGuildPicks = newGuildGoal.Pool.Take(3).Select(character => character.Id).ToArray();
     newGuildGoal.Pool.First(character => character.Id == newGuildPicks[0]).ToggleCommand!.Execute(null);

@@ -60,8 +60,13 @@ public partial class PcrLabyrinthGoal : ObservableObject {
         defaultPlanLoaded=true;
         try {
             if (owner.TryCharacterCatalog() is not { } catalog || catalog.ForGuild(GuildId) is not { } roster) return;
+            // 上游默认候选可能不在本公会的可选名单里（例如破晓之星排除的 1801 公主形态）；
+            // 保留上游原始数据，只回显时注明不可选，避免看起来能选到。
+            var selectable=roster.Characters.Select(character=>character.Id).ToHashSet(StringComparer.Ordinal);
             var slots=roster.Defaults.Select((candidates, index)=>new PcrLabyrinthDefaultSlot(
-                index+1, string.Join(" → ", candidates.Select(catalog.DisplayName)))).ToArray();
+                index+1, string.Join(" → ", candidates.Select(id=>selectable.Contains(id)
+                    ? catalog.DisplayName(id)
+                    : catalog.DisplayName(id)+"（当前公会不可选）")))).ToArray();
             defaultPlanText=string.Join("；", slots.Select(slot=>$"{slot.Title}：{slot.Text}"));
             grantedText=roster.Granted.Count==0
                 ? ""
@@ -74,6 +79,15 @@ public partial class PcrLabyrinthGoal : ObservableObject {
         OnPropertyChanged(nameof(HasCustomRoster));
         OnPropertyChanged(nameof(UsingBuiltInPlan));
         OnPropertyChanged(nameof(PlanLabel));
+    }
+    // 账号切换后槽位会被清空/换人；即使新账号没有 opening_rosters 条目，
+    // 也要刷新方案标签和默认名单，避免界面停在上一账号的「已自定义」。
+    internal void RefreshOpeningPlan() {
+        EnsureDefaultPlan();
+        NotifyPlanChanged();
+        OnPropertyChanged(nameof(DefaultPlanText));
+        OnPropertyChanged(nameof(GrantedText));
+        OnPropertyChanged(nameof(HasGrantedText));
     }
     public void Toggle(PcrLabyrinthCharacter character) {
         var selected=Slots.FirstOrDefault(slot=>slot.Contains(character));

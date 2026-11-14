@@ -54,6 +54,16 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(opening_roster(2,{'1089','1088','1801'}),('1089','1088','1801'))
         self.assertIsNone(opening_roster(2,{'1089','1088','9999'}))
         self.assertEqual(next_opening_role(2,{'1801'},{'1089','1088'}),'1801')
+    def test_opening_helpers_share_the_ten_guild_defaults(self):
+        # 新公会必须和 MaaOpening.invite() 使用同一份默认表；10 号公会不再报错。
+        self.assertEqual(opening_roster(10,{'1056','1299','1051'}),('1056','1299','1051'))
+        self.assertIsNone(opening_roster(10,{'1056','1299','9999'}))
+        self.assertEqual(next_opening_role(10,{'1051'},{'1056','1299'}),'1051')
+        self.assertEqual(next_opening_role(6,{'1054','1116'},()),'1054')
+        with self.assertRaises(ValueError):
+            opening_roster(11,{'1056'})
+        with self.assertRaises(ValueError):
+            next_opening_role(11,{'1056'},{'1056'})
     def test_relic_capstone_debuff_and_unknowns(self):
         relics=[Relic('a','加速',3),Relic('b','弱体',3),Relic('c','守备',5,False)]
         self.assertEqual(choose_relic({'加速':12,'弱体':12},relics,area=1).choice.relic_id,'b')

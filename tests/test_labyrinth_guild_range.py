@@ -218,6 +218,13 @@ def test_gui_builtin_default_plan_matches_python_upstream_slots():
     assert granted == {guild: (('1068',) if guild == 5 else ()) for guild in range(1, 11)}
 
 
+def test_opening_and_legacy_strategy_helpers_share_one_default_table():
+    from pcr_maa.labyrinth import opening as opening_module
+    from pcr_maa.labyrinth import strategies
+    assert opening_module.UPSTREAM_OPENING_SLOTS is strategies.UPSTREAM_OPENING_SLOTS
+    assert strategies.OPENING is strategies.UPSTREAM_OPENING_SLOTS
+
+
 def test_opening_invite_uses_upstream_defaults_for_all_ten_guilds():
     opening = MaaOpening(None, lambda **fields: dict(**fields))
     opening.used.add(169)
