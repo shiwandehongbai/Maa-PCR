@@ -323,7 +323,9 @@ def run(tasker, entry, *, reset_hits=()):
         deadline = min(active_now() + 90, RUN_DEADLINE.get())
         while not job.done:
             if active_now() >= deadline:
-                raise RuntimeError('Native task exceeded 90 seconds or inspection deadline')
+                error = RuntimeError('Native task exceeded 90 seconds or inspection deadline')
+                error.native_task = (entry, job.job_id)
+                raise error
             time.sleep(0.05)
         detail = job.get()
         receipt = _receipt(detail, native_ok=job.succeeded, tasker_inited=tasker.inited,

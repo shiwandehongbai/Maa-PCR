@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import hashlib,json,math,re,time
 from maa.custom_recognition import CustomRecognition
-from .. import native
+from .. import native, player_log
 from ..frame_recognition import same_frame_context
 from .batch import BatchStopped
 from .timing import Timings
@@ -22,6 +22,11 @@ NAME='LabyrinthScene'
 OBSERVATION_TIMEOUT_SECONDS=20
 REWARD_CONNECTION_TIMEOUT_SECONDS=60
 ITEM_REWARD_TRANSITION_TIMEOUT_SECONDS=12
+_NATIVE_WAIT_DEADLINES = {
+    'Native task exceeded 90 seconds or inspection deadline': '原生任务运行超时',
+    'Inspection deadline exceeded before task input': '原生任务尚未派发',
+    'Context deadline exceeded after synchronous return; outcome unknown': '同步原生任务超时',
+}
 # Pinned upstream LabyrinthEntryActionPlanner.characterAcquisitionTimeoutMillis
 # (30_000): the owned acquisition driver may have to skip several entrance
 # animations before the actual joined page exists. The 12s joined-read budget
@@ -561,6 +566,9 @@ class MaaSceneRuntime:
         started=native.active_now()
         parent_deadline=native.RUN_DEADLINE.get()
         deadline=min(parent_deadline,started+timeout)
+        read_deadline = deadline
+        last_observed = None
+        observations = 0
         role_connection=('role_reward' in sources or 'free_role_reward' in sources) and acquisition_fields is not None
         animation_off=bool(getattr(batch,'animation_setting_off',False))
         connection_deadline=min(parent_deadline,started+max(timeout,REWARD_CONNECTION_TIMEOUT_SECONDS)) if role_connection else deadline
@@ -597,6 +605,27 @@ class MaaSceneRuntime:
         animation_kinds=(('character_animation',) if source=='character_animation'
             else ('character_animation',) if animation_off
             else ('unknown','event_animation','character_animation'))
+
+        def log_failure(stage, error=None):
+            last = '无'
+            if last_observed is not None:
+                task_id = last_observed.native['task_id']
+                last = f'{last_observed.kind}（task={task_id}）'
+                anchors = sorted(last_observed.payload.get('anchors', {}))
+                if anchors:
+                    last += '，命中标记=' + '/'.join(anchors[:8])
+            pending = getattr(error, 'native_task', None)
+            native_detail = ''
+            if pending is not None:
+                entry, task_id = pending
+                idle = '是' if error.native_stop.get('idle') is True else '否'
+                native_detail = f'，原生任务={entry}（task={task_id}，停止后空闲={idle}）'
+            elapsed = min(native.active_now(), read_deadline) - started
+            player_log.text(f'黎明界页面读回失败（{reason}）：阶段={stage}，'
+                            f'起始页={"/".join(sorted(sources)) or "无"}，等待页={"/".join(sorted(allowed))}，'
+                            f'等待={elapsed:.1f}/{read_deadline - started:.1f} 秒，'
+                            f'已完成观察={observations}，上次观察={last}{native_detail}')
+
         try:
             while True:
                 batch.checkpoint()
@@ -610,6 +639,8 @@ class MaaSceneRuntime:
                 joined_read_deadline=None
                 if native.active_now()>=accept_deadline:raise BatchStopped(reason)
                 _native_ok(after.native)
+                last_observed = after
+                observations += 1
                 if after.kind in ('date_changed','disconnected'):raise BatchStopped(after.kind)
                 if confirm_team_entry:
                     repeated = after.kind == previous_kind
@@ -677,11 +708,16 @@ class MaaSceneRuntime:
                         return after
                 if after.kind not in allowed and after.kind not in sources|{'unknown'}:raise BatchStopped(reason)
                 _poll_pause(self.tasker,batch,'LabySceneTransitionPollSpacing',reason)
+        except BatchStopped as error:
+            if error.args == (reason,):
+                log_failure('页面等待到期' if native.active_now() >= read_deadline else '页面未通过核对')
+            raise
         except RuntimeError as error:
-            if error.args not in (('Native task exceeded 90 seconds or inspection deadline',),
-                    ('Inspection deadline exceeded before task input',),
-                    ('Context deadline exceeded after synchronous return; outcome unknown',)):raise
-            batch.checkpoint();raise BatchStopped(reason) from error
+            stage = _NATIVE_WAIT_DEADLINES.get(str(error))
+            if stage is None:raise
+            batch.checkpoint()
+            log_failure(stage, error)
+            raise BatchStopped(reason) from error
         finally:
             native.RUN_DEADLINE.reset(token);self._scene_probe_kinds=previous_probe
     def close(self):self.tasker=None;self.observer=None

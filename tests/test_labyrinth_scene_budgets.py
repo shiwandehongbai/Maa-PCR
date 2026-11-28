@@ -6,7 +6,7 @@ from types import SimpleNamespace as NS
 import numpy as np
 import pytest
 
-from pcr_maa import native
+from pcr_maa import native, player_log
 from pcr_maa.labyrinth import autoplay, scene, shop_execution as shops
 from pcr_maa.labyrinth.timing import Timings
 from test_labyrinth_recognition_perf_r50 import SceneContext
@@ -154,6 +154,52 @@ def test_transition_polls_share_one_deadline_and_restore_scope(slow):
     assert owner.inputs == [] and owner.stops == 1
     assert owner.resource.get_node_data(scene.NODE) == original
     assert view._scene_probe_kinds is None and native.RUN_DEADLINE.get() == float('inf')
+
+
+@pytest.mark.parametrize('case, stage', [
+    ('native_timeout', '原生任务运行超时'),
+    ('wait_timeout', '页面等待到期'),
+    ('mismatch', '页面未通过核对'),
+    ('reward', None),
+])
+def test_reward_readback_records_the_failure_boundary_without_input(slow, monkeypatch, case, stage):
+    class SettlementOwner(SlowOwner):
+        def post_task(self, entry):
+            job = super().post_task(entry)
+            if len(self.observations) > 1:
+                job = self.job = Job(done=False)
+                self.running = True
+            job.job_id = 40 + len(self.observations)
+            return job
+
+    kind = {'mismatch': 'shop', 'reward': 'item_reward'}.get(case, 'unknown')
+    owner = SettlementOwner(slow, seconds=1, kind=kind)
+    messages = []
+    monkeypatch.setattr(player_log, 'text', messages.append)
+    if case == 'wait_timeout':
+        monkeypatch.setattr(autoplay, '_poll_pause', lambda *args: slow.sleep(30))
+    view = runtime(owner)
+
+    def wait():
+        return view.wait_for(NS(checkpoint=lambda: None), {'item_reward', 'relic_reward'},
+                             source='battle_victory', reason='autoplay_readback_unknown')
+
+    if stage is None:
+        assert wait().kind == 'item_reward'
+        assert not messages
+    else:
+        with pytest.raises(scene.BatchStopped, match='^autoplay_readback_unknown$'):
+            wait()
+        message, = messages
+        assert f'阶段={stage}' in message
+        assert '起始页=battle_victory' in message
+        assert '等待页=item_reward/relic_reward' in message
+        assert '已完成观察=1' in message
+        assert f'上次观察={kind}（task=41）' in message
+        assert ('原生任务=LabySceneObserved（task=42，停止后空闲=是）' in message) is (case == 'native_timeout')
+    assert len(owner.posts) == 1 + (case == 'native_timeout')
+    assert owner.stops == (case == 'native_timeout')
+    assert owner.inputs == [] and native.RUN_DEADLINE.get() == float('inf')
 
 
 @pytest.mark.parametrize('stopped', [False, True])
